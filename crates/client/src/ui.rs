@@ -264,9 +264,14 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
         let x = (screen_width() - d.width) / 2.0 + 14.0;
         draw_texture_ex(&assets.coin, x - 30.0, h * 0.42 + 92.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
         draw_text(&txt, x, h * 0.42 + 112.0, 30.0, Color::new(1.0, 0.85, 0.4, 1.0));
+        let mut y = h * 0.42 + 150.0;
+        if r.discovered > 0 {
+            centered(&format!("{} new Collection entr{}", r.discovered, if r.discovered == 1 { "y" } else { "ies" }), y, 22.0, Color::new(0.7, 0.9, 1.0, 1.0));
+            y += 30.0;
+        }
         for (i, hero) in r.unlocked.iter().enumerate() {
             let pulse = 0.75 + 0.25 * (get_time() * 4.0).sin() as f32;
-            centered(&format!("NEW HERO UNLOCKED: {}", hero_def(*hero).name), h * 0.42 + 150.0 + i as f32 * 30.0, 26.0, Color::new(1.0, 0.6, 0.85, pulse));
+            centered(&format!("NEW HERO UNLOCKED: {}", hero_def(*hero).name), y + i as f32 * 30.0, 26.0, Color::new(1.0, 0.6, 0.85, pulse));
         }
     }
     centered("Click or press R to try again   ·   M for the menu", h * 0.86, 24.0, Color::new(1.0, 1.0, 1.0, 0.8));
