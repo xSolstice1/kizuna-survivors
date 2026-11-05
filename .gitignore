@@ -7,3 +7,5 @@ PLAN.md
 
 # Local design docs (characters, story)
 design/
+
+__pycache__/
