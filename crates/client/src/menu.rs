@@ -1,8 +1,8 @@
 //! Out-of-run screens: main menu, character select and the Shrine Shop.
 
 use macroquad::prelude::*;
-use sim::content::{hero_def, Upgrade, ALL_HEROES};
-use sim::meta::{unlock_text, PowerUp, Profile, ALL_POWERUPS};
+use sim::content::{awakened_name, awakened_text, complement, hero_def, EnemyKind, Upgrade, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
+use sim::meta::{collection_progress, enemy_found, unlock_text, PowerUp, Profile, ALL_POWERUPS};
 
 use crate::render::Assets;
 
@@ -52,6 +52,7 @@ fn backdrop(time: f64) {
 pub enum MenuAction {
     Start,
     Shop,
+    Collection,
     Settings,
 }
 
@@ -71,7 +72,11 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     if button(Rect::new(x, h * 0.42 + 68.0, bw, bh), "Shrine Shop", true) || is_key_pressed(KeyCode::S) {
         action = Some(MenuAction::Shop);
     }
-    if button(Rect::new(x, h * 0.42 + 136.0, bw, bh), "Settings", true) || is_key_pressed(KeyCode::O) {
+    let (found, total) = collection_progress(profile);
+    if button(Rect::new(x, h * 0.42 + 136.0, bw, bh), &format!("Collection  {found}/{total}"), true) || is_key_pressed(KeyCode::C) {
+        action = Some(MenuAction::Collection);
+    }
+    if button(Rect::new(x, h * 0.42 + 204.0, bw, bh), "Settings", true) || is_key_pressed(KeyCode::O) {
         action = Some(MenuAction::Settings);
     }
 
@@ -268,6 +273,270 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
         centered(&format!("Refund returns all {} Sen spent.", profile.spent), by + 80.0, 18.0, DIM);
     }
     action
+}
+
+// ───────────────────────── Collection ─────────────────────────
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Otherworlders,
+    Weapons,
+    Awakenings,
+    Passives,
+    Shrines,
+    Heroes,
+}
+
+const TABS: [Tab; 6] = [Tab::Otherworlders, Tab::Weapons, Tab::Awakenings, Tab::Passives, Tab::Shrines, Tab::Heroes];
+
+impl Tab {
+    fn name(self) -> &'static str {
+        match self {
+            Tab::Otherworlders => "Otherworlders",
+            Tab::Weapons => "Weapons",
+            Tab::Awakenings => "Awakenings",
+            Tab::Passives => "Passives",
+            Tab::Shrines => "Shrine Events",
+            Tab::Heroes => "Heroes",
+        }
+    }
+    fn len(self) -> usize {
+        match self {
+            Tab::Otherworlders => ALL_ENEMIES.len(),
+            Tab::Weapons | Tab::Awakenings => ALL_WEAPONS.len(),
+            Tab::Passives => ALL_PASSIVES.len(),
+            Tab::Shrines => ALL_SHRINE_EVENTS.len(),
+            Tab::Heroes => ALL_HEROES.len(),
+        }
+    }
+}
+
+pub struct CollectionState {
+    pub tab: Tab,
+    pub cursor: usize,
+}
+
+impl Default for CollectionState {
+    fn default() -> Self {
+        CollectionState { tab: Tab::Otherworlders, cursor: 0 }
+    }
+}
+
+/// One entry: (found, icon, name, text lines).
+struct Entry<'a> {
+    found: bool,
+    icon: &'a Texture2D,
+    tint: Color,
+    name: String,
+    lines: Vec<String>,
+}
+
+fn enemy_icon(assets: &Assets, k: EnemyKind) -> (&Texture2D, Color) {
+    match k {
+        EnemyKind::Wisp => (&assets.wisp, WHITE),
+        EnemyKind::Kasa => (&assets.kasa, WHITE),
+        EnemyKind::Chochin => (&assets.chochin, WHITE),
+        EnemyKind::Nopperabo => (&assets.nopperabo, WHITE),
+        EnemyKind::Oni => (&assets.oni, WHITE),
+        EnemyKind::GreatOni => (&assets.oni, Color::new(0.85, 0.7, 1.0, 1.0)),
+        EnemyKind::NightLord => (&assets.night_lord, WHITE),
+    }
+}
+
+fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry<'a> {
+    match tab {
+        Tab::Otherworlders => {
+            let k = ALL_ENEMIES[i];
+            let (icon, tint) = enemy_icon(assets, k);
+            let kills = profile.enemy_kills[i];
+            Entry {
+                found: enemy_found(profile, k),
+                icon,
+                tint,
+                name: k.name().into(),
+                lines: vec![k.lore().into(), format!("Defeated: {kills}{}", if k.is_boss() { "   (boss)" } else { "" })],
+            }
+        }
+        Tab::Weapons => {
+            let k = ALL_WEAPONS[i];
+            let u = Upgrade::Weapon(k);
+            let (p, _) = complement(k);
+            let users: Vec<&str> = ALL_HEROES.iter().filter(|h| hero_def(**h).weapon_pool().contains(&k)).map(|h| hero_def(*h).name.split(' ').next().unwrap_or("")).collect();
+            Entry {
+                found: profile.weapons_found.contains(&k),
+                icon: assets.icon(u),
+                tint: WHITE,
+                name: u.name().into(),
+                lines: vec![u.describe(1), format!("Awakens with: {}", Upgrade::Passive(p).name()), format!("Used by: {}", users.join(", "))],
+            }
+        }
+        Tab::Awakenings => {
+            let k = ALL_WEAPONS[i];
+            let (p, _) = complement(k);
+            Entry {
+                found: profile.awakenings_found.contains(&k),
+                icon: assets.icon(Upgrade::Weapon(k)),
+                tint: GOLD,
+                name: awakened_name(k).into(),
+                lines: vec![
+                    awakened_text(k).into(),
+                    format!("Recipe: {} at max level + {}, from a chest after 10:00.", Upgrade::Weapon(k).name(), Upgrade::Passive(p).name()),
+                ],
+            }
+        }
+        Tab::Passives => {
+            let k = ALL_PASSIVES[i];
+            let u = Upgrade::Passive(k);
+            Entry { found: profile.passives_found.contains(&k), icon: assets.icon(u), tint: WHITE, name: u.name().into(), lines: vec![u.describe(1)] }
+        }
+        Tab::Shrines => {
+            let ev = ALL_SHRINE_EVENTS[i];
+            let (bless, price) = ev.text();
+            Entry {
+                found: profile.shrines_found.contains(&ev),
+                icon: &assets.shrine,
+                tint: WHITE,
+                name: ev.name().into(),
+                lines: vec![format!("Blessing: {bless}"), format!("Price: {price}")],
+            }
+        }
+        Tab::Heroes => {
+            let h = ALL_HEROES[i];
+            let d = hero_def(h);
+            Entry {
+                found: profile.is_unlocked(h),
+                icon: &assets.hero(h)[0],
+                tint: WHITE,
+                name: d.name.into(),
+                lines: vec![
+                    format!("{}. Starts with {}.", d.archetype, Upgrade::Weapon(d.signature).name()),
+                    format!("Innate: {}", d.innate_text),
+                    format!("Unlock: {}", unlock_text(h)),
+                ],
+            }
+        }
+    }
+}
+
+fn hint(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Otherworlders => "Not yet defeated.",
+        Tab::Weapons => "Not yet found. Pick it on a level-up to record it.",
+        Tab::Awakenings => "Not yet awakened.",
+        Tab::Passives => "Not yet found.",
+        Tab::Shrines => "Not yet chosen at a roadside shrine.",
+        Tab::Heroes => "Locked.",
+    }
+}
+
+/// Returns true to go back.
+pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, time: f64) -> bool {
+    backdrop(time);
+    let w = screen_width();
+    let (found, total) = collection_progress(profile);
+    centered("COLLECTION", 64.0, 44.0, ACCENT);
+    centered(&format!("{found} / {total} discovered"), 92.0, 20.0, DIM);
+
+    // Tabs.
+    let (tw, th, tg) = (170.0, 36.0, 8.0);
+    let tx0 = (w - (TABS.len() as f32 * tw + (TABS.len() as f32 - 1.0) * tg)) / 2.0;
+    let mouse: Vec2 = mouse_position().into();
+    for (i, t) in TABS.iter().enumerate() {
+        let r = Rect::new(tx0 + i as f32 * (tw + tg), 108.0, tw, th);
+        let sel = st.tab == *t;
+        let n = (0..t.len()).filter(|k| entry(profile, assets, *t, *k).found).count();
+        draw_rectangle(r.x, r.y, r.w, r.h, if sel { Color::new(0.24, 0.12, 0.22, 0.97) } else { PANEL });
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if sel { ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        let label = format!("{} {}/{}", t.name(), n, t.len());
+        let d = measure_text(&label, None, 16, 1.0);
+        draw_text(&label, r.x + (tw - d.width) / 2.0, r.y + 24.0, 16.0, if sel { WHITE } else { DIM });
+        if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
+            st.tab = *t;
+            st.cursor = 0;
+        }
+    }
+    if is_key_pressed(KeyCode::Tab) || is_key_pressed(KeyCode::E) || is_key_pressed(KeyCode::Q) {
+        let i = TABS.iter().position(|t| *t == st.tab).unwrap();
+        let j = if is_key_pressed(KeyCode::Q) { (i + TABS.len() - 1) % TABS.len() } else { (i + 1) % TABS.len() };
+        st.tab = TABS[j];
+        st.cursor = 0;
+    }
+
+    // Grid.
+    let n = st.tab.len();
+    let cols = 10.min(n);
+    let (cw, gap) = (84.0, 10.0);
+    let x0 = (w - (cols as f32 * cw + (cols as f32 - 1.0) * gap)) / 2.0;
+    let y0 = 160.0;
+    for i in 0..n {
+        let e = entry(profile, assets, st.tab, i);
+        let r = Rect::new(x0 + (i % cols) as f32 * (cw + gap), y0 + (i / cols) as f32 * (cw + gap), cw, cw);
+        let sel = st.cursor == i;
+        draw_rectangle(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL });
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if sel { ACCENT } else if r.contains(mouse) { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        // Fit the icon into the cell keeping its aspect ratio.
+        let (iw, ih) = (e.icon.width(), e.icon.height());
+        let k = (60.0 / iw.max(ih)).floor().max(1.0).min(4.0);
+        let (dw, dh) = (iw * k, ih * k);
+        let tint = if e.found { e.tint } else { Color::new(0.0, 0.0, 0.0, 0.85) };
+        draw_texture_ex(e.icon, (r.x + (cw - dw) / 2.0).round(), (r.y + (cw - dh) / 2.0).round(), tint, DrawTextureParams { dest_size: Some(vec2(dw, dh)), ..Default::default() });
+        if !e.found {
+            let d = measure_text("?", None, 30, 1.0);
+            draw_text("?", r.x + (cw - d.width) / 2.0, r.y + cw / 2.0 + 10.0, 30.0, DIM);
+        }
+        if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
+            st.cursor = i;
+        }
+    }
+    if is_key_pressed(KeyCode::Left) || is_key_pressed(KeyCode::A) {
+        st.cursor = (st.cursor + n - 1) % n;
+    }
+    if is_key_pressed(KeyCode::Right) || is_key_pressed(KeyCode::D) {
+        st.cursor = (st.cursor + 1) % n;
+    }
+    st.cursor = st.cursor.min(n - 1);
+
+    // Detail panel.
+    let rows = n.div_ceil(cols) as f32;
+    let e = entry(profile, assets, st.tab, st.cursor);
+    let (px, py, pw, ph) = ((w - 760.0) / 2.0, y0 + rows * (cw + gap) + 14.0, 760.0, 170.0);
+    draw_rectangle(px, py, pw, ph, PANEL);
+    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(1.0, 1.0, 1.0, 0.2));
+    if e.found {
+        draw_text(&e.name, px + 20.0, py + 40.0, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
+        let mut y = py + 72.0;
+        for line in &e.lines {
+            for l in wrap(line, pw - 40.0, 20) {
+                draw_text(&l, px + 20.0, y, 20.0, Color::new(0.9, 0.9, 0.95, 1.0));
+                y += 24.0;
+            }
+        }
+    } else {
+        draw_text("???", px + 20.0, py + 40.0, 30.0, DIM);
+        draw_text(hint(st.tab), px + 20.0, py + 74.0, 20.0, DIM);
+        if st.tab == Tab::Heroes {
+            draw_text(&format!("Unlock: {}", unlock_text(ALL_HEROES[st.cursor])), px + 20.0, py + 104.0, 20.0, GOLD);
+        }
+    }
+    button(Rect::new((w - 200.0) / 2.0, py + ph + 18.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape)
+}
+
+fn wrap(text: &str, width: f32, size: u16) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if measure_text(&candidate, None, size, 1.0).width > width && !line.is_empty() {
+            out.push(std::mem::take(&mut line));
+            line = word.to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
 }
 
 // ───────────────────────── Settings ─────────────────────────

@@ -27,6 +27,7 @@ enum Screen {
     Menu,
     Characters,
     Shop,
+    Collection,
     Settings,
     Playing,
     Paused,
@@ -73,6 +74,8 @@ async fn main() {
     // Space is latched until the sim next steps; at high refresh rates many frames take no step.
     let mut special_queued = false;
 
+    let mut collection = menu::CollectionState::default();
+
     ui::prewarm_font();
     next_frame().await;
     ui::loading();
@@ -105,9 +108,15 @@ async fn main() {
             Screen::Menu => match menu::main_menu(&profile, &assets, now) {
                 Some(menu::MenuAction::Start) => screen = Screen::Characters,
                 Some(menu::MenuAction::Shop) => screen = Screen::Shop,
+                Some(menu::MenuAction::Collection) => screen = Screen::Collection,
                 Some(menu::MenuAction::Settings) => screen = Screen::Settings,
                 None => {}
             },
+            Screen::Collection => {
+                if menu::collection(&profile, &assets, &mut collection, now) {
+                    screen = Screen::Menu;
+                }
+            }
             Screen::Settings => match menu::settings(&mut profile, now) {
                 Some(menu::SettingsAction::Changed) => {
                     audio.music_volume = profile.music_volume;
