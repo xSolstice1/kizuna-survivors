@@ -12,6 +12,12 @@ pub enum EnemyKind {
     Oni,
     /// Mid-boss at 8:00: telegraphed charges, drops a 3-item chest.
     GreatOni,
+    /// Paper-lantern yokai: keeps its distance and spits fireballs.
+    Chochin,
+    /// Faceless ghost: fades out and reappears beside the player.
+    Nopperabo,
+    /// Night Lord at 15:00 (Chochin Daimyo). Defeating it wins the night.
+    NightLord,
 }
 
 pub struct EnemyDef {
@@ -30,10 +36,37 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
         EnemyKind::Kasa => EnemyDef { hp: 22.0, speed: 56.0, damage: 9.0, radius: 7.0, xp: 2, knockback: 0.7 },
         EnemyKind::Oni => EnemyDef { hp: 420.0, speed: 38.0, damage: 20.0, radius: 14.0, xp: 30, knockback: 0.0 },
         EnemyKind::GreatOni => EnemyDef { hp: 7000.0, speed: 34.0, damage: 30.0, radius: 26.0, xp: 120, knockback: 0.0 },
+        EnemyKind::Chochin => EnemyDef { hp: 30.0, speed: 34.0, damage: 8.0, radius: 8.0, xp: 3, knockback: 0.6 },
+        EnemyKind::Nopperabo => EnemyDef { hp: 45.0, speed: 44.0, damage: 9.0, radius: 7.0, xp: 4, knockback: 0.5 },
+        // HP is absolute (not time-scaled): see `night_lord_hp`.
+        EnemyKind::NightLord => EnemyDef { hp: 1.0, speed: 28.0, damage: 35.0, radius: 30.0, xp: 0, knockback: 0.0 },
     }
 }
 
-pub const MAX_ENEMY_RADIUS: f32 = 26.0;
+pub const MAX_ENEMY_RADIUS: f32 = 30.0;
+
+/// The Night Lord arrives at RUN_SECONDS; if still alive at this time, dawn takes the player.
+pub const DAWN_LIMIT: f32 = 17.0 * 60.0;
+
+pub fn night_lord_hp() -> f32 {
+    50_000.0
+}
+
+/// Seconds a Nopperabo takes to fade back in after a blink (harmless meanwhile).
+pub const NOPPERABO_FADE_IN: f32 = 0.6;
+
+/// Enemy fireballs.
+pub const SHOT_RADIUS: f32 = 5.0;
+pub const SHOT_DAMAGE: f32 = 4.0;
+
+/// Share of new spawns that are Chochin (from 4:00) and Nopperabo (from 9:00, after the mid-boss).
+pub fn chochin_share(t: f32) -> f32 {
+    if t < 240.0 { 0.0 } else { (0.01 + (t - 240.0) / 660.0 * 0.02).min(0.03) }
+}
+
+pub fn nopperabo_share(t: f32) -> f32 {
+    if t < 540.0 { 0.0 } else { (0.02 + (t - 540.0) / 360.0 * 0.02).min(0.04) }
+}
 pub const MIDBOSS_AT: f32 = 480.0;
 
 /// Minimum rewards in the chest dropped on death (0 = no chest).

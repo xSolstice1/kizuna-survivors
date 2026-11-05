@@ -77,6 +77,17 @@ pub enum Event {
     Impact { pos: Vec2, radius: f32 },
     ShrineAppeared,
     ShrineChosen(ShrineEvent),
+    NightLordSpawned,
+    /// A Nopperabo reappeared beside the player.
+    Blink { pos: Vec2 },
+}
+
+/// Enemy fireball.
+#[derive(Clone, Copy, Debug)]
+pub struct Shot {
+    pub pos: Vec2,
+    pub vel: Vec2,
+    pub life: f32,
 }
 
 /// Expanding Taiko shockwave ring.
@@ -294,6 +305,12 @@ pub struct World {
     pub pools: Vec<Pool>,
     /// Run modifiers from Shrine Events.
     pub mods: Modifiers,
+    /// Enemy fireballs in flight.
+    pub shots: Vec<Shot>,
+    /// True if the run ended because dawn arrived with the Night Lord alive.
+    pub dawn_out: bool,
+    night_lord_spawned: bool,
+    pending_spawns: Vec<(EnemyKind, Vec2)>,
     /// A shrine waiting on the ground.
     pub shrine: Option<Vec2>,
     /// Two Blessing+Price pairs to choose from. The sim pauses until `choose_shrine`.
@@ -347,6 +364,10 @@ impl World {
             strikes: Vec::new(),
             pools: Vec::new(),
             mods: Modifiers::default(),
+            shots: Vec::new(),
+            dawn_out: false,
+            night_lord_spawned: false,
+            pending_spawns: Vec::new(),
             shrine: None,
             shrine_offer: None,
             shrines_done: 0,
@@ -386,14 +407,16 @@ impl World {
             self.use_special();
         }
         self.contact_damage();
+        self.update_shots();
         // Everything that reads the grid must run before this: removal reorders
         // the enemy arrays and invalidates the grid's indices.
         self.remove_dead_enemies();
         self.collect_gems();
         self.collect_chests();
         self.collect_shrine();
-        if self.state == RunState::Playing && self.time >= RUN_SECONDS {
-            self.state = RunState::Won;
+        if self.state == RunState::Playing && self.time >= DAWN_LIMIT {
+            self.dawn_out = true;
+            self.state = RunState::Dead;
         }
         if self.pending_levels > 0 && self.offer.is_none() && self.cfg.stress.is_none() {
             self.make_offer();
@@ -470,11 +493,15 @@ impl World {
         out
     }
 
-    /// The living mid-boss, if any: (index, hp fraction).
-    pub fn boss(&self) -> Option<(usize, f32)> {
-        let i = self.enemies.kind.iter().position(|k| *k == EnemyKind::GreatOni)?;
-        let max = enemy_def(EnemyKind::GreatOni).hp * hp_scale(MIDBOSS_AT);
-        Some((i, (self.enemies.hp[i] / max).clamp(0.0, 1.0)))
+    /// The living boss, if any (Night Lord first): (index, hp fraction, kind).
+    pub fn boss(&self) -> Option<(usize, f32, EnemyKind)> {
+        let k = &self.enemies.kind;
+        let i = k.iter().position(|k| *k == EnemyKind::NightLord).or_else(|| k.iter().position(|k| *k == EnemyKind::GreatOni))?;
+        let max = match k[i] {
+            EnemyKind::NightLord => night_lord_hp(),
+            _ => enemy_def(EnemyKind::GreatOni).hp * hp_scale(MIDBOSS_AT),
+        };
+        Some((i, (self.enemies.hp[i] / max).clamp(0.0, 1.0), k[i]))
     }
 
     // ───────────── Player ─────────────
@@ -508,7 +535,8 @@ impl World {
         self.grid.for_each_near(p, PLAYER_RADIUS + MAX_ENEMY_RADIUS, |j| {
             let j = j as usize;
             let r = PLAYER_RADIUS + enemies.radius[j];
-            if enemies.hp[j] > 0.0 && (enemies.pos[j] - p).length_sq() <= r * r {
+            let faded = enemies.kind[j] == EnemyKind::Nopperabo && enemies.ai_state[j] != 0;
+            if enemies.hp[j] > 0.0 && !faded && (enemies.pos[j] - p).length_sq() <= r * r {
                 worst = worst.max(enemies.damage[j]);
             }
         });
@@ -543,7 +571,7 @@ impl World {
         e.pos.push(pos);
         e.vel.push(Vec2::ZERO);
         e.push.push(Vec2::ZERO);
-        e.hp.push(d.hp * hp_scale(self.time) * self.mods.enemy_hp);
+        e.hp.push(if kind == EnemyKind::NightLord { night_lord_hp() } else { d.hp * hp_scale(self.time) * self.mods.enemy_hp });
         e.speed.push(d.speed * self.rng.range(0.9, 1.1) * self.mods.enemy_speed);
         e.radius.push(d.radius);
         e.damage.push(d.damage * damage_scale(self.time));
@@ -552,7 +580,11 @@ impl World {
         e.flash.push(0);
         e.orb_cd.push(0);
         e.ai_state.push(0);
-        e.ai_timer.push(3.0);
+        e.ai_timer.push(match kind {
+            EnemyKind::Chochin => 1.5 + self.rng.range(0.0, 1.5),
+            EnemyKind::Nopperabo => 2.5 + self.rng.range(0.0, 2.0),
+            _ => 3.0,
+        });
         e.ai_dir.push(Vec2::ZERO);
         e.wave_cd.push(0);
     }
@@ -560,6 +592,7 @@ impl World {
     fn director(&mut self) {
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
+            None if self.night_lord_spawned => 0,
             None => (min_alive(self.time) as f32 * self.mods.curse) as usize,
         };
         // Refill is rate-limited (ramping over the run) so strong area weapons can't turn
@@ -567,13 +600,32 @@ impl World {
         let per_tick = if self.cfg.stress.is_some() { 30 } else { refill_per_tick(self.time) };
         let deficit = target.saturating_sub(self.enemies.len()).min(per_tick);
         for _ in 0..deficit {
-            let kind = if self.rng.f32() < kasa_share(self.time) { EnemyKind::Kasa } else { EnemyKind::Wisp };
+            let r = self.rng.f32();
+            let (c, n) = (chochin_share(self.time), nopperabo_share(self.time));
+            let kind = if r < c {
+                EnemyKind::Chochin
+            } else if r < c + n {
+                EnemyKind::Nopperabo
+            } else if self.rng.f32() < kasa_share(self.time) {
+                EnemyKind::Kasa
+            } else {
+                EnemyKind::Wisp
+            };
             let r = self.cfg.spawn_radius + self.rng.range(0.0, 80.0);
             let p = self.ring_point(r);
             self.spawn_enemy(kind, p);
         }
 
         if self.cfg.stress.is_none() {
+            if !self.night_lord_spawned && self.time >= RUN_SECONDS {
+                self.night_lord_spawned = true;
+                let p = self.ring_point(self.cfg.spawn_radius * 0.8);
+                self.spawn_enemy(EnemyKind::NightLord, p);
+                self.events.push(Event::NightLordSpawned);
+            }
+            for (k, p) in std::mem::take(&mut self.pending_spawns) {
+                self.spawn_enemy(k, p);
+            }
             if !self.boss_spawned && self.time >= MIDBOSS_AT {
                 self.boss_spawned = true;
                 let p = self.ring_point(self.cfg.spawn_radius * 0.8);
@@ -628,6 +680,96 @@ impl World {
                 speed *= 0.45 + 0.75 * ((time * 7.0 + e.id[i] as f32 * 0.7).sin().abs());
             }
             let to_player = player - p;
+            match e.kind[i] {
+                EnemyKind::Chochin => {
+                    // Hold a firing range, strafing; spit a fireball every ~2.5s.
+                    let d = to_player.length();
+                    let dir = to_player.normalize_or_zero();
+                    let side = Vec2::new(-dir.y, dir.x) * if e.id[i] % 2 == 0 { 1.0 } else { -1.0 };
+                    let mv = if d > 220.0 { dir } else if d < 170.0 { dir * -1.0 } else { side * 0.6 };
+                    e.vel[i] = mv * speed;
+                    e.ai_timer[i] -= DT;
+                    if e.ai_timer[i] <= 0.0 && d < 300.0 {
+                        e.ai_timer[i] = 4.5;
+                        self.shots.push(Shot { pos: p, vel: dir * 115.0, life: 4.0 });
+                    }
+                    continue;
+                }
+                EnemyKind::Nopperabo => {
+                    // Walk -> fade out (0.5s) -> reappear 140px from the player and fade in (0.6s).
+                    // While faded (states 1 and 2) it stands still and deals no contact damage.
+                    e.ai_timer[i] -= DT;
+                    match e.ai_state[i] {
+                        0 => {
+                            e.vel[i] = to_player.normalize_or_zero() * speed;
+                            if e.ai_timer[i] <= 0.0 {
+                                e.ai_state[i] = 1;
+                                e.ai_timer[i] = 0.5;
+                            }
+                        }
+                        1 => {
+                            e.vel[i] = Vec2::ZERO;
+                            if e.ai_timer[i] <= 0.0 {
+                                let a = self.rng.range(0.0, std::f32::consts::TAU);
+                                e.pos[i] = player + Vec2::from_angle(a) * 140.0;
+                                e.ai_state[i] = 2;
+                                e.ai_timer[i] = NOPPERABO_FADE_IN;
+                                self.events.push(Event::Blink { pos: e.pos[i] });
+                            }
+                        }
+                        _ => {
+                            e.vel[i] = Vec2::ZERO;
+                            if e.ai_timer[i] <= 0.0 {
+                                e.ai_state[i] = 0;
+                                e.ai_timer[i] = 6.0 + self.rng.range(0.0, 3.0);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                EnemyKind::NightLord => {
+                    // Slow chase; a constant spiral; every 3s cycle burst -> aimed fan -> summon.
+                    e.vel[i] = to_player.normalize_or_zero() * speed;
+                    e.ai_dir[i].x += DT * 2.2;
+                    e.ai_dir[i].y -= DT;
+                    if e.ai_dir[i].y <= 0.0 {
+                        e.ai_dir[i].y = 0.14;
+                        let a = e.ai_dir[i].x;
+                        for k in 0..2 {
+                            let b = a + k as f32 * std::f32::consts::PI;
+                            self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 95.0, life: 6.0 });
+                        }
+                    }
+                    e.ai_timer[i] -= DT;
+                    if e.ai_timer[i] <= 0.0 {
+                        e.ai_timer[i] = 3.0;
+                        match e.ai_state[i] {
+                            0 => {
+                                for k in 0..24 {
+                                    let b = k as f32 / 24.0 * std::f32::consts::TAU;
+                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 110.0, life: 6.0 });
+                                }
+                            }
+                            1 => {
+                                let base = to_player.y.atan2(to_player.x);
+                                for k in 0..9 {
+                                    let b = base + (k as f32 - 4.0) * 0.12;
+                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 150.0, life: 5.0 });
+                                }
+                            }
+                            _ => {
+                                for k in 0..10 {
+                                    let b = k as f32 / 10.0 * std::f32::consts::TAU;
+                                    self.pending_spawns.push((EnemyKind::Chochin, player + Vec2::from_angle(b) * 210.0));
+                                }
+                            }
+                        }
+                        e.ai_state[i] = (e.ai_state[i] + 1) % 3;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             if e.kind[i] == EnemyKind::GreatOni {
                 // Chase → telegraph (stand still, 0.8s) → charge (0.7s) → chase.
                 e.ai_timer[i] -= DT;
@@ -738,6 +880,9 @@ impl World {
             }
             self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
             self.events.push(Event::Kill { pos, kind });
+            if kind == EnemyKind::NightLord && self.state == RunState::Playing {
+                self.state = RunState::Won;
+            }
             self.enemies.swap_remove(i);
             self.kills += 1;
         }
@@ -1121,6 +1266,31 @@ impl World {
         }
     }
 
+    fn update_shots(&mut self) {
+        let p = self.player.pos;
+        let hit_r = PLAYER_RADIUS + SHOT_RADIUS;
+        let mut hit = false;
+        self.shots.retain_mut(|s| {
+            s.pos += s.vel * DT;
+            s.life -= DT;
+            if (s.pos - p).length_sq() <= hit_r * hit_r {
+                hit = true;
+                return false;
+            }
+            s.life > 0.0
+        });
+        if hit && self.cfg.stress.is_none() && self.player.iframes <= 0.0 {
+            let armor = self.passive_level(PassiveKind::Guard) as f32 + self.mods.armor;
+            let dmg = (SHOT_DAMAGE * damage_scale(self.time) - armor).max(1.0);
+            self.player.hp = (self.player.hp - dmg).max(0.0);
+            self.player.iframes = IFRAMES;
+            self.events.push(Event::PlayerHurt);
+            if self.player.hp <= 0.0 {
+                self.state = RunState::Dead;
+            }
+        }
+    }
+
     fn collect_chests(&mut self) {
         let p = self.player.pos;
         let grab = PLAYER_RADIUS + 10.0;
@@ -1192,6 +1362,8 @@ impl World {
             self.hurt_enemy(j, dmg, dir);
             self.enemies.push[j] += dir.normalize_or_zero() * (320.0 * self.enemies.knock[j]);
         }
+        let r2 = BARRIER_RADIUS * BARRIER_RADIUS;
+        self.shots.retain(|s| (s.pos - p).length_sq() > r2);
         self.events.push(Event::SpecialUsed { pos: p });
     }
 
@@ -1526,7 +1698,7 @@ mod tests {
         for _ in 0..60 {
             w.step(Input::default());
         }
-        let (i, frac) = w.boss().expect("boss should be alive");
+        let (i, frac, _) = w.boss().expect("boss should be alive");
         assert!(frac > 0.9);
         w.enemies.hp[i] = -1.0;
         w.step(Input::default());
@@ -1696,11 +1868,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn chochin_fires_and_fireballs_hurt() {
+        let mut w = World::new(WorldConfig { seed: 8, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.cfg.stress = None;
+        w.weapons.clear();
+        w.time = 1.0;
+        w.spawn_enemy(EnemyKind::Chochin, Vec2::new(160.0, 0.0));
+        let hp = w.player.hp;
+        let mut fired = false;
+        for _ in 0..60 * 8 {
+            w.step(Input::default());
+            fired |= !w.shots.is_empty();
+            w.next_elite = f32::MAX; // keep the test arena to the one lantern
+        }
+        assert!(fired, "chochin never fired");
+        assert!(w.player.hp < hp, "fireballs should hurt");
+    }
+
+    #[test]
+    fn barrier_erases_fireballs() {
+        let mut w = World::new(WorldConfig::default());
+        w.shots.push(Shot { pos: Vec2::new(50.0, 0.0), vel: Vec2::ZERO, life: 5.0 });
+        w.shots.push(Shot { pos: Vec2::new(900.0, 0.0), vel: Vec2::ZERO, life: 5.0 });
+        w.player.special = 1.0;
+        w.use_special();
+        assert_eq!(w.shots.len(), 1, "only the far fireball survives");
+    }
+
+    #[test]
+    fn nopperabo_reappears_beside_the_player() {
+        let mut w = World::new(WorldConfig::default());
+        w.player.iframes = 1e9;
+        w.spawn_enemy(EnemyKind::Nopperabo, Vec2::new(400.0, 0.0));
+        let mut blinked = false;
+        for _ in 0..60 * 6 {
+            w.step(Input::default());
+            if w.events.iter().any(|e| matches!(e, Event::Blink { .. })) {
+                blinked = true;
+                break;
+            }
+        }
+        assert!(blinked);
+        let i = w.enemies.kind.iter().position(|k| *k == EnemyKind::Nopperabo).unwrap();
+        assert!((w.enemies.pos[i] - w.player.pos).length() < 160.0);
+    }
+
+    #[test]
+    fn night_lord_ends_the_night() {
+        let mut w = World::new(WorldConfig::default());
+        w.time = RUN_SECONDS - 0.01;
+        w.player.iframes = 1e9;
+        w.step(Input::default());
+        let (i, _, kind) = w.boss().expect("Night Lord at 15:00");
+        assert_eq!(kind, EnemyKind::NightLord);
+        assert_eq!(w.state, RunState::Playing, "surviving to 15:00 no longer wins by itself");
+        w.enemies.hp[i] = -1.0;
+        w.step(Input::default());
+        assert_eq!(w.state, RunState::Won);
+
+        let mut w = World::new(WorldConfig::default());
+        w.time = DAWN_LIMIT - 0.01;
+        w.night_lord_spawned = true;
+        w.player.iframes = 1e9;
+        w.step(Input::default());
+        assert_eq!(w.state, RunState::Dead);
+        assert!(w.dawn_out);
+    }
+
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn balance_full_run() {
-        for seed in 1..=10 {
+        let seeds: u64 = std::env::var("BALANCE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+        for seed in 1..=seeds {
             let started = std::time::Instant::now();
             let mut w = World::new(WorldConfig { seed, ..Default::default() });
             while w.state == RunState::Playing {
@@ -1717,8 +1958,9 @@ mod tests {
                 w.step(input);
             }
             let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
+            let nl = w.boss().filter(|b| b.2 == EnemyKind::NightLord).map(|b| format!("{:.0}%", b.1 * 100.0)).unwrap_or("-".into());
             println!(
-                "seed {seed}: {:?} at {:>5.0}s  level {:>2}  kills {:>6}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                "seed {seed} [NightLord hp {nl}]: {:?} at {:>5.0}s  level {:>2}  kills {:>6}  ({:.1}s real)  weapons {:?}  awakened {:?}",
                 w.state,
                 w.time,
                 w.player.level,

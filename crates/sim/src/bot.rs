@@ -17,6 +17,15 @@ impl World {
                 flee += d * (1.0 / d2);
             }
         }
+        // Fireballs are dodged harder than bodies.
+        for s in &self.shots {
+            let d = p - s.pos;
+            let d2 = d.length_sq();
+            if d2 < 70.0 * 70.0 && d2 > 1e-3 {
+                flee += d * (2.5 / d2);
+                closest = closest.min(d2);
+            }
+        }
         let flee = flee.normalize_or_zero();
         let special = self.player.special >= 1.0 && closest < 60.0 * 60.0;
         if closest < 40.0 * 40.0 {
