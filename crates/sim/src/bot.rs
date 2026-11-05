@@ -18,8 +18,9 @@ impl World {
             }
         }
         let flee = flee.normalize_or_zero();
+        let special = self.player.special >= 1.0 && closest < 60.0 * 60.0;
         if closest < 40.0 * 40.0 {
-            return Input { move_dir: flee };
+            return Input { move_dir: flee, special };
         }
         let gem = self
             .gems
@@ -28,6 +29,6 @@ impl World {
             .chain(self.gems.overflow.as_ref().map(|(g, _)| g))
             .min_by(|a, b| (**a - p).length_sq().partial_cmp(&(**b - p).length_sq()).unwrap())
             .map_or(Vec2::ZERO, |g| (*g - p).normalize_or_zero());
-        Input { move_dir: flee * 0.6 + gem }
+        Input { move_dir: flee * 0.6 + gem, special }
     }
 }

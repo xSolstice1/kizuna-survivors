@@ -42,6 +42,8 @@ impl Default for WorldConfig {
 pub struct Input {
     /// Desired movement, any length (normalised internally).
     pub move_dir: Vec2,
+    /// Trigger the character's special move (ignored until the meter is full).
+    pub special: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +60,19 @@ pub enum Event {
     Kill { pos: Vec2, kind: EnemyKind },
     PlayerHurt,
     LevelUp,
+    SpecialUsed { pos: Vec2 },
+    BossSpawned,
+    /// The Great Oni is winding up a charge in `dir`.
+    BossTelegraph,
+    Awakened(WeaponKind),
+}
+
+/// One reward from an opened chest.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ChestItem {
+    LevelUp(Upgrade, u8),
+    Awakening(WeaponKind),
+    Heal,
 }
 
 #[derive(Default)]
@@ -78,6 +93,10 @@ pub struct Enemies {
     pub flash: Vec<u8>,
     /// Ticks until moon orbs may hit this enemy again.
     pub orb_cd: Vec<u8>,
+    /// Boss AI: state (0 chase, 1 telegraph, 2 charge), timer, charge direction.
+    pub ai_state: Vec<u8>,
+    pub ai_timer: Vec<f32>,
+    pub ai_dir: Vec<Vec2>,
 }
 
 impl Enemies {
@@ -101,6 +120,9 @@ impl Enemies {
         self.knock.swap_remove(i);
         self.flash.swap_remove(i);
         self.orb_cd.swap_remove(i);
+        self.ai_state.swap_remove(i);
+        self.ai_timer.swap_remove(i);
+        self.ai_dir.swap_remove(i);
     }
 }
 
@@ -113,6 +135,8 @@ pub struct Projectiles {
     pub pierce: Vec<u8>,
     /// Id of the last enemy hit, so one projectile can't multi-hit while overlapping.
     pub last_hit: Vec<u32>,
+    /// Max turn rate toward the nearest enemy, radians/second (0 = straight).
+    pub homing: Vec<f32>,
 }
 
 impl Projectiles {
@@ -122,13 +146,14 @@ impl Projectiles {
     pub fn is_empty(&self) -> bool {
         self.pos.is_empty()
     }
-    fn push(&mut self, pos: Vec2, vel: Vec2, life: f32, damage: f32, pierce: u8) {
+    fn push(&mut self, pos: Vec2, vel: Vec2, life: f32, damage: f32, pierce: u8, homing: f32) {
         self.pos.push(pos);
         self.vel.push(vel);
         self.life.push(life);
         self.damage.push(damage);
         self.pierce.push(pierce);
         self.last_hit.push(u32::MAX);
+        self.homing.push(homing);
     }
     fn swap_remove(&mut self, i: usize) {
         self.pos.swap_remove(i);
@@ -137,6 +162,7 @@ impl Projectiles {
         self.damage.swap_remove(i);
         self.pierce.swap_remove(i);
         self.last_hit.swap_remove(i);
+        self.homing.swap_remove(i);
     }
 }
 
@@ -157,12 +183,15 @@ pub struct Player {
     pub iframes: f32,
     pub xp: u32,
     pub level: u32,
+    /// Special-move charge, 0..=1.
+    pub special: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct OwnedWeapon {
     pub kind: WeaponKind,
     pub level: u8,
+    pub awakened: bool,
     timer: f32,
     /// Orbit angle (MoonOrbs) / last pulse age (SakuraField), exposed for rendering.
     pub phase: f32,
@@ -182,6 +211,11 @@ pub struct World {
     pub state: RunState,
     /// Level-up choices waiting for the player. The sim pauses while this is Some.
     pub offer: Option<Vec<Upgrade>>,
+    /// Chests on the ground: position and tier (number of rewards).
+    pub chests: Vec<(Vec2, u8)>,
+    /// Rewards from the chest just opened. The sim pauses until `close_chest`.
+    pub chest_result: Option<Vec<ChestItem>>,
+    boss_spawned: bool,
     pub events: Vec<Event>,
     pending_levels: u32,
     next_id: u32,
@@ -209,8 +243,9 @@ impl World {
                 iframes: 0.0,
                 xp: 0,
                 level: 1,
+                special: 0.0,
             },
-            weapons: vec![OwnedWeapon { kind: WeaponKind::Ofuda, level: 1, timer: 0.0, phase: 0.0 }],
+            weapons: vec![OwnedWeapon { kind: WeaponKind::Ofuda, level: 1, awakened: false, timer: 0.0, phase: 0.0 }],
             passives: Vec::new(),
             enemies: Enemies::default(),
             projectiles: Projectiles::default(),
@@ -220,6 +255,9 @@ impl World {
             kills: 0,
             state: RunState::Playing,
             offer: None,
+            chests: Vec::new(),
+            chest_result: None,
+            boss_spawned: false,
             events: Vec::new(),
             pending_levels: 0,
             next_id: 0,
@@ -233,7 +271,7 @@ impl World {
     }
 
     pub fn paused(&self) -> bool {
-        self.state != RunState::Playing || self.offer.is_some()
+        self.state != RunState::Playing || self.offer.is_some() || self.chest_result.is_some()
     }
 
     pub fn step(&mut self, input: Input) {
@@ -249,9 +287,15 @@ impl World {
         self.move_enemies();
         self.update_weapons();
         self.move_projectiles_and_hit();
+        if input.special {
+            self.use_special();
+        }
+        self.contact_damage();
+        // Everything that reads the grid must run before this: removal reorders
+        // the enemy arrays and invalidates the grid's indices.
         self.remove_dead_enemies();
         self.collect_gems();
-        self.contact_damage();
+        self.collect_chests();
         if self.state == RunState::Playing && self.time >= RUN_SECONDS {
             self.state = RunState::Won;
         }
@@ -281,7 +325,8 @@ impl World {
         110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32)
     }
     pub fn magnet(&self) -> f32 {
-        55.0 * (1.0 + 0.30 * self.passive_level(PassiveKind::Magnet) as f32)
+        // Ren's innate "Shrine Keeper's Eye": +10% pickup radius.
+        55.0 * 1.10 * (1.0 + 0.30 * self.passive_level(PassiveKind::Magnet) as f32)
     }
     pub fn xp_to_next(&self) -> u32 {
         xp_needed(self.player.level)
@@ -296,6 +341,43 @@ impl World {
     }
     pub fn field_radius(&self, level: u8) -> f32 {
         FIELD_RADIUS * weapon_stats(WeaponKind::SakuraField, level).area * self.area_mult()
+    }
+
+    /// Stats for an owned weapon, Awakened form included (before passives).
+    pub fn stats_of(&self, w: &OwnedWeapon) -> WeaponStats {
+        if w.awakened {
+            awakened_stats(w.kind)
+        } else {
+            weapon_stats(w.kind, w.level)
+        }
+    }
+
+    pub fn field_radius_of(&self, w: &OwnedWeapon) -> f32 {
+        FIELD_RADIUS * self.stats_of(w).area * self.area_mult()
+    }
+
+    /// World positions of each moon orb. Awakened adds a counter-rotating outer ring.
+    pub fn orb_positions(&self, w: &OwnedWeapon) -> Vec<Vec2> {
+        let s = self.stats_of(w);
+        let orbit = ORB_ORBIT * s.area * self.area_mult();
+        let n = s.amount;
+        let mut out = Vec::with_capacity(n as usize * 2);
+        for k in 0..n {
+            let a = w.phase + k as f32 / n as f32 * std::f32::consts::TAU;
+            out.push(self.player.pos + Vec2::from_angle(a) * orbit);
+            if w.awakened {
+                let b = -w.phase * 0.8 + (k as f32 + 0.5) / n as f32 * std::f32::consts::TAU;
+                out.push(self.player.pos + Vec2::from_angle(b) * (orbit * 1.65));
+            }
+        }
+        out
+    }
+
+    /// The living mid-boss, if any: (index, hp fraction).
+    pub fn boss(&self) -> Option<(usize, f32)> {
+        let i = self.enemies.kind.iter().position(|k| *k == EnemyKind::GreatOni)?;
+        let max = enemy_def(EnemyKind::GreatOni).hp * hp_scale(MIDBOSS_AT);
+        Some((i, (self.enemies.hp[i] / max).clamp(0.0, 1.0)))
     }
 
     // ───────────── Player ─────────────
@@ -323,7 +405,7 @@ impl World {
         self.grid.for_each_near(p, PLAYER_RADIUS + MAX_ENEMY_RADIUS, |j| {
             let j = j as usize;
             let r = PLAYER_RADIUS + enemies.radius[j];
-            if (enemies.pos[j] - p).length_sq() <= r * r {
+            if enemies.hp[j] > 0.0 && (enemies.pos[j] - p).length_sq() <= r * r {
                 worst = worst.max(enemies.damage[j]);
             }
         });
@@ -364,6 +446,9 @@ impl World {
         e.knock.push(d.knockback);
         e.flash.push(0);
         e.orb_cd.push(0);
+        e.ai_state.push(0);
+        e.ai_timer.push(3.0);
+        e.ai_dir.push(Vec2::ZERO);
     }
 
     fn director(&mut self) {
@@ -381,6 +466,12 @@ impl World {
         }
 
         if self.cfg.stress.is_none() {
+            if !self.boss_spawned && self.time >= MIDBOSS_AT {
+                self.boss_spawned = true;
+                let p = self.ring_point(self.cfg.spawn_radius * 0.8);
+                self.spawn_enemy(EnemyKind::GreatOni, p);
+                self.events.push(Event::BossSpawned);
+            }
             if self.time >= self.next_elite {
                 self.next_elite += ELITE_EVERY;
                 let p = self.ring_point(self.cfg.spawn_radius);
@@ -422,7 +513,38 @@ impl World {
                 // Hopping gait.
                 speed *= 0.45 + 0.75 * ((time * 7.0 + e.id[i] as f32 * 0.7).sin().abs());
             }
-            let seek = (player - p).normalize_or_zero() * speed;
+            let to_player = player - p;
+            if e.kind[i] == EnemyKind::GreatOni {
+                // Chase → telegraph (stand still, 0.8s) → charge (0.7s) → chase.
+                e.ai_timer[i] -= DT;
+                e.vel[i] = match e.ai_state[i] {
+                    0 => {
+                        if e.ai_timer[i] <= 0.0 && to_player.length_sq() < 380.0 * 380.0 {
+                            e.ai_state[i] = 1;
+                            e.ai_timer[i] = 0.8;
+                            e.ai_dir[i] = to_player.normalize_or_zero();
+                            self.events.push(Event::BossTelegraph);
+                        }
+                        to_player.normalize_or_zero() * speed
+                    }
+                    1 => {
+                        if e.ai_timer[i] <= 0.0 {
+                            e.ai_state[i] = 2;
+                            e.ai_timer[i] = 0.7;
+                        }
+                        Vec2::ZERO
+                    }
+                    _ => {
+                        if e.ai_timer[i] <= 0.0 {
+                            e.ai_state[i] = 0;
+                            e.ai_timer[i] = 5.0;
+                        }
+                        e.ai_dir[i] * 290.0
+                    }
+                };
+                continue;
+            }
+            let seek = to_player.normalize_or_zero() * speed;
             let mut sep = Vec2::ZERO;
             let mut seen = 0u32;
             let pos = &e.pos;
@@ -495,6 +617,11 @@ impl World {
             let i = self.dead[k];
             let (pos, xp, kind) = (self.enemies.pos[i], self.enemies.xp[i], self.enemies.kind[i]);
             self.drop_gem(pos, xp);
+            let tier = chest_tier(kind);
+            if tier > 0 {
+                self.chests.push((pos, tier));
+            }
+            self.player.special = (self.player.special + 1.0 / SPECIAL_KILLS).min(1.0);
             self.events.push(Event::Kill { pos, kind });
             self.enemies.swap_remove(i);
             self.kills += 1;
@@ -507,7 +634,7 @@ impl World {
         let (might, haste) = (self.might(), self.haste());
         for wi in 0..self.weapons.len() {
             let w = self.weapons[wi];
-            let s = weapon_stats(w.kind, w.level);
+            let s = self.stats_of(&w);
             match w.kind {
                 WeaponKind::Ofuda => {
                     let mut timer = w.timer - DT;
@@ -519,9 +646,11 @@ impl World {
                         };
                         let base = dir.y.atan2(dir.x);
                         let n = s.amount as f32;
+                        let homing = if w.awakened { 9.0 } else { 4.5 };
+                        let spread = if w.awakened { 0.22 } else { 0.13 };
                         for k in 0..s.amount {
-                            let a = base + (k as f32 - (n - 1.0) / 2.0) * 0.13;
-                            self.projectiles.push(self.player.pos, Vec2::from_angle(a) * s.speed, 1.4, s.damage * might, s.pierce);
+                            let a = base + (k as f32 - (n - 1.0) / 2.0) * spread;
+                            self.projectiles.push(self.player.pos, Vec2::from_angle(a) * s.speed, 1.4, s.damage * might, s.pierce, homing);
                         }
                     }
                     self.weapons[wi].timer = timer;
@@ -529,11 +658,10 @@ impl World {
                 WeaponKind::MoonOrbs => {
                     let phase = w.phase + s.speed * DT;
                     self.weapons[wi].phase = phase;
-                    let (orbit, r) = (self.orb_orbit(w.level), self.orb_radius(w.level));
+                    let r = self.orb_radius(w.level);
                     let rehit = (s.cooldown * 60.0) as u8;
-                    for k in 0..s.amount {
-                        let a = phase + k as f32 / s.amount as f32 * std::f32::consts::TAU;
-                        let c = self.player.pos + Vec2::from_angle(a) * orbit;
+                    let current = self.weapons[wi];
+                    for c in self.orb_positions(&current) {
                         self.query_circle(c, r);
                         for idx in 0..self.scratch.len() {
                             let j = self.scratch[idx] as usize;
@@ -551,12 +679,15 @@ impl World {
                     if timer <= 0.0 {
                         timer = s.cooldown * haste;
                         self.weapons[wi].phase = 0.0;
-                        let r = self.field_radius(w.level);
+                        let r = self.field_radius_of(&w);
                         self.query_circle(self.player.pos, r);
                         for idx in 0..self.scratch.len() {
                             let j = self.scratch[idx] as usize;
                             let dir = self.enemies.pos[j] - self.player.pos;
                             self.hurt_enemy(j, s.damage * might, dir * 0.3);
+                        }
+                        if w.awakened {
+                            self.player.hp = (self.player.hp + 1.0).min(self.player.max_hp);
                         }
                     }
                     self.weapons[wi].timer = timer;
@@ -571,7 +702,7 @@ impl World {
                 for _ in 0..(st.projectiles - alive).min(120) {
                     let a = self.rng.range(0.0, std::f32::consts::TAU);
                     let speed = self.rng.range(150.0, 320.0);
-                    self.projectiles.push(self.player.pos, Vec2::from_angle(a) * speed, 2.0, 3.0, 2);
+                    self.projectiles.push(self.player.pos, Vec2::from_angle(a) * speed, 2.0, 3.0, 2, 0.0);
                 }
             }
         }
@@ -580,6 +711,36 @@ impl World {
     fn move_projectiles_and_hit(&mut self) {
         let mut i = 0;
         while i < self.projectiles.len() {
+            let turn = self.projectiles.homing[i];
+            if turn > 0.0 {
+                let here = self.projectiles.pos[i];
+                let skip = self.projectiles.last_hit[i];
+                let mut best: Option<(f32, Vec2)> = None;
+                let e = &self.enemies;
+                self.grid.for_each_near(here, 130.0, |j| {
+                    let j = j as usize;
+                    if e.id[j] == skip || e.hp[j] <= 0.0 {
+                        return;
+                    }
+                    let d2 = (e.pos[j] - here).length_sq();
+                    if d2 < 130.0 * 130.0 && best.is_none_or(|(b, _)| d2 < b) {
+                        best = Some((d2, e.pos[j]));
+                    }
+                });
+                if let Some((_, target)) = best {
+                    let v = self.projectiles.vel[i];
+                    let (cur, want) = (v.y.atan2(v.x), (target - here).y.atan2((target - here).x));
+                    let mut diff = want - cur;
+                    while diff > std::f32::consts::PI {
+                        diff -= std::f32::consts::TAU;
+                    }
+                    while diff < -std::f32::consts::PI {
+                        diff += std::f32::consts::TAU;
+                    }
+                    let a = cur + diff.clamp(-turn * DT, turn * DT);
+                    self.projectiles.vel[i] = Vec2::from_angle(a) * v.length();
+                }
+            }
             let p = self.projectiles.pos[i] + self.projectiles.vel[i] * DT;
             self.projectiles.pos[i] = p;
             self.projectiles.life[i] -= DT;
@@ -663,6 +824,75 @@ impl World {
         }
     }
 
+    fn collect_chests(&mut self) {
+        let p = self.player.pos;
+        let grab = PLAYER_RADIUS + 10.0;
+        if let Some(i) = self.chests.iter().position(|(c, _)| (*c - p).length_sq() < grab * grab) {
+            let (_, tier) = self.chests.swap_remove(i);
+            self.open_chest(tier);
+        }
+    }
+
+    /// Weapons that could Awaken right now.
+    pub fn awakenable(&self) -> Vec<WeaponKind> {
+        if self.time < AWAKEN_FROM {
+            return Vec::new();
+        }
+        self.weapons
+            .iter()
+            .filter(|w| !w.awakened && w.level >= MAX_LEVEL && self.passive_level(catalyst(w.kind)) > 0)
+            .map(|w| w.kind)
+            .collect()
+    }
+
+    /// Rolls `tier` rewards: an Awakening first if one is eligible, then levels for owned items.
+    pub fn open_chest(&mut self, tier: u8) {
+        let mut items = Vec::new();
+        if let Some(&k) = self.awakenable().first() {
+            if let Some(w) = self.weapons.iter_mut().find(|w| w.kind == k) {
+                w.awakened = true;
+            }
+            self.events.push(Event::Awakened(k));
+            items.push(ChestItem::Awakening(k));
+        }
+        while items.len() < tier as usize {
+            let mut pool: Vec<Upgrade> = Vec::new();
+            pool.extend(self.weapons.iter().filter(|w| w.level < MAX_LEVEL).map(|w| Upgrade::Weapon(w.kind)));
+            pool.extend(self.passives.iter().filter(|(_, l)| *l < MAX_LEVEL).map(|(k, _)| Upgrade::Passive(*k)));
+            if pool.is_empty() {
+                self.player.hp = (self.player.hp + 30.0).min(self.player.max_hp);
+                items.push(ChestItem::Heal);
+                continue;
+            }
+            let u = pool[(self.rng.next_u32() as usize) % pool.len()];
+            self.apply_upgrade(u);
+            items.push(ChestItem::LevelUp(u, self.next_level(u) - 1));
+        }
+        self.chest_result = Some(items);
+    }
+
+    pub fn close_chest(&mut self) {
+        self.chest_result = None;
+    }
+
+    fn use_special(&mut self) {
+        if self.player.special < 1.0 {
+            return;
+        }
+        self.player.special = 0.0;
+        self.player.iframes = BARRIER_IFRAMES;
+        let p = self.player.pos;
+        self.query_circle(p, BARRIER_RADIUS);
+        let dmg = BARRIER_DAMAGE * self.might();
+        for idx in 0..self.scratch.len() {
+            let j = self.scratch[idx] as usize;
+            let dir = self.enemies.pos[j] - p;
+            self.hurt_enemy(j, dmg, dir);
+            self.enemies.push[j] += dir.normalize_or_zero() * (320.0 * self.enemies.knock[j]);
+        }
+        self.events.push(Event::SpecialUsed { pos: p });
+    }
+
     fn make_offer(&mut self) {
         let mut pool: Vec<Upgrade> = Vec::new();
         for w in &self.weapons {
@@ -708,10 +938,18 @@ impl World {
             self.offer = Some(offer);
             return;
         };
+        self.apply_upgrade(u);
+        self.pending_levels = self.pending_levels.saturating_sub(1);
+        if self.pending_levels > 0 {
+            self.make_offer();
+        }
+    }
+
+    fn apply_upgrade(&mut self, u: Upgrade) {
         match u {
             Upgrade::Weapon(k) => match self.weapons.iter_mut().find(|w| w.kind == k) {
                 Some(w) => w.level += 1,
-                None => self.weapons.push(OwnedWeapon { kind: k, level: 1, timer: 0.0, phase: 0.0 }),
+                None => self.weapons.push(OwnedWeapon { kind: k, level: 1, awakened: false, timer: 0.0, phase: 0.0 }),
             },
             Upgrade::Passive(k) => {
                 match self.passives.iter_mut().find(|(pk, _)| *pk == k) {
@@ -725,9 +963,19 @@ impl World {
             }
             Upgrade::Heal => self.player.hp = (self.player.hp + 30.0).min(self.player.max_hp),
         }
-        self.pending_levels = self.pending_levels.saturating_sub(1);
-        if self.pending_levels > 0 {
-            self.make_offer();
+    }
+
+    /// Dev shortcut: every weapon at max level with its catalyst, ready to Awaken.
+    pub fn debug_max_loadout(&mut self) {
+        for k in ALL_WEAPONS {
+            match self.weapons.iter_mut().find(|w| w.kind == k) {
+                Some(w) => w.level = MAX_LEVEL,
+                None => self.weapons.push(OwnedWeapon { kind: k, level: MAX_LEVEL, awakened: false, timer: 0.0, phase: 0.0 }),
+            }
+            let c = catalyst(k);
+            if self.passive_level(c) == 0 {
+                self.passives.push((c, 1));
+            }
         }
     }
 
@@ -764,7 +1012,7 @@ mod tests {
                 w.choose(0);
             }
             let a = t as f32 * 0.01;
-            w.step(Input { move_dir: Vec2::new(a.cos(), a.sin()) });
+            w.step(Input { move_dir: Vec2::new(a.cos(), a.sin()), ..Default::default() });
         }
         w
     }
@@ -809,16 +1057,15 @@ mod tests {
 
     #[test]
     fn sim_pauses_during_offer() {
-        let mut w = play(5, 60 * 20);
+        let mut w = World::new(WorldConfig { seed: 5, ..Default::default() });
         for _ in 0..60 * 120 {
             if w.offer.is_some() {
                 break;
             }
-            assert_eq!(w.state, RunState::Playing, "died before an offer appeared");
-            let a = w.time;
-            w.step(Input { move_dir: Vec2::new(a.cos(), a.sin()) });
+            let input = w.bot_input();
+            w.step(input);
         }
-        assert!(w.offer.is_some(), "no offer within 2 min");
+        assert!(w.offer.is_some(), "no offer within 2 min (state {:?})", w.state);
         let t = w.time;
         w.step(Input::default());
         assert_eq!(w.time, t);
@@ -833,5 +1080,85 @@ mod tests {
         }
         assert!(w.enemies.len() >= 700 && w.offer.is_none() && w.state == RunState::Playing);
     }
-}
 
+    #[test]
+    fn barrier_needs_full_meter_and_hits_nearby() {
+        let mut w = play(9, 60 * 20);
+        w.player.special = 0.5;
+        w.use_special();
+        assert!(w.player.iframes <= 1.0, "barrier must not fire on a half meter");
+        w.player.special = 1.0;
+        w.use_special();
+        assert!(w.player.iframes >= BARRIER_IFRAMES - 1e-3 && w.player.special == 0.0);
+        assert!(w.events.iter().any(|e| matches!(e, Event::Hit { .. })), "nothing was in range");
+    }
+
+    #[test]
+    fn chest_awakens_eligible_weapon_only_after_eight_minutes() {
+        let mut w = World::new(WorldConfig::default());
+        w.weapons[0].level = MAX_LEVEL;
+        w.passives.push((catalyst(WeaponKind::Ofuda), 1));
+        w.time = AWAKEN_FROM - 1.0;
+        w.open_chest(1);
+        assert!(!w.weapons[0].awakened, "too early to awaken");
+        w.close_chest();
+        w.time = AWAKEN_FROM;
+        w.open_chest(3);
+        assert!(w.weapons[0].awakened);
+        let res = w.chest_result.clone().unwrap();
+        assert_eq!(res[0], ChestItem::Awakening(WeaponKind::Ofuda));
+        assert_eq!(res.len(), 3);
+        assert!(w.paused());
+        w.close_chest();
+        assert!(!w.paused());
+        let s = w.stats_of(&w.weapons[0]);
+        assert_eq!(s.amount, weapon_stats(WeaponKind::Ofuda, MAX_LEVEL).amount * 2);
+    }
+
+    #[test]
+    fn great_oni_spawns_at_eight_minutes_and_drops_a_big_chest() {
+        let mut w = World::new(WorldConfig::default());
+        w.time = MIDBOSS_AT - 0.5;
+        w.player.iframes = 1e9;
+        for _ in 0..60 {
+            w.step(Input::default());
+        }
+        let (i, frac) = w.boss().expect("boss should be alive");
+        assert!(frac > 0.9);
+        w.enemies.hp[i] = -1.0;
+        w.step(Input::default());
+        assert!(w.boss().is_none());
+        assert!(w.chests.iter().any(|(_, t)| *t == 3));
+    }
+
+    /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn balance_full_run() {
+        for seed in 1..=4 {
+            let started = std::time::Instant::now();
+            let mut w = World::new(WorldConfig { seed, ..Default::default() });
+            while w.state == RunState::Playing {
+                if w.offer.is_some() {
+                    w.choose(0);
+                }
+                if w.chest_result.is_some() {
+                    w.close_chest();
+                }
+                let input = w.bot_input();
+                w.step(input);
+            }
+            let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
+            println!(
+                "seed {seed}: {:?} at {:>5.0}s  level {:>2}  kills {:>6}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                w.state,
+                w.time,
+                w.player.level,
+                w.kills,
+                started.elapsed().as_secs_f32(),
+                w.weapons.iter().map(|x| (x.kind, x.level)).collect::<Vec<_>>(),
+                awakened
+            );
+        }
+    }
+}

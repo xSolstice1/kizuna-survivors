@@ -12,6 +12,8 @@ pub enum EnemyKind {
     Wisp,
     Kasa,
     Oni,
+    /// Mid-boss at 8:00: telegraphed charges, drops a 3-item chest.
+    GreatOni,
 }
 
 pub struct EnemyDef {
@@ -29,10 +31,31 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
         EnemyKind::Wisp => EnemyDef { hp: 8.0, speed: 46.0, damage: 5.0, radius: 7.0, xp: 1, knockback: 1.0 },
         EnemyKind::Kasa => EnemyDef { hp: 22.0, speed: 56.0, damage: 9.0, radius: 7.0, xp: 2, knockback: 0.7 },
         EnemyKind::Oni => EnemyDef { hp: 420.0, speed: 38.0, damage: 20.0, radius: 14.0, xp: 30, knockback: 0.0 },
+        EnemyKind::GreatOni => EnemyDef { hp: 7000.0, speed: 34.0, damage: 30.0, radius: 26.0, xp: 120, knockback: 0.0 },
     }
 }
 
-pub const MAX_ENEMY_RADIUS: f32 = 14.0;
+pub const MAX_ENEMY_RADIUS: f32 = 26.0;
+pub const MIDBOSS_AT: f32 = 480.0;
+
+/// Chest size dropped on death (0 = none).
+pub fn chest_tier(kind: EnemyKind) -> u8 {
+    match kind {
+        EnemyKind::Oni => 1,
+        EnemyKind::GreatOni => 3,
+        _ => 0,
+    }
+}
+
+// ───────────────────────── Ren's special ─────────────────────────
+
+/// Kills needed to fill the special meter.
+pub const SPECIAL_KILLS: f32 = 120.0;
+pub const BARRIER_RADIUS: f32 = 170.0;
+pub const BARRIER_DAMAGE: f32 = 60.0;
+pub const BARRIER_IFRAMES: f32 = 1.5;
+/// Earliest time a chest may Awaken a weapon.
+pub const AWAKEN_FROM: f32 = 480.0;
 
 // ───────────────────────── Weapons ─────────────────────────
 
@@ -91,6 +114,41 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
     }
 }
 
+/// Passive that must be owned (any level) for `kind` to Awaken.
+pub fn catalyst(kind: WeaponKind) -> PassiveKind {
+    match kind {
+        WeaponKind::Ofuda => PassiveKind::Haste,
+        WeaponKind::MoonOrbs => PassiveKind::Expanse,
+        WeaponKind::SakuraField => PassiveKind::Vitality,
+    }
+}
+
+pub fn awakened_name(kind: WeaponKind) -> &'static str {
+    match kind {
+        WeaponKind::Ofuda => "Hundredfold Seal",
+        WeaponKind::MoonOrbs => "Twin Moon Mandala",
+        WeaponKind::SakuraField => "Undying Sakura",
+    }
+}
+
+/// Stats after Awakening.
+pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
+    let mut s = weapon_stats(kind, MAX_LEVEL);
+    match kind {
+        WeaponKind::Ofuda => {
+            s.amount *= 2;
+            s.pierce += 3;
+            s.damage *= 1.2;
+        }
+        WeaponKind::MoonOrbs => s.damage *= 1.25,
+        WeaponKind::SakuraField => {
+            s.area *= 1.3;
+            s.damage *= 1.2;
+        }
+    }
+    s
+}
+
 // ───────────────────────── Passives ─────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +190,7 @@ impl Upgrade {
             Upgrade::Passive(PassiveKind::Haste) => "Haste",
             Upgrade::Passive(PassiveKind::Expanse) => "Expanse",
             Upgrade::Passive(PassiveKind::Swiftness) => "Swiftness",
-            Upgrade::Passive(PassiveKind::Magnet) => "Spirit Magnet",
+            Upgrade::Passive(PassiveKind::Magnet) => "Magnetism",
             Upgrade::Passive(PassiveKind::Vitality) => "Vitality",
             Upgrade::Heal => "Onigiri",
         }
@@ -181,7 +239,7 @@ impl Upgrade {
 
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;
-    (5.0 + 3.5 * l + 0.12 * l * l).round() as u32
+    (5.0 + 3.5 * l + 0.25 * l * l).round() as u32
 }
 
 /// Minimum enemies alive at time `t` (seconds). Linear between keyframes.
@@ -218,7 +276,8 @@ pub fn kasa_share(t: f32) -> f32 {
 
 /// Enemy HP multiplier over the run.
 pub fn hp_scale(t: f32) -> f32 {
-    1.0 + t / 60.0 * 0.09
+    let m = t / 60.0;
+    1.0 + 0.12 * m + 0.02 * m * m
 }
 
 pub const ELITE_EVERY: f32 = 120.0;

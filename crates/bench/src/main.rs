@@ -8,7 +8,7 @@ fn main() {
         let mut w = World::new(WorldConfig { seed: 3, stress: Some(Stress { enemies, projectiles: proj }), ..Default::default() });
         let input = |t: u32| {
             let a = t as f32 * 0.004;
-            Input { move_dir: Vec2::new(a.cos(), a.sin()) }
+            Input { move_dir: Vec2::new(a.cos(), a.sin()), ..Default::default() }
         };
         for t in 0..300 {
             w.step(input(t));
