@@ -1,7 +1,7 @@
 //! Screen-space UI: HUD, level-up cards, title / pause / results screens.
 
 use macroquad::prelude::*;
-use sim::content::{awakened_name, complement, hero_def, Upgrade, RUN_SECONDS};
+use sim::content::{awakened_name, complement, hero_def, ShrineEvent, Upgrade, RUN_SECONDS};
 use sim::World;
 
 use crate::render::Assets;
@@ -141,6 +141,50 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usi
     for (i, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3].iter().enumerate() {
         if i < offer.len() && is_key_pressed(*key) {
             picked = Some(i);
+        }
+    }
+    picked
+}
+
+/// Shrine choice. Returns Some(Some(i)) for a pick, Some(None) to walk away, None while undecided.
+pub fn shrine(offer: &[ShrineEvent]) -> Option<Option<usize>> {
+    let (w, h) = (screen_width(), screen_height());
+    draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.01, 0.05, 0.75));
+    centered("A ROADSIDE SHRINE", h * 0.22, 44.0, Color::new(1.0, 0.85, 0.45, 1.0));
+    centered("Every blessing has a price.  (click, or press 1 / 2)", h * 0.22 + 30.0, 20.0, WHITE);
+    let (cw, ch, gap) = (330.0, 190.0, 30.0);
+    let x0 = (w - (offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap)) / 2.0;
+    let y0 = h * 0.36;
+    let (mx, my) = mouse_position();
+    let mut picked = None;
+    for (i, ev) in offer.iter().enumerate() {
+        let x = x0 + i as f32 * (cw + gap);
+        let hover = Rect::new(x, y0, cw, ch).contains(vec2(mx, my));
+        draw_rectangle(x, y0, cw, ch, if hover { Color::new(0.18, 0.12, 0.08, 0.97) } else { PANEL });
+        draw_rectangle_lines(x, y0, cw, ch, 2.0, if hover { Color::new(1.0, 0.85, 0.45, 1.0) } else { Color::new(1.0, 1.0, 1.0, 0.25) });
+        draw_text(&format!("{}", i + 1), x + cw - 24.0, y0 + 26.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.4));
+        draw_text(ev.name(), x + 18.0, y0 + 40.0, 30.0, WHITE);
+        let (bless, price) = ev.text();
+        draw_text("BLESSING", x + 18.0, y0 + 82.0, 16.0, Color::new(0.45, 1.0, 0.6, 0.8));
+        draw_text(bless, x + 18.0, y0 + 104.0, 20.0, Color::new(0.6, 1.0, 0.7, 1.0));
+        draw_text("PRICE", x + 18.0, y0 + 140.0, 16.0, Color::new(1.0, 0.5, 0.5, 0.8));
+        draw_text(price, x + 18.0, y0 + 162.0, 20.0, Color::new(1.0, 0.6, 0.6, 1.0));
+        if hover && is_mouse_button_pressed(MouseButton::Left) {
+            picked = Some(Some(i));
+        }
+    }
+    let leave = "Walk away  [Esc]";
+    let d = measure_text(leave, None, 22, 1.0);
+    let r = Rect::new((w - d.width) / 2.0 - 16.0, y0 + ch + 34.0, d.width + 32.0, 36.0);
+    let hover = r.contains(vec2(mx, my));
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, if hover { 0.8 } else { 0.3 }));
+    draw_text(leave, r.x + 16.0, r.y + 25.0, 22.0, Color::new(1.0, 1.0, 1.0, if hover { 1.0 } else { 0.7 }));
+    if (hover && is_mouse_button_pressed(MouseButton::Left)) || is_key_pressed(KeyCode::Escape) {
+        picked = Some(None);
+    }
+    for (i, key) in [KeyCode::Key1, KeyCode::Key2].iter().enumerate() {
+        if i < offer.len() && is_key_pressed(*key) {
+            picked = Some(Some(i));
         }
     }
     picked

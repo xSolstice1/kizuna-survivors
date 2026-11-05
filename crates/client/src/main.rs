@@ -72,7 +72,8 @@ async fn main() {
 
         // --- Global keys ---
         let over = matches!(world.state, RunState::Dead | RunState::Won);
-        if is_key_pressed(KeyCode::Escape) && !over {
+        // Esc pauses only during play; on the shrine screen it means "walk away".
+        if is_key_pressed(KeyCode::Escape) && !over && (screen == Screen::Paused || !world.paused()) {
             screen = if screen == Screen::Paused { Screen::Playing } else { Screen::Paused };
         }
         if is_key_pressed(KeyCode::N) {
@@ -94,7 +95,7 @@ async fn main() {
             screen = Screen::Playing;
         }
         // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest,
-        // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots).
+        // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots), F7 shrine underfoot.
         if is_key_pressed(KeyCode::F2) {
             world.time = world.time.max(sim::content::MIDBOSS_AT - 3.0);
         }
@@ -109,6 +110,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::F6) {
             world.debug_all_weapons();
+        }
+        if is_key_pressed(KeyCode::F7) {
+            world.shrine = Some(world.player.pos);
         }
         if let Some(s) = stress.as_mut() {
             let mut changed = true;
@@ -178,6 +182,10 @@ async fn main() {
             if anim.update_and_draw(&assets, dt) {
                 world.close_chest();
                 chest_anim = None;
+            }
+        } else if let Some(offer) = world.shrine_offer.clone() {
+            if let Some(choice) = ui::shrine(&offer) {
+                world.choose_shrine(choice);
             }
         } else if let Some(offer) = world.offer.clone() {
             if let Some(i) = ui::level_up(&world, &offer, &assets) {

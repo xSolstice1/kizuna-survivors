@@ -75,6 +75,8 @@ pub enum Event {
     Slash { pos: Vec2, dir: Vec2, radius: f32, full: bool },
     /// A Star Fall strike landing.
     Impact { pos: Vec2, radius: f32 },
+    ShrineAppeared,
+    ShrineChosen(ShrineEvent),
 }
 
 /// Expanding Taiko shockwave ring.
@@ -290,6 +292,14 @@ pub struct World {
     pub waves: Vec<Wave>,
     pub strikes: Vec<Strike>,
     pub pools: Vec<Pool>,
+    /// Run modifiers from Shrine Events.
+    pub mods: Modifiers,
+    /// A shrine waiting on the ground.
+    pub shrine: Option<Vec2>,
+    /// Two Blessing+Price pairs to choose from. The sim pauses until `choose_shrine`.
+    pub shrine_offer: Option<Vec<ShrineEvent>>,
+    shrines_done: usize,
+    xp_carry: f32,
     boss_spawned: bool,
     pub events: Vec<Event>,
     pending_levels: u32,
@@ -336,6 +346,11 @@ impl World {
             waves: Vec::new(),
             strikes: Vec::new(),
             pools: Vec::new(),
+            mods: Modifiers::default(),
+            shrine: None,
+            shrine_offer: None,
+            shrines_done: 0,
+            xp_carry: 0.0,
             boss_spawned: false,
             events: Vec::new(),
             pending_levels: 0,
@@ -350,7 +365,7 @@ impl World {
     }
 
     pub fn paused(&self) -> bool {
-        self.state != RunState::Playing || self.offer.is_some() || self.chest_result.is_some()
+        self.state != RunState::Playing || self.offer.is_some() || self.chest_result.is_some() || self.shrine_offer.is_some()
     }
 
     pub fn step(&mut self, input: Input) {
@@ -376,6 +391,7 @@ impl World {
         self.remove_dead_enemies();
         self.collect_gems();
         self.collect_chests();
+        self.collect_shrine();
         if self.state == RunState::Playing && self.time >= RUN_SECONDS {
             self.state = RunState::Won;
         }
@@ -393,7 +409,7 @@ impl World {
         self.weapons.iter().find(|w| w.kind == kind).map_or(0, |w| w.level)
     }
     fn might(&self) -> f32 {
-        1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32
+        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32) * self.mods.damage
     }
     fn haste(&self) -> f32 {
         1.0 - 0.08 * self.passive_level(PassiveKind::Haste) as f32
@@ -402,11 +418,11 @@ impl World {
         1.0 + 0.10 * self.passive_level(PassiveKind::Expanse) as f32
     }
     fn move_speed(&self) -> f32 {
-        110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32)
+        110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32) * self.mods.move_speed
     }
     pub fn magnet(&self) -> f32 {
         // Ren's innate "Shrine Keeper's Eye": +10% pickup radius.
-        55.0 * 1.10 * (1.0 + 0.30 * self.passive_level(PassiveKind::Magnet) as f32)
+        55.0 * 1.10 * (1.0 + 0.30 * self.passive_level(PassiveKind::Magnet) as f32) * self.mods.magnet
     }
     pub fn xp_to_next(&self) -> u32 {
         xp_needed(self.player.level)
@@ -469,7 +485,7 @@ impl World {
 
     fn move_player(&mut self, input: Input) {
         let regen = 0.25 * self.passive_level(PassiveKind::Recovery) as f32;
-        self.player.hp = (self.player.hp + regen * DT).min(self.player.max_hp);
+        self.heal(regen * DT);
         let d = input.move_dir.normalize_or_zero();
         self.player.moving = d != Vec2::ZERO;
         if self.player.moving {
@@ -497,7 +513,8 @@ impl World {
             }
         });
         if worst > 0.0 {
-            let worst = (worst - self.passive_level(PassiveKind::Guard) as f32).max(1.0);
+            let armor = self.passive_level(PassiveKind::Guard) as f32 + self.mods.armor;
+            let worst = (worst - armor).max(1.0);
             self.player.hp = (self.player.hp - worst).max(0.0);
             self.player.iframes = IFRAMES;
             self.events.push(Event::PlayerHurt);
@@ -526,8 +543,8 @@ impl World {
         e.pos.push(pos);
         e.vel.push(Vec2::ZERO);
         e.push.push(Vec2::ZERO);
-        e.hp.push(d.hp * hp_scale(self.time));
-        e.speed.push(d.speed * self.rng.range(0.9, 1.1));
+        e.hp.push(d.hp * hp_scale(self.time) * self.mods.enemy_hp);
+        e.speed.push(d.speed * self.rng.range(0.9, 1.1) * self.mods.enemy_speed);
         e.radius.push(d.radius);
         e.damage.push(d.damage * damage_scale(self.time));
         e.xp.push(d.xp);
@@ -543,7 +560,7 @@ impl World {
     fn director(&mut self) {
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
-            None => min_alive(self.time),
+            None => (min_alive(self.time) as f32 * self.mods.curse) as usize,
         };
         // Refill is rate-limited (ramping over the run) so strong area weapons can't turn
         // the director into an endless XP fountain. Stress mode fills fast.
@@ -562,6 +579,12 @@ impl World {
                 let p = self.ring_point(self.cfg.spawn_radius * 0.8);
                 self.spawn_enemy(EnemyKind::GreatOni, p);
                 self.events.push(Event::BossSpawned);
+            }
+            if self.shrines_done < SHRINE_TIMES.len() && self.time >= SHRINE_TIMES[self.shrines_done] {
+                self.shrines_done += 1;
+                let a = self.rng.range(0.0, std::f32::consts::TAU);
+                self.shrine = Some(self.player.pos + Vec2::from_angle(a) * 240.0);
+                self.events.push(Event::ShrineAppeared);
             }
             if self.time >= self.next_elite {
                 self.next_elite += elite_interval(self.time);
@@ -713,7 +736,7 @@ impl World {
             if tier > 0 {
                 self.chests.push((pos, tier));
             }
-            self.player.special = (self.player.special + 1.0 / SPECIAL_KILLS).min(1.0);
+            self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
             self.events.push(Event::Kill { pos, kind });
             self.enemies.swap_remove(i);
             self.kills += 1;
@@ -780,7 +803,7 @@ impl World {
                             self.hurt_enemy(j, s.damage * might, dir * 0.3);
                         }
                         if w.awakened {
-                            self.player.hp = (self.player.hp + 1.0).min(self.player.max_hp);
+                            self.heal(1.0);
                         }
                     }
                     self.weapons[wi].timer = timer;
@@ -1056,8 +1079,15 @@ impl World {
         self.gems.value.push(value);
     }
 
+    fn heal(&mut self, amount: f32) {
+        self.player.hp = (self.player.hp + amount * self.mods.healing).min(self.player.max_hp);
+    }
+
     fn gain_xp(&mut self, amount: u32) {
-        self.player.xp += amount;
+        self.xp_carry += amount as f32 * self.mods.xp;
+        let whole = self.xp_carry.floor();
+        self.xp_carry -= whole;
+        self.player.xp += whole as u32;
         while self.player.xp >= self.xp_to_next() {
             self.player.xp -= self.xp_to_next();
             self.player.level += 1;
@@ -1132,7 +1162,7 @@ impl World {
             pool.extend(self.weapons.iter().filter(|w| w.level < MAX_LEVEL).map(|w| Upgrade::Weapon(w.kind)));
             pool.extend(self.passives.iter().filter(|(k, l)| *l < passive_max(*k)).map(|(k, _)| Upgrade::Passive(*k)));
             if pool.is_empty() {
-                self.player.hp = (self.player.hp + 30.0).min(self.player.max_hp);
+                self.heal(30.0);
                 items.push(ChestItem::Heal);
                 continue;
             }
@@ -1163,6 +1193,89 @@ impl World {
             self.enemies.push[j] += dir.normalize_or_zero() * (320.0 * self.enemies.knock[j]);
         }
         self.events.push(Event::SpecialUsed { pos: p });
+    }
+
+    fn collect_shrine(&mut self) {
+        let Some(s) = self.shrine else { return };
+        let r = PLAYER_RADIUS + 14.0;
+        if (s - self.player.pos).length_sq() > r * r {
+            return;
+        }
+        self.shrine = None;
+        let mut pool = ALL_SHRINE_EVENTS.to_vec();
+        let mut offer = Vec::new();
+        for _ in 0..2 {
+            let i = (self.rng.next_u32() as usize) % pool.len();
+            offer.push(pool.swap_remove(i));
+        }
+        self.shrine_offer = Some(offer);
+    }
+
+    /// Accept shrine choice `i`, or walk away with `None`.
+    pub fn choose_shrine(&mut self, choice: Option<usize>) {
+        let Some(offer) = self.shrine_offer.take() else { return };
+        let Some(&ev) = choice.and_then(|i| offer.get(i)) else { return };
+        let m = &mut self.mods;
+        match ev {
+            ShrineEvent::Fury => {
+                m.damage *= 1.3;
+                m.curse *= 1.25;
+            }
+            ShrineEvent::GlassBlade => {
+                m.damage *= 1.5;
+                self.player.max_hp *= 0.7;
+            }
+            ShrineEvent::Feast => {
+                self.player.hp = self.player.max_hp;
+                match (0..self.passives.len()).min_by_key(|&i| self.passives[i].1) {
+                    Some(i) if self.passives[i].1 > 1 => self.passives[i].1 -= 1,
+                    Some(i) => {
+                        self.passives.remove(i);
+                    }
+                    None => self.player.max_hp -= 10.0,
+                }
+            }
+            ShrineEvent::Fortune => {
+                self.player.max_hp -= 15.0;
+                self.open_chest(1);
+            }
+            ShrineEvent::Patience => {
+                m.enemy_hp *= 1.15;
+                let open: Vec<usize> = (0..self.weapons.len()).filter(|&i| self.weapons[i].level < MAX_LEVEL).collect();
+                if !open.is_empty() {
+                    let i = open[(self.rng.next_u32() as usize) % open.len()];
+                    self.weapons[i].level = (self.weapons[i].level + 2).min(MAX_LEVEL);
+                }
+            }
+            ShrineEvent::Harvest => {
+                m.xp *= 1.4;
+                m.enemy_speed *= 1.1;
+            }
+            ShrineEvent::IronSkin => {
+                m.armor += 3.0;
+                m.move_speed *= 0.85;
+            }
+            ShrineEvent::SecondWind => {
+                self.player.special = 1.0;
+                m.special_rate *= 1.3;
+                self.player.hp = (self.player.hp - 25.0).max(1.0);
+            }
+            ShrineEvent::Tailwind => {
+                m.move_speed *= 1.2;
+                m.magnet *= 0.75;
+            }
+            ShrineEvent::Offering => {
+                m.healing *= 0.5;
+                self.player.level += 3;
+                self.pending_levels += 3;
+                if self.offer.is_none() {
+                    self.make_offer();
+                }
+            }
+        }
+        self.player.max_hp = self.player.max_hp.max(10.0);
+        self.player.hp = self.player.hp.min(self.player.max_hp);
+        self.events.push(Event::ShrineChosen(ev));
     }
 
     fn make_offer(&mut self) {
@@ -1231,10 +1344,10 @@ impl World {
                 }
                 if k == PassiveKind::Vitality {
                     self.player.max_hp += 20.0;
-                    self.player.hp = (self.player.hp + 20.0).min(self.player.max_hp);
+                    self.heal(20.0);
                 }
             }
-            Upgrade::Heal => self.player.hp = (self.player.hp + 30.0).min(self.player.max_hp),
+            Upgrade::Heal => self.heal(30.0),
         }
     }
 
@@ -1295,6 +1408,8 @@ mod tests {
             if w.offer.is_some() {
                 w.choose(0);
             }
+            w.close_chest();
+            w.choose_shrine(None);
             let a = t as f32 * 0.01;
             w.step(Input { move_dir: Vec2::new(a.cos(), a.sin()), ..Default::default() });
         }
@@ -1314,6 +1429,8 @@ mod tests {
             if w.offer.is_some() {
                 w.choose(0);
             }
+            w.close_chest();
+            w.choose_shrine(None);
             let input = w.bot_input();
             w.step(input);
         }
@@ -1331,6 +1448,8 @@ mod tests {
             if w.offer.is_some() {
                 w.choose(0);
             }
+            w.close_chest();
+            w.choose_shrine(None);
             w.step(Input::default());
             if w.state == RunState::Dead {
                 return;
@@ -1530,6 +1649,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn shrine_appears_offers_two_choices_and_applies_blessing_and_price() {
+        let mut w = World::new(WorldConfig::default());
+        w.time = SHRINE_TIMES[0] - 0.01;
+        w.player.iframes = 1e9;
+        w.step(Input::default());
+        let s = w.shrine.expect("shrine should appear at 3:00");
+        w.player.pos = s;
+        w.step(Input::default());
+        let offer = w.shrine_offer.clone().expect("touching the shrine opens the offer");
+        assert_eq!(offer.len(), 2);
+        assert_ne!(offer[0], offer[1]);
+        assert!(w.paused());
+        w.shrine_offer = Some(vec![ShrineEvent::Fury, ShrineEvent::Tailwind]);
+        w.choose_shrine(Some(0));
+        assert!((w.mods.damage - 1.3).abs() < 1e-6 && (w.mods.curse - 1.25).abs() < 1e-6);
+        assert!(!w.paused());
+    }
+
+    #[test]
+    fn walking_away_from_a_shrine_changes_nothing() {
+        let mut w = World::new(WorldConfig::default());
+        w.shrine_offer = Some(vec![ShrineEvent::GlassBlade, ShrineEvent::Offering]);
+        let hp = w.player.max_hp;
+        w.choose_shrine(None);
+        assert!(w.shrine_offer.is_none());
+        assert_eq!(w.player.max_hp, hp);
+        assert_eq!(w.mods.damage, 1.0);
+    }
+
+    #[test]
+    fn every_shrine_event_applies_without_breaking_the_run() {
+        for ev in ALL_SHRINE_EVENTS {
+            let mut w = play(4, 60 * 30);
+            w.shrine_offer = Some(vec![ev]);
+            w.choose_shrine(Some(0));
+            assert!(w.player.hp > 0.0 && w.player.hp <= w.player.max_hp, "{ev:?} broke HP");
+            w.close_chest();
+            while w.offer.is_some() {
+                w.choose(0);
+            }
+            for _ in 0..120 {
+                w.step(Input::default());
+            }
+        }
+    }
+
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -1543,6 +1709,9 @@ mod tests {
                 }
                 if w.chest_result.is_some() {
                     w.close_chest();
+                }
+                if w.shrine_offer.is_some() {
+                    w.choose_shrine(Some(0));
                 }
                 let input = w.bot_input();
                 w.step(input);

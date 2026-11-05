@@ -19,6 +19,7 @@ pub struct Assets {
     pub gem: Texture2D,
     pub chest: Texture2D,
     pub chest_open: Texture2D,
+    pub shrine: Texture2D,
     icons: Vec<(&'static str, Texture2D)>,
 }
 
@@ -38,6 +39,7 @@ impl Assets {
             gem: sprites::texture(include_str!("../../../art/src/gem.px")),
             chest: sprites::texture(include_str!("../../../art/src/chest.px")),
             chest_open: sprites::texture(include_str!("../../../art/src/chest_open.px")),
+            shrine: sprites::texture(include_str!("../../../art/src/shrine.px")),
             icons: vec![
             ("abundance", sprites::texture(include_str!("../../../art/src/icons/abundance.px"))),
             ("crescent", sprites::texture(include_str!("../../../art/src/icons/crescent.px"))),
@@ -205,6 +207,11 @@ impl Fx {
                     self.say("You're not in my ledger. Let's fix that.");
                 }
                 Event::BossTelegraph => self.shake = self.shake.max(0.08),
+                Event::ShrineAppeared => {
+                    self.announce("A ROADSIDE SHRINE APPEARS".into());
+                    self.say("A shrine. Everything has a price.");
+                }
+                Event::ShrineChosen(ev) => self.say(&format!("{}. Noted.", ev.name())),
                 Event::Bolt { from, to } => self.bolts.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
                 Event::Slash { pos, dir, radius, full } => self.slashes.push((vec2(pos.x, pos.y), vec2(dir.x, dir.y), radius, full, 0.0)),
                 Event::Impact { pos, radius } => {
@@ -335,6 +342,12 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
             tint,
             DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() },
         );
+    }
+    if let Some(s) = world.shrine {
+        let pulse = 0.5 + 0.5 * (time * 3.0).sin() as f32;
+        draw_rectangle(s.x - 5.0, s.y - 120.0, 10.0, 120.0, Color::new(1.0, 0.9, 0.6, 0.10 + 0.06 * pulse));
+        draw_circle(s.x, s.y, 22.0 + 3.0 * pulse, Color::new(1.0, 0.85, 0.5, 0.16 + 0.08 * pulse));
+        draw_texture_ex(&a.shrine, (s.x - 16.0).round(), (s.y - 30.0).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(32.0, 36.0)), ..Default::default() });
     }
     for (c, tier) in &world.chests {
         let bob = ((time * 3.0).sin() * 1.5) as f32;
@@ -495,6 +508,22 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
         let txt = format!("{:.0}", n.amount);
         draw_text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, 18.0, Color::new(0.0, 0.0, 0.0, alpha));
         draw_text(&txt, s.x - 5.0, s.y, 18.0, Color::new(1.0, 1.0, 1.0, alpha));
+    }
+    if let Some(s) = world.shrine {
+        let sp = cam.world_to_screen(vec2(s.x, s.y));
+        let (w, h) = (screen_width(), screen_height());
+        // Only when the shrine sprite is fully out of view (it extends ~60px above its anchor).
+        if sp.x < -30.0 || sp.y < -10.0 || sp.x > w + 30.0 || sp.y > h + 70.0 {
+            let c = vec2(w / 2.0, h / 2.0);
+            let d = (sp - c).normalize_or_zero();
+            // Push the arrow to the screen edge along the direction to the shrine.
+            let t = ((w / 2.0 - 40.0) / d.x.abs().max(1e-3)).min((h / 2.0 - 40.0) / d.y.abs().max(1e-3));
+            let tip = c + d * t;
+            let side = vec2(-d.y, d.x);
+            let pulse = 0.7 + 0.3 * (time * 5.0).sin() as f32;
+            draw_triangle(tip + d * 14.0, tip - d * 8.0 + side * 10.0, tip - d * 8.0 - side * 10.0, Color::new(1.0, 0.85, 0.4, pulse));
+            draw_texture_ex(&a.shrine, tip.x - d.x * 34.0 - 12.0, tip.y - d.y * 34.0 - 14.0, Color::new(1.0, 1.0, 1.0, 0.85), DrawTextureParams { dest_size: Some(vec2(24.0, 27.0)), ..Default::default() });
+        }
     }
     if let Some((line, left)) = &fx.bark {
         let s = cam.world_to_screen(vec2(p.x, p.y - 34.0));

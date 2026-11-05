@@ -470,6 +470,105 @@ pub fn chest_rarity(count: usize) -> &'static str {
     }
 }
 
+// ───────────────────────── Shrine Events ─────────────────────────
+
+/// Times (seconds) a roadside shrine appears.
+pub const SHRINE_TIMES: [f32; 4] = [180.0, 360.0, 540.0, 720.0];
+
+/// A shrine offers a blessing that always comes with a price.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShrineEvent {
+    Fury,
+    GlassBlade,
+    Feast,
+    Fortune,
+    Patience,
+    Harvest,
+    IronSkin,
+    SecondWind,
+    Tailwind,
+    Offering,
+}
+
+pub const ALL_SHRINE_EVENTS: [ShrineEvent; 10] = [
+    ShrineEvent::Fury,
+    ShrineEvent::GlassBlade,
+    ShrineEvent::Feast,
+    ShrineEvent::Fortune,
+    ShrineEvent::Patience,
+    ShrineEvent::Harvest,
+    ShrineEvent::IronSkin,
+    ShrineEvent::SecondWind,
+    ShrineEvent::Tailwind,
+    ShrineEvent::Offering,
+];
+
+impl ShrineEvent {
+    pub fn name(self) -> &'static str {
+        match self {
+            ShrineEvent::Fury => "Fury",
+            ShrineEvent::GlassBlade => "Glass Blade",
+            ShrineEvent::Feast => "Feast",
+            ShrineEvent::Fortune => "Fortune",
+            ShrineEvent::Patience => "Patience",
+            ShrineEvent::Harvest => "Harvest",
+            ShrineEvent::IronSkin => "Iron Skin",
+            ShrineEvent::SecondWind => "Second Wind",
+            ShrineEvent::Tailwind => "Tailwind",
+            ShrineEvent::Offering => "Offering",
+        }
+    }
+
+    /// (blessing, price)
+    pub fn text(self) -> (&'static str, &'static str) {
+        match self {
+            ShrineEvent::Fury => ("+30% damage", "25% more enemies"),
+            ShrineEvent::GlassBlade => ("+50% damage", "-30% max HP"),
+            ShrineEvent::Feast => ("Fully heal", "Lose a level from your lowest passive"),
+            ShrineEvent::Fortune => ("Open a treasure chest now", "-15 max HP"),
+            ShrineEvent::Patience => ("+2 levels to a random weapon", "Enemies have +15% HP"),
+            ShrineEvent::Harvest => ("+40% XP gained", "Enemies move 10% faster"),
+            ShrineEvent::IronSkin => ("Take 3 less damage per hit", "-15% move speed"),
+            ShrineEvent::SecondWind => ("Special full now, charges 30% faster", "Lose 25 HP"),
+            ShrineEvent::Tailwind => ("+20% move speed", "-25% pickup radius"),
+            ShrineEvent::Offering => ("Gain 3 levels", "Healing halved"),
+        }
+    }
+}
+
+/// Run-wide multipliers and bonuses from Shrine Events. Neutral by default.
+#[derive(Clone, Copy, Debug)]
+pub struct Modifiers {
+    pub damage: f32,
+    /// Multiplies how many enemies the director keeps alive.
+    pub curse: f32,
+    pub enemy_hp: f32,
+    pub enemy_speed: f32,
+    pub xp: f32,
+    pub move_speed: f32,
+    pub magnet: f32,
+    pub armor: f32,
+    pub special_rate: f32,
+    pub healing: f32,
+}
+
+impl Default for Modifiers {
+    fn default() -> Self {
+        Modifiers {
+            damage: 1.0,
+            curse: 1.0,
+            enemy_hp: 1.0,
+            enemy_speed: 1.0,
+            xp: 1.0,
+            move_speed: 1.0,
+            magnet: 1.0,
+            armor: 0.0,
+            special_rate: 1.0,
+            healing: 1.0,
+        }
+    }
+}
+
 // ───────────────────────── Progression & pacing ─────────────────────────
 
 pub fn xp_needed(level: u32) -> u32 {
