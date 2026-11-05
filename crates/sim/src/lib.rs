@@ -4,6 +4,7 @@ pub mod bot;
 pub mod content;
 pub mod grid;
 pub mod math;
+pub mod meta;
 pub mod rng;
 pub mod stage;
 pub mod world;

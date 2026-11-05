@@ -2,6 +2,7 @@
 
 use crate::content::*;
 use crate::grid::Grid;
+use crate::meta::Bonus;
 use crate::stage;
 use crate::rng::Rng;
 use crate::Vec2;
@@ -35,11 +36,13 @@ pub struct WorldConfig {
     pub stress: Option<Stress>,
     pub spawn_radius: f32,
     pub recycle_radius: f32,
+    /// Permanent bonuses from the Shrine Shop.
+    pub meta: Bonus,
 }
 
 impl Default for WorldConfig {
     fn default() -> Self {
-        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0 }
+        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default() }
     }
 }
 
@@ -79,6 +82,9 @@ pub enum Event {
     ShrineAppeared,
     ShrineChosen(ShrineEvent),
     NightLordSpawned,
+    /// The player went down but a Revival brought them back.
+    Revived,
+    SenPicked { amount: u32 },
     /// A Nopperabo reappeared beside the player.
     Blink { pos: Vec2 },
 }
@@ -308,6 +314,14 @@ pub struct World {
     pub mods: Modifiers,
     /// Enemy fireballs in flight.
     pub shots: Vec<Shot>,
+    /// Hero innate + Shrine Shop bonuses.
+    pub bonus: Bonus,
+    revivals_left: u8,
+    /// Sen collected this run.
+    pub sen: u32,
+    /// Sen coins on the ground: (position, value).
+    pub coins: Vec<(Vec2, u32)>,
+    pub great_oni_defeated: bool,
     /// True if the run ended because dawn arrived with the Night Lord alive.
     pub dawn_out: bool,
     night_lord_spawned: bool,
@@ -333,7 +347,10 @@ pub struct World {
 impl World {
     pub fn new(cfg: WorldConfig) -> Self {
         let rng = Rng::new(cfg.seed);
-        let signature = hero_def(cfg.hero).signature;
+        let hero = hero_def(cfg.hero);
+        let signature = hero.signature;
+        let bonus = hero.innate.plus(cfg.meta);
+        let max_hp = 100.0 * (1.0 + bonus.max_hp);
         let cell = 28.0;
         let dim = ((cfg.recycle_radius * 2.2) / cell).ceil() as usize;
         World {
@@ -342,8 +359,8 @@ impl World {
                 pos: Vec2::ZERO,
                 facing: Vec2::new(1.0, 0.0),
                 moving: false,
-                hp: 100.0,
-                max_hp: 100.0,
+                hp: max_hp,
+                max_hp,
                 iframes: 0.0,
                 xp: 0,
                 level: 1,
@@ -366,6 +383,11 @@ impl World {
             pools: Vec::new(),
             mods: Modifiers::default(),
             shots: Vec::new(),
+            bonus,
+            revivals_left: bonus.revivals,
+            sen: 0,
+            coins: Vec::new(),
+            great_oni_defeated: false,
             dawn_out: false,
             night_lord_spawned: false,
             pending_spawns: Vec::new(),
@@ -433,20 +455,19 @@ impl World {
         self.weapons.iter().find(|w| w.kind == kind).map_or(0, |w| w.level)
     }
     fn might(&self) -> f32 {
-        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32) * self.mods.damage
+        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage
     }
     fn haste(&self) -> f32 {
-        1.0 - 0.08 * self.passive_level(PassiveKind::Haste) as f32
+        1.0 - 0.08 * self.passive_level(PassiveKind::Haste) as f32 - self.bonus.cooldown
     }
     pub fn area_mult(&self) -> f32 {
-        1.0 + 0.10 * self.passive_level(PassiveKind::Expanse) as f32
+        1.0 + 0.10 * self.passive_level(PassiveKind::Expanse) as f32 + self.bonus.area
     }
     fn move_speed(&self) -> f32 {
-        110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32) * self.mods.move_speed
+        110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32 + self.bonus.move_speed) * self.mods.move_speed
     }
     pub fn magnet(&self) -> f32 {
-        // Ren's innate "Shrine Keeper's Eye": +10% pickup radius.
-        55.0 * 1.10 * (1.0 + 0.30 * self.passive_level(PassiveKind::Magnet) as f32) * self.mods.magnet
+        55.0 * (1.0 + self.bonus.magnet) * (1.0 + 0.30 * self.passive_level(PassiveKind::Magnet) as f32) * self.mods.magnet
     }
     pub fn xp_to_next(&self) -> u32 {
         xp_needed(self.player.level)
@@ -507,12 +528,35 @@ impl World {
 
     // ───────────── Player ─────────────
 
+    fn armor(&self) -> f32 {
+        self.passive_level(PassiveKind::Guard) as f32 + self.mods.armor + self.bonus.armor
+    }
+
+    /// Applies a hit to the player (after armor) and handles death / Revival.
+    fn hurt_player(&mut self, raw: f32) {
+        let dmg = (raw - self.armor()).max(1.0);
+        self.player.hp = (self.player.hp - dmg).max(0.0);
+        self.player.iframes = IFRAMES;
+        self.events.push(Event::PlayerHurt);
+        if self.player.hp <= 0.0 {
+            if self.revivals_left > 0 {
+                self.revivals_left -= 1;
+                self.player.hp = self.player.max_hp * 0.5;
+                self.player.iframes = BARRIER_IFRAMES;
+                self.player.special = 1.0;
+                self.events.push(Event::Revived);
+            } else {
+                self.state = RunState::Dead;
+            }
+        }
+    }
+
     fn persistence(&self) -> f32 {
         1.0 + 0.12 * self.passive_level(PassiveKind::Persistence) as f32
     }
 
     fn move_player(&mut self, input: Input) {
-        let regen = 0.25 * self.passive_level(PassiveKind::Recovery) as f32;
+        let regen = 0.25 * self.passive_level(PassiveKind::Recovery) as f32 + self.bonus.recovery;
         self.heal(regen * DT);
         let d = input.move_dir.normalize_or_zero();
         self.player.moving = d != Vec2::ZERO;
@@ -543,14 +587,7 @@ impl World {
             }
         });
         if worst > 0.0 {
-            let armor = self.passive_level(PassiveKind::Guard) as f32 + self.mods.armor;
-            let worst = (worst - armor).max(1.0);
-            self.player.hp = (self.player.hp - worst).max(0.0);
-            self.player.iframes = IFRAMES;
-            self.events.push(Event::PlayerHurt);
-            if self.player.hp <= 0.0 {
-                self.state = RunState::Dead;
-            }
+            self.hurt_player(worst);
         }
     }
 
@@ -898,6 +935,21 @@ impl World {
             }
             self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
             self.events.push(Event::Kill { pos, kind });
+            if self.cfg.stress.is_none() {
+                let coin = match kind {
+                    EnemyKind::NightLord => 150,
+                    EnemyKind::GreatOni => 50,
+                    EnemyKind::Oni => 5,
+                    _ if self.rng.f32() < 0.004 => 1,
+                    _ => 0,
+                };
+                if coin > 0 {
+                    self.coins.push((pos, coin));
+                }
+            }
+            if kind == EnemyKind::GreatOni {
+                self.great_oni_defeated = true;
+            }
             if kind == EnemyKind::NightLord && self.state == RunState::Playing {
                 self.state = RunState::Won;
             }
@@ -1247,7 +1299,7 @@ impl World {
     }
 
     fn gain_xp(&mut self, amount: u32) {
-        self.xp_carry += amount as f32 * self.mods.xp;
+        self.xp_carry += amount as f32 * self.mods.xp * (1.0 + self.bonus.growth);
         let whole = self.xp_carry.floor();
         self.xp_carry -= whole;
         self.player.xp += whole as u32;
@@ -1282,6 +1334,28 @@ impl World {
         if gained > 0 {
             self.gain_xp(gained);
         }
+        let mut sen = 0;
+        self.coins.retain_mut(|(c, v)| {
+            let d = p - *c;
+            let d2 = d.length_sq();
+            if d2 < grab2 {
+                sen += *v;
+                return false;
+            }
+            if d2 < magnet * magnet {
+                *c += d.normalize_or_zero() * (280.0 * DT);
+            }
+            true
+        });
+        if sen > 0 {
+            self.gain_sen(sen);
+        }
+    }
+
+    fn gain_sen(&mut self, amount: u32) {
+        let amount = (amount as f32 * (1.0 + self.bonus.greed)).round() as u32;
+        self.sen += amount;
+        self.events.push(Event::SenPicked { amount });
     }
 
     fn update_shots(&mut self) {
@@ -1298,14 +1372,7 @@ impl World {
             s.life > 0.0
         });
         if hit && self.cfg.stress.is_none() && self.player.iframes <= 0.0 {
-            let armor = self.passive_level(PassiveKind::Guard) as f32 + self.mods.armor;
-            let dmg = (SHOT_DAMAGE * damage_scale(self.time) - armor).max(1.0);
-            self.player.hp = (self.player.hp - dmg).max(0.0);
-            self.player.iframes = IFRAMES;
-            self.events.push(Event::PlayerHurt);
-            if self.player.hp <= 0.0 {
-                self.state = RunState::Dead;
-            }
+            self.hurt_player(SHOT_DAMAGE * damage_scale(self.time));
         }
     }
 
@@ -1337,6 +1404,8 @@ impl World {
     /// an Awakening first if one is eligible, then levels for owned items.
     pub fn open_chest(&mut self, min_rewards: u8) {
         let tier = chest_roll(self.rng.f32()).max(min_rewards);
+        let sen = 10 * tier as u32 + self.rng.range(0.0, 10.0) as u32;
+        self.gain_sen(sen);
         let mut items = Vec::new();
         if let Some(&k) = self.awakenable().first() {
             if let Some(w) = self.weapons.iter_mut().find(|w| w.kind == k) {
@@ -1971,6 +2040,38 @@ mod tests {
             w.step(Input { move_dir: Vec2::new(1.0, 0.0), ..Default::default() });
         }
         assert!(w.player.pos.x <= min.x - PLAYER_RADIUS + 0.5, "walked into the stall: {:?}", w.player.pos);
+    }
+
+    #[test]
+    fn revival_saves_one_death() {
+        let mut w = World::new(WorldConfig { meta: Bonus { revivals: 1, ..Default::default() }, ..Default::default() });
+        w.hurt_player(1e6);
+        assert_eq!(w.state, RunState::Playing);
+        assert!(w.player.hp > 0.0);
+        w.player.iframes = 0.0;
+        w.hurt_player(1e6);
+        assert_eq!(w.state, RunState::Dead);
+    }
+
+    #[test]
+    fn coins_are_collected_with_greed() {
+        let mut w = World::new(WorldConfig { meta: Bonus { greed: 0.5, ..Default::default() }, ..Default::default() });
+        w.coins.push((w.player.pos, 10));
+        w.collect_gems();
+        assert_eq!(w.sen, 15);
+        assert!(w.coins.is_empty());
+    }
+
+    #[test]
+    fn heroes_start_with_their_signature_and_innate() {
+        for h in ALL_HEROES {
+            let d = hero_def(h);
+            let w = World::new(WorldConfig { hero: h, ..Default::default() });
+            assert_eq!(w.weapons[0].kind, d.signature);
+            assert!(d.weapon_pool().len() >= 4, "{:?} pool too small", h);
+        }
+        let w = World::new(WorldConfig { hero: HeroId::Kaede, ..Default::default() });
+        assert!(w.move_speed() > World::new(WorldConfig::default()).move_speed());
     }
 
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`

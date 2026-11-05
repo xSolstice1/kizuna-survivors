@@ -1,5 +1,7 @@
 //! Game content as plain data. Will move to RON files once the shapes settle.
 
+use crate::meta::Bonus;
+
 pub const MAX_LEVEL: u8 = 8;
 pub const RUN_SECONDS: f32 = 15.0 * 60.0;
 
@@ -251,30 +253,62 @@ pub fn complement(kind: WeaponKind) -> (PassiveKind, u8) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeroId {
     Ren,
+    Kaede,
+    Mika,
+    Haru,
+    Nanami,
+    Yuzu,
+}
+
+pub const ALL_HEROES: [HeroId; 6] = [HeroId::Ren, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
+
+impl HeroId {
+    /// Save-file key (stable; never rename).
+    pub fn key(self) -> &'static str {
+        match self {
+            HeroId::Ren => "ren",
+            HeroId::Kaede => "kaede",
+            HeroId::Mika => "mika",
+            HeroId::Haru => "haru",
+            HeroId::Nanami => "nanami",
+            HeroId::Yuzu => "yuzu",
+        }
+    }
+    pub fn from_key(k: &str) -> Option<HeroId> {
+        ALL_HEROES.iter().copied().find(|h| h.key() == k)
+    }
 }
 
 pub struct HeroDef {
     pub id: HeroId,
     pub name: &'static str,
+    /// Story-world archetype, shown on character select.
+    pub archetype: &'static str,
+    /// Innate passive, as shown to the player.
+    pub innate_text: &'static str,
+    pub innate: Bonus,
     /// Starting weapon; always available to this hero.
     pub signature: WeaponKind,
     /// Weapons with any of these tags (plus `Shared`) can be offered.
     pub pool_tags: &'static [Tag],
     pub weapon_slots: usize,
     pub passive_slots: usize,
+    /// False while the hero's own sprite and special move are still placeholders.
+    pub finished: bool,
 }
 
 pub fn hero_def(id: HeroId) -> HeroDef {
-    match id {
-        HeroId::Ren => HeroDef {
-            id,
-            name: "Ren Amane",
-            signature: WeaponKind::Ofuda,
-            pool_tags: &[Tag::Talisman, Tag::Celestial, Tag::Nature, Tag::Festival],
-            weapon_slots: 4,
-            passive_slots: 6,
-        },
-    }
+    use Tag::*;
+    let b = Bonus::default();
+    let (name, archetype, innate_text, innate, signature, pool_tags, finished): (_, _, _, _, _, &'static [Tag], _) = match id {
+        HeroId::Ren => ("Ren Amane", "Shrine maiden", "+10% pickup radius", Bonus { magnet: 0.10, ..b }, WeaponKind::Ofuda, &[Talisman, Celestial, Nature, Festival], true),
+        HeroId::Kaede => ("Kaede Kurogane", "Ninja", "+10% move speed", Bonus { move_speed: 0.10, ..b }, WeaponKind::ThunderChain, &[Thunder, Blade, Talisman, Fire], false),
+        HeroId::Mika => ("Mika Hoshizora", "Magical girl", "+8% damage", Bonus { might: 0.08, ..b }, WeaponKind::StarFall, &[Celestial, Nature, Festival, Thunder], false),
+        HeroId::Haru => ("Haru Tachibana", "Swordsman", "+1 armor", Bonus { armor: 1.0, ..b }, WeaponKind::Crescent, &[Blade, Nature, Festival, Thunder], false),
+        HeroId::Nanami => ("Nanami Kiri", "Alchemist", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::FlamePool, &[Fire, Festival, Nature, Celestial], false),
+        HeroId::Yuzu => ("Yuzu Momose", "Idol", "+10% experience", Bonus { growth: 0.10, ..b }, WeaponKind::Taiko, &[Festival, Celestial, Nature, Talisman], false),
+    };
+    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished }
 }
 
 impl HeroDef {
