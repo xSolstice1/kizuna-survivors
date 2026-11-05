@@ -270,23 +270,9 @@ pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
     Camera2D { target: vec2(p.x.round(), p.y.round()) + jitter, zoom: vec2(2.0 / sw, 2.0 / sh), ..Default::default() }
 }
 
-fn draw_ground(cam: &Camera2D) {
-    let (sw, sh) = (screen_width() / SCALE, screen_height() / SCALE);
-    let tile = 64.0;
-    let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
-    let (tx0, ty0) = ((x0 / tile).floor() as i32, (y0 / tile).floor() as i32);
-    for ty in ty0..ty0 + (sh / tile) as i32 + 2 {
-        for tx in tx0..tx0 + (sw / tile) as i32 + 2 {
-            if (tx + ty).rem_euclid(2) == 0 {
-                draw_rectangle(tx as f32 * tile, ty as f32 * tile, tile, tile, Color::from_rgba(34, 30, 50, 255));
-            }
-        }
-    }
-}
-
-pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64) {
+pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx: &Fx, cam: &Camera2D, time: f64) {
     set_camera(cam);
-    draw_ground(cam);
+    stage.draw_ground(cam, time);
     let p = world.player.pos;
 
     // Sakura Field sits on the ground under everything.

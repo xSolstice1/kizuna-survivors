@@ -5,6 +5,7 @@ use sim::{Input, RunState, Stress, World, WorldConfig};
 mod chest_ui;
 mod render;
 mod sprites;
+mod stage;
 mod ui;
 
 use render::{Assets, Fx};
@@ -45,6 +46,7 @@ fn new_world(stress: Option<Stress>) -> World {
 #[macroquad::main(window_conf)]
 async fn main() {
     let assets = Assets::load();
+    let stage_art = stage::StageArt::load();
     let mut fx = Fx::new();
     let mut screen = Screen::Title;
     let mut stress: Option<Stress> = None;
@@ -169,8 +171,9 @@ async fn main() {
         // --- Render ---
         clear_background(Color::from_rgba(28, 24, 40, 255));
         let cam = render::camera_for(&world, &fx);
-        render::draw_world(&world, &assets, &fx, &cam, now);
+        render::draw_world(&world, &assets, &stage_art, &fx, &cam, now);
         set_default_camera();
+        stage_art.draw_vignette();
         ui::hud(&world, &assets);
         ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
 
