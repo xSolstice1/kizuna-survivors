@@ -27,6 +27,7 @@ pub struct Stress {
 #[derive(Clone, Debug)]
 pub struct WorldConfig {
     pub seed: u64,
+    pub hero: HeroId,
     pub stress: Option<Stress>,
     pub spawn_radius: f32,
     pub recycle_radius: f32,
@@ -34,7 +35,7 @@ pub struct WorldConfig {
 
 impl Default for WorldConfig {
     fn default() -> Self {
-        WorldConfig { seed: 1, stress: None, spawn_radius: 420.0, recycle_radius: 900.0 }
+        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0 }
     }
 }
 
@@ -65,6 +66,42 @@ pub enum Event {
     /// The Great Oni is winding up a charge in `dir`.
     BossTelegraph,
     Awakened(WeaponKind),
+    /// One segment of a Thunder Chain bolt.
+    Bolt { from: Vec2, to: Vec2 },
+    /// A Crescent Slash arc (`full` = Awakened full circle).
+    Slash { pos: Vec2, dir: Vec2, radius: f32, full: bool },
+    /// A Star Fall strike landing.
+    Impact { pos: Vec2, radius: f32 },
+}
+
+/// Expanding Taiko shockwave ring.
+#[derive(Clone, Copy, Debug)]
+pub struct Wave {
+    pub center: Vec2,
+    pub radius: f32,
+    pub max_radius: f32,
+    pub speed: f32,
+    pub damage: f32,
+}
+
+/// Star Fall strike waiting to land.
+#[derive(Clone, Copy, Debug)]
+pub struct Strike {
+    pub pos: Vec2,
+    pub delay: f32,
+    pub radius: f32,
+    pub damage: f32,
+}
+
+/// Burning ground from Flame Pool.
+#[derive(Clone, Copy, Debug)]
+pub struct Pool {
+    pub pos: Vec2,
+    pub radius: f32,
+    pub life: f32,
+    pub max_life: f32,
+    tick: f32,
+    pub damage: f32,
 }
 
 /// One reward from an opened chest.
@@ -97,6 +134,8 @@ pub struct Enemies {
     pub ai_state: Vec<u8>,
     pub ai_timer: Vec<f32>,
     pub ai_dir: Vec<Vec2>,
+    /// Ticks until a Taiko wave may hit this enemy again.
+    pub wave_cd: Vec<u8>,
 }
 
 impl Enemies {
@@ -123,6 +162,7 @@ impl Enemies {
         self.ai_state.swap_remove(i);
         self.ai_timer.swap_remove(i);
         self.ai_dir.swap_remove(i);
+        self.wave_cd.swap_remove(i);
     }
 }
 
@@ -215,6 +255,9 @@ pub struct World {
     pub chests: Vec<(Vec2, u8)>,
     /// Rewards from the chest just opened. The sim pauses until `close_chest`.
     pub chest_result: Option<Vec<ChestItem>>,
+    pub waves: Vec<Wave>,
+    pub strikes: Vec<Strike>,
+    pub pools: Vec<Pool>,
     boss_spawned: bool,
     pub events: Vec<Event>,
     pending_levels: u32,
@@ -230,6 +273,7 @@ pub struct World {
 impl World {
     pub fn new(cfg: WorldConfig) -> Self {
         let rng = Rng::new(cfg.seed);
+        let signature = hero_def(cfg.hero).signature;
         let cell = 28.0;
         let dim = ((cfg.recycle_radius * 2.2) / cell).ceil() as usize;
         World {
@@ -245,7 +289,7 @@ impl World {
                 level: 1,
                 special: 0.0,
             },
-            weapons: vec![OwnedWeapon { kind: WeaponKind::Ofuda, level: 1, awakened: false, timer: 0.0, phase: 0.0 }],
+            weapons: vec![OwnedWeapon { kind: signature, level: 1, awakened: false, timer: 0.0, phase: 0.0 }],
             passives: Vec::new(),
             enemies: Enemies::default(),
             projectiles: Projectiles::default(),
@@ -257,6 +301,9 @@ impl World {
             offer: None,
             chests: Vec::new(),
             chest_result: None,
+            waves: Vec::new(),
+            strikes: Vec::new(),
+            pools: Vec::new(),
             boss_spawned: false,
             events: Vec::new(),
             pending_levels: 0,
@@ -286,6 +333,7 @@ impl World {
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
         self.move_enemies();
         self.update_weapons();
+        self.update_effects();
         self.move_projectiles_and_hit();
         if input.special {
             self.use_special();
@@ -345,11 +393,12 @@ impl World {
 
     /// Stats for an owned weapon, Awakened form included (before passives).
     pub fn stats_of(&self, w: &OwnedWeapon) -> WeaponStats {
-        if w.awakened {
-            awakened_stats(w.kind)
-        } else {
-            weapon_stats(w.kind, w.level)
+        let mut s = if w.awakened { awakened_stats(w.kind) } else { weapon_stats(w.kind, w.level) };
+        if w.kind != WeaponKind::SakuraField {
+            s.amount += self.passive_level(PassiveKind::Abundance) as u32;
         }
+        s.duration *= self.persistence();
+        s
     }
 
     pub fn field_radius_of(&self, w: &OwnedWeapon) -> f32 {
@@ -382,7 +431,13 @@ impl World {
 
     // ───────────── Player ─────────────
 
+    fn persistence(&self) -> f32 {
+        1.0 + 0.12 * self.passive_level(PassiveKind::Persistence) as f32
+    }
+
     fn move_player(&mut self, input: Input) {
+        let regen = 0.25 * self.passive_level(PassiveKind::Recovery) as f32;
+        self.player.hp = (self.player.hp + regen * DT).min(self.player.max_hp);
         let d = input.move_dir.normalize_or_zero();
         self.player.moving = d != Vec2::ZERO;
         if self.player.moving {
@@ -410,6 +465,7 @@ impl World {
             }
         });
         if worst > 0.0 {
+            let worst = (worst - self.passive_level(PassiveKind::Guard) as f32).max(1.0);
             self.player.hp = (self.player.hp - worst).max(0.0);
             self.player.iframes = IFRAMES;
             self.events.push(Event::PlayerHurt);
@@ -449,6 +505,7 @@ impl World {
         e.ai_state.push(0);
         e.ai_timer.push(3.0);
         e.ai_dir.push(Vec2::ZERO);
+        e.wave_cd.push(0);
     }
 
     fn director(&mut self) {
@@ -456,8 +513,10 @@ impl World {
             Some(s) => s.enemies,
             None => min_alive(self.time),
         };
-        // Cap per tick so a big deficit fills over a few frames instead of one spike.
-        let deficit = target.saturating_sub(self.enemies.len()).min(30);
+        // Refill is rate-limited (ramping over the run) so strong area weapons can't turn
+        // the director into an endless XP fountain. Stress mode fills fast.
+        let per_tick = if self.cfg.stress.is_some() { 30 } else { refill_per_tick(self.time) };
+        let deficit = target.saturating_sub(self.enemies.len()).min(per_tick);
         for _ in 0..deficit {
             let kind = if self.rng.f32() < kasa_share(self.time) { EnemyKind::Kasa } else { EnemyKind::Wisp };
             let r = self.cfg.spawn_radius + self.rng.range(0.0, 80.0);
@@ -572,6 +631,7 @@ impl World {
             e.push[i] = e.push[i] * 0.86;
             e.flash[i] = e.flash[i].saturating_sub(1);
             e.orb_cd[i] = e.orb_cd[i].saturating_sub(1);
+            e.wave_cd[i] = e.wave_cd[i].saturating_sub(1);
         }
     }
 
@@ -650,7 +710,8 @@ impl World {
                         let spread = if w.awakened { 0.22 } else { 0.13 };
                         for k in 0..s.amount {
                             let a = base + (k as f32 - (n - 1.0) / 2.0) * spread;
-                            self.projectiles.push(self.player.pos, Vec2::from_angle(a) * s.speed, 1.4, s.damage * might, s.pierce, homing);
+                            let life = 1.4 * self.persistence();
+                            self.projectiles.push(self.player.pos, Vec2::from_angle(a) * s.speed, life, s.damage * might, s.pierce, homing);
                         }
                     }
                     self.weapons[wi].timer = timer;
@@ -692,6 +753,19 @@ impl World {
                     }
                     self.weapons[wi].timer = timer;
                 }
+                WeaponKind::ThunderChain
+                | WeaponKind::Taiko
+                | WeaponKind::StarFall
+                | WeaponKind::Crescent
+                | WeaponKind::FlamePool => {
+                    let timer = w.timer - DT;
+                    if timer <= 0.0 {
+                        self.weapons[wi].timer = s.cooldown * haste;
+                        self.fire_new_weapon(&w, &s, might);
+                    } else {
+                        self.weapons[wi].timer = timer;
+                    }
+                }
             }
         }
 
@@ -705,6 +779,178 @@ impl World {
                     self.projectiles.push(self.player.pos, Vec2::from_angle(a) * speed, 2.0, 3.0, 2, 0.0);
                 }
             }
+        }
+    }
+
+    /// Nearest living enemy to `from` within `radius`, skipping ids in `exclude`.
+    fn nearest_index(&self, from: Vec2, radius: f32, exclude: &[u32]) -> Option<usize> {
+        let mut best: Option<(f32, usize)> = None;
+        let e = &self.enemies;
+        self.grid.for_each_near(from, radius, |j| {
+            let j = j as usize;
+            if e.hp[j] <= 0.0 || exclude.contains(&e.id[j]) {
+                return;
+            }
+            let d2 = (e.pos[j] - from).length_sq();
+            if d2 <= radius * radius && best.is_none_or(|(b, _)| d2 < b) {
+                best = Some((d2, j));
+            }
+        });
+        best.map(|(_, j)| j)
+    }
+
+    fn aim_dir(&self) -> Vec2 {
+        match self.nearest_index(self.player.pos, 320.0, &[]) {
+            Some(j) => (self.enemies.pos[j] - self.player.pos).normalize_or_zero(),
+            None => self.player.facing,
+        }
+    }
+
+    /// Up to `n` random living enemy positions within `radius` of the player.
+    fn random_targets(&mut self, radius: f32, n: u32) -> Vec<Vec2> {
+        self.query_circle(self.player.pos, radius);
+        let mut out = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            if self.scratch.is_empty() {
+                let a = self.rng.range(0.0, std::f32::consts::TAU);
+                let r = self.rng.range(40.0, radius * 0.7);
+                out.push(self.player.pos + Vec2::from_angle(a) * r);
+            } else {
+                let k = (self.rng.next_u32() as usize) % self.scratch.len();
+                out.push(self.enemies.pos[self.scratch.swap_remove(k) as usize]);
+            }
+        }
+        out
+    }
+
+    fn fire_new_weapon(&mut self, w: &OwnedWeapon, s: &WeaponStats, might: f32) {
+        let area = s.area * self.area_mult();
+        let dmg = s.damage * might;
+        let p = self.player.pos;
+        match w.kind {
+            WeaponKind::ThunderChain => {
+                let range = 110.0 * area;
+                let mut hit: Vec<u32> = Vec::with_capacity(s.amount as usize);
+                let mut from = p;
+                let mut target = self.nearest_index(p, 300.0, &[]);
+                for _ in 0..s.amount {
+                    let Some(j) = target else { break };
+                    let to = self.enemies.pos[j];
+                    self.events.push(Event::Bolt { from, to });
+                    hit.push(self.enemies.id[j]);
+                    self.hurt_enemy(j, dmg, to - from);
+                    from = to;
+                    target = self.nearest_index(from, range, &hit);
+                }
+            }
+            WeaponKind::Taiko => {
+                for n in 0..s.amount {
+                    // Later waves start "behind" the first so they arrive as separate beats.
+                    let start = -40.0 * n as f32;
+                    self.waves.push(Wave { center: p, radius: start, max_radius: 135.0 * area, speed: s.speed, damage: dmg });
+                }
+            }
+            WeaponKind::StarFall => {
+                let r = 24.0 * area;
+                for pos in self.random_targets(260.0, s.amount) {
+                    let delay = 0.45 + self.rng.range(0.0, 0.15);
+                    self.strikes.push(Strike { pos, delay, radius: r, damage: dmg });
+                }
+            }
+            WeaponKind::Crescent => {
+                let radius = 58.0 * area;
+                let dir = self.aim_dir();
+                let cone = 60f32.to_radians().cos();
+                for n in 0..s.amount {
+                    // 1st forward, 2nd behind, 3rd+ to the sides.
+                    let turn = [0.0, std::f32::consts::PI, std::f32::consts::FRAC_PI_2, -std::f32::consts::FRAC_PI_2][n.min(3) as usize];
+                    let d = Vec2::from_angle(dir.y.atan2(dir.x) + turn);
+                    self.query_circle(p, radius);
+                    for idx in 0..self.scratch.len() {
+                        let j = self.scratch[idx] as usize;
+                        let to = (self.enemies.pos[j] - p).normalize_or_zero();
+                        if w.awakened || to.x * d.x + to.y * d.y >= cone {
+                            self.hurt_enemy(j, dmg, to);
+                        }
+                    }
+                    self.events.push(Event::Slash { pos: p, dir: d, radius, full: w.awakened });
+                    if w.awakened {
+                        break; // the full circle already covers every direction
+                    }
+                }
+            }
+            WeaponKind::FlamePool => {
+                let r = 26.0 * area;
+                for pos in self.random_targets(220.0, s.amount) {
+                    self.pools.push(Pool { pos, radius: r, life: s.duration, max_life: s.duration, tick: 0.0, damage: dmg });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Advances shockwaves, pending strikes and burning pools.
+    fn update_effects(&mut self) {
+        let mut i = 0;
+        while i < self.waves.len() {
+            let mut wv = self.waves[i];
+            wv.radius += wv.speed * DT;
+            if wv.radius > wv.max_radius {
+                self.waves.swap_remove(i);
+                continue;
+            }
+            self.waves[i] = wv;
+            if wv.radius > 0.0 {
+                self.query_circle(wv.center, wv.radius + 6.0);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    let off = self.enemies.pos[j] - wv.center;
+                    let band = wv.radius - 12.0 - self.enemies.radius[j];
+                    if self.enemies.wave_cd[j] == 0 && off.length_sq() >= band.max(0.0) * band.max(0.0) {
+                        self.enemies.wave_cd[j] = 20;
+                        self.hurt_enemy(j, wv.damage, off * 2.0);
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        let mut i = 0;
+        while i < self.strikes.len() {
+            self.strikes[i].delay -= DT;
+            if self.strikes[i].delay > 0.0 {
+                i += 1;
+                continue;
+            }
+            let st = self.strikes.swap_remove(i);
+            self.query_circle(st.pos, st.radius);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let dir = self.enemies.pos[j] - st.pos;
+                self.hurt_enemy(j, st.damage, dir);
+            }
+            self.events.push(Event::Impact { pos: st.pos, radius: st.radius });
+        }
+
+        let mut i = 0;
+        while i < self.pools.len() {
+            let mut pl = self.pools[i];
+            pl.life -= DT;
+            pl.tick -= DT;
+            if pl.life <= 0.0 {
+                self.pools.swap_remove(i);
+                continue;
+            }
+            if pl.tick <= 0.0 {
+                pl.tick = 0.3;
+                self.query_circle(pl.pos, pl.radius);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    self.hurt_enemy(j, pl.damage, Vec2::ZERO);
+                }
+            }
+            self.pools[i] = pl;
+            i += 1;
         }
     }
 
@@ -840,13 +1086,18 @@ impl World {
         }
         self.weapons
             .iter()
-            .filter(|w| !w.awakened && w.level >= MAX_LEVEL && self.passive_level(catalyst(w.kind)) > 0)
+            .filter(|w| {
+                let (p, need) = complement(w.kind);
+                !w.awakened && w.level >= MAX_LEVEL && self.passive_level(p) >= need
+            })
             .map(|w| w.kind)
             .collect()
     }
 
-    /// Rolls `tier` rewards: an Awakening first if one is eligible, then levels for owned items.
-    pub fn open_chest(&mut self, tier: u8) {
+    /// Rolls the reward count (85% 1 / 10% 2 / 4% 3 / 1% 5, at least `min_rewards`), then fills it:
+    /// an Awakening first if one is eligible, then levels for owned items.
+    pub fn open_chest(&mut self, min_rewards: u8) {
+        let tier = chest_roll(self.rng.f32()).max(min_rewards);
         let mut items = Vec::new();
         if let Some(&k) = self.awakenable().first() {
             if let Some(w) = self.weapons.iter_mut().find(|w| w.kind == k) {
@@ -858,7 +1109,7 @@ impl World {
         while items.len() < tier as usize {
             let mut pool: Vec<Upgrade> = Vec::new();
             pool.extend(self.weapons.iter().filter(|w| w.level < MAX_LEVEL).map(|w| Upgrade::Weapon(w.kind)));
-            pool.extend(self.passives.iter().filter(|(_, l)| *l < MAX_LEVEL).map(|(k, _)| Upgrade::Passive(*k)));
+            pool.extend(self.passives.iter().filter(|(k, l)| *l < passive_max(*k)).map(|(k, _)| Upgrade::Passive(*k)));
             if pool.is_empty() {
                 self.player.hp = (self.player.hp + 30.0).min(self.player.max_hp);
                 items.push(ChestItem::Heal);
@@ -900,15 +1151,16 @@ impl World {
                 pool.push(Upgrade::Weapon(w.kind));
             }
         }
-        if self.weapons.len() < MAX_WEAPONS {
-            pool.extend(ALL_WEAPONS.iter().filter(|k| self.weapon_level(**k) == 0).map(|k| Upgrade::Weapon(*k)));
+        let hero = hero_def(self.cfg.hero);
+        if self.weapons.len() < hero.weapon_slots {
+            pool.extend(hero.weapon_pool().into_iter().filter(|k| self.weapon_level(*k) == 0).map(Upgrade::Weapon));
         }
         for (k, l) in &self.passives {
-            if *l < MAX_LEVEL {
+            if *l < passive_max(*k) {
                 pool.push(Upgrade::Passive(*k));
             }
         }
-        if self.passives.len() < MAX_PASSIVES {
+        if self.passives.len() < hero.passive_slots {
             pool.extend(ALL_PASSIVES.iter().filter(|k| self.passive_level(**k) == 0).map(|k| Upgrade::Passive(*k)));
         }
         let mut offer = Vec::new();
@@ -965,16 +1217,18 @@ impl World {
         }
     }
 
-    /// Dev shortcut: every weapon at max level with its catalyst, ready to Awaken.
+    /// Dev shortcut: fill the hero's weapon slots at max level with their complements, ready to Awaken.
     pub fn debug_max_loadout(&mut self) {
-        for k in ALL_WEAPONS {
+        let hero = hero_def(self.cfg.hero);
+        for k in hero.weapon_pool().into_iter().take(hero.weapon_slots) {
             match self.weapons.iter_mut().find(|w| w.kind == k) {
                 Some(w) => w.level = MAX_LEVEL,
                 None => self.weapons.push(OwnedWeapon { kind: k, level: MAX_LEVEL, awakened: false, timer: 0.0, phase: 0.0 }),
             }
-            let c = catalyst(k);
-            if self.passive_level(c) == 0 {
-                self.passives.push((c, 1));
+            let (c, need) = complement(k);
+            match self.passives.iter_mut().find(|(pk, _)| *pk == c) {
+                Some((_, l)) => *l = (*l).max(need),
+                None => self.passives.push((c, need)),
             }
         }
     }
@@ -1097,7 +1351,7 @@ mod tests {
     fn chest_awakens_eligible_weapon_only_after_eight_minutes() {
         let mut w = World::new(WorldConfig::default());
         w.weapons[0].level = MAX_LEVEL;
-        w.passives.push((catalyst(WeaponKind::Ofuda), 1));
+        w.passives.push((complement(WeaponKind::Ofuda).0, complement(WeaponKind::Ofuda).1));
         w.time = AWAKEN_FROM - 1.0;
         w.open_chest(1);
         assert!(!w.weapons[0].awakened, "too early to awaken");
@@ -1107,7 +1361,7 @@ mod tests {
         assert!(w.weapons[0].awakened);
         let res = w.chest_result.clone().unwrap();
         assert_eq!(res[0], ChestItem::Awakening(WeaponKind::Ofuda));
-        assert_eq!(res.len(), 3);
+        assert!(res.len() >= 3, "boss-size chest gives at least 3, got {}", res.len());
         assert!(w.paused());
         w.close_chest();
         assert!(!w.paused());
@@ -1129,6 +1383,99 @@ mod tests {
         w.step(Input::default());
         assert!(w.boss().is_none());
         assert!(w.chests.iter().any(|(_, t)| *t == 3));
+    }
+
+    /// A ring of stationary dummies around the player, then fire one weapon for a few seconds.
+    fn damage_dealt_by(kind: WeaponKind) -> f32 {
+        let mut w = World::new(WorldConfig { seed: 3, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        // Library check: test every weapon even if no current hero can roll it.
+        w.weapons = vec![OwnedWeapon { kind, level: 4, awakened: false, timer: 0.0, phase: 0.0 }];
+        for k in 0..40 {
+            let a = k as f32 / 40.0 * std::f32::consts::TAU;
+            let r = 30.0 + (k % 4) as f32 * 25.0;
+            w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * r);
+        }
+        let n = w.enemies.len();
+        w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        let mut dealt = 0.0;
+        for _ in 0..60 * 4 {
+            w.step(Input::default());
+            dealt += w.events.iter().filter_map(|e| if let Event::Hit { amount, .. } = e { Some(*amount) } else { None }).sum::<f32>();
+        }
+        assert_eq!(w.enemies.len(), n, "dummies shouldn't die in 4s");
+        dealt
+    }
+
+    #[test]
+    fn every_weapon_deals_damage() {
+        for k in ALL_WEAPONS {
+            let d = damage_dealt_by(k);
+            assert!(d > 50.0, "{k:?} dealt only {d}");
+        }
+    }
+
+    #[test]
+    fn chests_respect_minimum_and_roll_bigger_sometimes() {
+        let mut w = World::new(WorldConfig { seed: 11, ..Default::default() });
+        let mut sizes = [0u32; 6];
+        for _ in 0..2000 {
+            w.open_chest(1);
+            sizes[w.chest_result.take().unwrap().len()] += 1;
+        }
+        assert!(sizes[1] > 1500 && sizes[2] > 100 && sizes[3] > 30 && sizes[5] > 0, "{sizes:?}");
+        for _ in 0..200 {
+            w.open_chest(3);
+            assert!(w.chest_result.take().unwrap().len() >= 3);
+        }
+    }
+
+    #[test]
+    fn capped_passives_stop_being_offered() {
+        let mut w = World::new(WorldConfig::default());
+        w.passives.push((PassiveKind::Abundance, passive_max(PassiveKind::Abundance)));
+        for _ in 0..200 {
+            w.make_offer();
+            assert!(!w.offer.take().unwrap().contains(&Upgrade::Passive(PassiveKind::Abundance)));
+        }
+    }
+
+    #[test]
+    fn offers_respect_hero_pool_and_weapon_slots() {
+        let ren = hero_def(HeroId::Ren);
+        let pool = ren.weapon_pool();
+        assert!(pool.contains(&WeaponKind::Ofuda) && pool.contains(&WeaponKind::Taiko));
+        assert!(!pool.contains(&WeaponKind::ThunderChain) && !pool.contains(&WeaponKind::Crescent));
+
+        let mut w = World::new(WorldConfig::default());
+        for _ in 0..300 {
+            w.make_offer();
+            for u in w.offer.take().unwrap() {
+                if let Upgrade::Weapon(k) = u {
+                    assert!(pool.contains(&k), "offered {k:?} outside Ren's pool");
+                }
+            }
+        }
+        // With every slot filled, no new weapon may be offered.
+        w.weapons = pool.iter().take(ren.weapon_slots).map(|&k| OwnedWeapon { kind: k, level: 2, awakened: false, timer: 0.0, phase: 0.0 }).collect();
+        for _ in 0..300 {
+            w.make_offer();
+            for u in w.offer.take().unwrap() {
+                if let Upgrade::Weapon(k) = u {
+                    assert!(w.weapon_level(k) > 0, "offered a 5th weapon {k:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn awakening_needs_the_complement_level() {
+        let mut w = World::new(WorldConfig::default());
+        w.time = AWAKEN_FROM;
+        w.weapons[0].level = MAX_LEVEL;
+        assert!(w.awakenable().is_empty(), "no complement owned yet");
+        let (p, need) = complement(WeaponKind::Ofuda);
+        w.passives.push((p, need));
+        assert_eq!(w.awakenable(), vec![WeaponKind::Ofuda]);
     }
 
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
