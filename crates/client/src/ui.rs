@@ -109,8 +109,8 @@ pub fn level_up(world: &World, offer: &[Upgrade]) -> Option<usize> {
 pub fn title(time: f64) {
     clear_background(Color::from_rgba(20, 16, 32, 255));
     let h = screen_height();
-    centered("KEGARE NIGHT", h * 0.36, 72.0, ACCENT);
-    centered("(working title)", h * 0.36 + 28.0, 18.0, Color::new(1.0, 1.0, 1.0, 0.5));
+    centered("KIZUNA SURVIVORS", h * 0.36, 72.0, ACCENT);
+    centered("Heroes of many stories. One night. Survive until dawn.", h * 0.36 + 30.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.6));
     centered("Survive until dawn. Your talismans fire on their own.", h * 0.52, 22.0, WHITE);
     centered("WASD / arrows to move   ·   Esc to pause", h * 0.52 + 28.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
     let a = 0.55 + 0.45 * (time * 3.0).sin() as f32;

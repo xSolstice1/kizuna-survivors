@@ -9,7 +9,7 @@ mod ui;
 use render::{Assets, Fx};
 
 fn window_conf() -> Conf {
-    Conf { window_title: "Kegare Night".into(), window_width: 1280, window_height: 720, ..Default::default() }
+    Conf { window_title: "Kizuna Survivors".into(), window_width: 1280, window_height: 720, ..Default::default() }
 }
 
 #[derive(PartialEq)]
