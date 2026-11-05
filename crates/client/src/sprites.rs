@@ -10,6 +10,24 @@ pub struct Sprite {
     pub rgba: Vec<u8>,
 }
 
+/// Replaces palette entries (`<char> #rrggbb` lines) in a `.px` source.
+pub fn recolor(src: &str, swaps: &[(char, &str)]) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut in_palette = true;
+    for line in src.lines() {
+        if line.trim_end() == "---" {
+            in_palette = false;
+        }
+        let swap = if in_palette { swaps.iter().find(|(c, _)| line.starts_with(*c) && line[c.len_utf8()..].starts_with(' ')) } else { None };
+        match swap {
+            Some((c, hex)) => out.push_str(&format!("{c} {hex}")),
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
 pub fn parse(src: &str) -> Sprite {
     let mut mirror = false;
     let mut palette: Vec<(char, [u8; 3])> = Vec::new();

@@ -14,6 +14,29 @@
   <!-- mq_js_bundle's quad_net plugin assigns this undeclared global under "use strict". -->
   <script>var register_plugin;</script>
   <script src="mq_js_bundle.js"></script>
-  <script>load("game.wasm");</script>
+  <script>
+    // Save storage for the game (crates/client/src/save.rs).
+    miniquad_add_plugin({
+      name: "kz_storage",
+      version: 1,
+      register_plugin: function (importObject) {
+        var KEY = "kizuna_survivors_save";
+        var pending = new Uint8Array(0);
+        importObject.env.kz_save = function (ptr, len) {
+          try { localStorage.setItem(KEY, new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len))); } catch (e) { console.warn("save failed", e); }
+        };
+        importObject.env.kz_load_len = function () {
+          var s = "";
+          try { s = localStorage.getItem(KEY) || ""; } catch (e) {}
+          pending = new TextEncoder().encode(s);
+          return pending.length;
+        };
+        importObject.env.kz_load = function (ptr, len) {
+          new Uint8Array(wasm_memory.buffer, ptr, len).set(pending.subarray(0, len));
+        };
+      },
+    });
+    load("game.wasm");
+  </script>
 </body>
 </html>

@@ -47,6 +47,10 @@ pub fn hud(world: &World, assets: &Assets) {
     let kills = format!("{} kills", world.kills);
     let d = measure_text(&kills, None, 20, 1.0);
     draw_text(&kills, w - d.width - 16.0, 40.0, 20.0, WHITE);
+    let sen = format!("{}", world.sen);
+    let d = measure_text(&sen, None, 20, 1.0);
+    draw_text(&sen, w - d.width - 16.0, 64.0, 20.0, Color::new(1.0, 0.85, 0.4, 1.0));
+    draw_texture_ex(&assets.coin, w - d.width - 38.0, 50.0, WHITE, DrawTextureParams { dest_size: Some(vec2(16.0, 16.0)), ..Default::default() });
 
     // HP + loadout, top-left.
     let p = &world.player;
@@ -59,7 +63,8 @@ pub fn hud(world: &World, assets: &Assets) {
     draw_rectangle(16.0, 42.0, 200.0, 8.0, Color::from_rgba(30, 30, 50, 230));
     draw_rectangle(16.0, 42.0, 200.0 * p.special, 8.0, Color::new(1.0 * glow, 0.85 * glow, 0.45 * glow, 1.0));
     if full {
-        draw_text("PURIFY  [Space]", 222.0, 51.0, 18.0, Color::new(1.0, 0.9, 0.5, glow));
+        let name = if world.cfg.hero == sim::content::HeroId::Ren { "PURIFY" } else { "BARRIER" };
+        draw_text(&format!("{name}  [Space]"), 222.0, 51.0, 18.0, Color::new(1.0, 0.9, 0.5, glow));
     }
     let hero = hero_def(world.cfg.hero);
     let dim = Color::new(1.0, 1.0, 1.0, 0.5);
@@ -203,45 +208,63 @@ pub fn banner(text: &str, left: f32) {
     centered(text, h * 0.20, 40.0, Color::new(1.0, 0.85, 0.45, a));
 }
 
+/// Rasterises every glyph at every text size the game uses, so the font atlas doesn't grow
+/// (and get rebuilt mid-frame) later. Drawn off-screen.
+pub fn prewarm_font() {
+    let glyphs: String = (32u8..127).map(|c| c as char).collect::<String>() + "·";
+    for size in [14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 40, 44, 48, 56, 64, 72] {
+        draw_text(&glyphs, -10_000.0, -10_000.0, size as f32, WHITE);
+    }
+}
+
 pub fn title(time: f64) {
     clear_background(Color::from_rgba(20, 16, 32, 255));
     let h = screen_height();
-    centered("KIZUNA SURVIVORS", h * 0.36, 72.0, ACCENT);
-    centered("Heroes of many stories. One night. Defeat the Night Lord before dawn.", h * 0.36 + 30.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.6));
-    centered("Survive the night. Your talismans fire on their own.", h * 0.52, 22.0, WHITE);
-    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.52 + 28.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
+    centered("KIZUNA SURVIVORS", h * 0.40, 72.0, ACCENT);
+    centered("Heroes of many stories. One night. Defeat the Night Lord before dawn.", h * 0.40 + 30.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.6));
     let a = 0.55 + 0.45 * (time * 3.0).sin() as f32;
-    centered("Click or press Enter to start", h * 0.72, 30.0, Color::new(1.0, 1.0, 1.0, a));
+    centered("Click or press Enter", h * 0.68, 30.0, Color::new(1.0, 1.0, 1.0, a));
 }
 
 pub fn paused() {
     draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.6));
     centered("PAUSED", screen_height() * 0.42, 56.0, WHITE);
-    centered("Esc to resume   ·   R to restart   ·   N toggle damage numbers", screen_height() * 0.42 + 40.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.8));
+    centered("Esc to resume   ·   R to restart   ·   Q to give up   ·   N toggle damage numbers", screen_height() * 0.42 + 40.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.8));
 }
 
-pub fn results(world: &World, won: bool) {
+pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, lines: &crate::voice::Lines, assets: &Assets) {
     draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.7));
     let h = screen_height();
-    if won {
-        centered("DAWN BREAKS", h * 0.32, 64.0, Color::new(1.0, 0.85, 0.5, 1.0));
-        centered("Ren: \"Entry closed. Sunrise logged.\"", h * 0.32 + 34.0, 22.0, WHITE);
+    let who = hero_def(world.cfg.hero).name.split(' ').next().unwrap_or("");
+    let (title, color, line) = if won {
+        ("DAWN BREAKS", Color::new(1.0, 0.85, 0.5, 1.0), lines.won)
     } else if world.dawn_out {
-        centered("DAWN WITHOUT VICTORY", h * 0.32, 64.0, Color::new(1.0, 0.6, 0.4, 1.0));
-        centered("Ren: \"It slipped back into the dark. Next night.\"", h * 0.32 + 34.0, 22.0, WHITE);
+        ("DAWN WITHOUT VICTORY", Color::new(1.0, 0.6, 0.4, 1.0), lines.dawn)
     } else {
-        centered("FALLEN", h * 0.32, 64.0, ACCENT);
-        centered("Ren: \"...to be continued.\"", h * 0.32 + 34.0, 22.0, WHITE);
-    }
-    let lines = [
+        ("FALLEN", ACCENT, lines.fallen)
+    };
+    centered(title, h * 0.26, 64.0, color);
+    centered(&format!("{who}: \"{line}\""), h * 0.26 + 34.0, 22.0, WHITE);
+    let stats = [
         format!("Survived  {}", fmt_time(world.time)),
         format!("Level  {}", world.player.level),
         format!("Otherworlders defeated  {}", world.kills),
     ];
-    for (i, l) in lines.iter().enumerate() {
-        centered(l, h * 0.50 + i as f32 * 30.0, 26.0, WHITE);
+    for (i, l) in stats.iter().enumerate() {
+        centered(l, h * 0.42 + i as f32 * 30.0, 26.0, WHITE);
     }
-    centered("Click or press R to try again", h * 0.75, 26.0, Color::new(1.0, 1.0, 1.0, 0.8));
+    if let Some(r) = report {
+        let txt = format!("+{} Sen", r.sen);
+        let d = measure_text(&txt, None, 30, 1.0);
+        let x = (screen_width() - d.width) / 2.0 + 14.0;
+        draw_texture_ex(&assets.coin, x - 30.0, h * 0.42 + 92.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
+        draw_text(&txt, x, h * 0.42 + 112.0, 30.0, Color::new(1.0, 0.85, 0.4, 1.0));
+        for (i, hero) in r.unlocked.iter().enumerate() {
+            let pulse = 0.75 + 0.25 * (get_time() * 4.0).sin() as f32;
+            centered(&format!("NEW HERO UNLOCKED: {}", hero_def(*hero).name), h * 0.42 + 150.0 + i as f32 * 30.0, 26.0, Color::new(1.0, 0.6, 0.85, pulse));
+        }
+    }
+    centered("Click or press R to try again   ·   M for the menu", h * 0.86, 24.0, Color::new(1.0, 1.0, 1.0, 0.8));
 }
 
 pub fn debug_overlay(fps: i32, sim_ms: f32, world: &World, stress: bool) {

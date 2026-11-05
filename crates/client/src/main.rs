@@ -1,12 +1,16 @@
 use macroquad::prelude::*;
 use sim::world::DT;
+use sim::meta::{Profile, RunReport};
 use sim::{Input, RunState, Stress, World, WorldConfig};
 
 mod chest_ui;
+mod menu;
 mod render;
+mod save;
 mod sprites;
 mod stage;
 mod ui;
+mod voice;
 
 use render::{Assets, Fx};
 
@@ -16,7 +20,11 @@ fn window_conf() -> Conf {
 
 #[derive(PartialEq)]
 enum Screen {
+    /// Click-to-start splash (browsers need a click before audio/focus).
     Title,
+    Menu,
+    Characters,
+    Shop,
     Playing,
     Paused,
 }
@@ -38,9 +46,9 @@ fn read_input() -> Input {
     Input { move_dir: d, ..Default::default() }
 }
 
-fn new_world(stress: Option<Stress>) -> World {
+fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
     let seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
-    World::new(WorldConfig { seed, stress, ..Default::default() })
+    World::new(WorldConfig { seed, stress, hero: profile.selected, meta: profile.bonus(), ..Default::default() })
 }
 
 #[macroquad::main(window_conf)]
@@ -50,24 +58,58 @@ async fn main() {
     let mut fx = Fx::new();
     let mut screen = Screen::Title;
     let mut stress: Option<Stress> = None;
-    let mut world = new_world(stress);
+    let mut profile = save::load();
+    let mut world = new_world(stress, &profile);
+    // Set once a finished run has been banked into the profile.
+    let mut report: Option<RunReport> = None;
+    let mut hero_cursor = sim::content::ALL_HEROES.iter().position(|h| *h == profile.selected).unwrap_or(0);
+    let mut shop_cursor = 0usize;
     let mut acc = 0.0f32;
     let mut sim_ms = 0.0f32;
     let mut chest_anim: Option<chest_ui::ChestAnim> = None;
     // Space is latched until the sim next steps; at high refresh rates many frames take no step.
     let mut special_queued = false;
 
+    ui::prewarm_font();
+    next_frame().await;
+
     loop {
         let dt = get_frame_time().min(0.1);
         let now = get_time();
 
-        if screen == Screen::Title {
-            ui::title(now);
-            if is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) {
-                world = new_world(stress);
-                fx.clear();
-                screen = Screen::Playing;
+        // --- Out-of-run screens ---
+        match screen {
+            Screen::Title => {
+                ui::title(now);
+                if is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) {
+                    screen = Screen::Menu;
+                }
             }
+            Screen::Menu => match menu::main_menu(&profile, &assets, now) {
+                Some(menu::MenuAction::Start) => screen = Screen::Characters,
+                Some(menu::MenuAction::Shop) => screen = Screen::Shop,
+                None => {}
+            },
+            Screen::Characters => match menu::char_select(&mut profile, &assets, &mut hero_cursor, now) {
+                Some(menu::SelectAction::Begin) => {
+                    save::store(&profile);
+                    world = new_world(stress, &profile);
+                    report = None;
+                    fx.set_hero(profile.selected);
+                    fx.clear();
+                    screen = Screen::Playing;
+                }
+                Some(menu::SelectAction::Back) => screen = Screen::Menu,
+                None => {}
+            },
+            Screen::Shop => match menu::shop(&mut profile, &assets, &mut shop_cursor, now) {
+                Some(menu::ShopAction::Changed) => save::store(&profile),
+                Some(menu::ShopAction::Back) => screen = Screen::Menu,
+                None => {}
+            },
+            Screen::Playing | Screen::Paused => {}
+        }
+        if !matches!(screen, Screen::Playing | Screen::Paused) {
             next_frame().await;
             continue;
         }
@@ -88,11 +130,27 @@ async fn main() {
                 Some(_) => None,
             };
         }
+        // Giving up from the pause menu ends the run normally (Sen is still banked).
+        if screen == Screen::Paused && is_key_pressed(KeyCode::Q) {
+            world.state = RunState::Dead;
+            screen = Screen::Playing;
+        }
+        let over = matches!(world.state, RunState::Dead | RunState::Won);
+        if over && report.is_none() && world.cfg.stress.is_none() {
+            report = Some(profile.record_run(&world));
+            save::store(&profile);
+        }
+        if over && (is_key_pressed(KeyCode::M) || is_key_pressed(KeyCode::Escape)) {
+            screen = Screen::Menu;
+            next_frame().await;
+            continue;
+        }
         let restart = (is_key_pressed(KeyCode::R) && (screen == Screen::Paused || over))
             || (over && is_mouse_button_pressed(MouseButton::Left))
             || toggle_stress;
         if restart {
-            world = new_world(stress);
+            world = new_world(stress, &profile);
+            report = None;
             fx.clear();
             screen = Screen::Playing;
         }
@@ -157,7 +215,7 @@ async fn main() {
             }
             if !fx.low_hp_warned && world.player.hp < world.player.max_hp * 0.25 {
                 fx.low_hp_warned = true;
-                fx.say("Not... finished... yet.");
+                fx.say(fx.lines().low_hp);
             }
             if steps == 4 {
                 acc = 0.0; // too slow: drop backlog rather than spiral
@@ -199,7 +257,7 @@ async fn main() {
                 world.choose(i);
             }
         } else if over {
-            ui::results(&world, world.state == RunState::Won);
+            ui::results(&world, world.state == RunState::Won, report.as_ref(), &fx.lines(), &assets);
         } else if screen == Screen::Paused {
             ui::paused();
         }

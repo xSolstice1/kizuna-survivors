@@ -1,16 +1,19 @@
 //! Draws the world: ground, pickups, enemies, player, weapons, effects.
 
 use macroquad::prelude::*;
-use sim::content::{EnemyKind, PassiveKind, Upgrade, WeaponKind};
+use sim::content::{EnemyKind, HeroId, PassiveKind, Upgrade, WeaponKind, ALL_HEROES};
 use sim::{Event, World};
 
 use crate::sprites;
+use crate::voice;
 
 /// World pixels → screen pixels (integer for crisp pixel art).
 pub const SCALE: f32 = 2.0;
 
 pub struct Assets {
-    pub hero: [Texture2D; 3], // idle, walk A, walk B
+    /// Per hero (in `ALL_HEROES` order): idle, walk A, walk B.
+    heroes: Vec<[Texture2D; 3]>,
+    pub coin: Texture2D,
     pub wisp: Texture2D,
     pub kasa: Texture2D,
     pub oni: Texture2D,
@@ -28,12 +31,20 @@ pub struct Assets {
 
 impl Assets {
     pub fn load() -> Self {
-        let hero = sprites::parse(include_str!("../../../art/src/heroine.px"));
-        // Legs occupy rows 27..32; left leg columns 5..10, right leg 14..19.
-        let walk_a = hero.lift(5..10, 27..32);
-        let walk_b = hero.lift(14..19, 27..32);
+        let base = include_str!("../../../art/src/heroine.px");
+        let heroes = ALL_HEROES
+            .iter()
+            .map(|h| {
+                let hero = sprites::parse(&sprites::recolor(base, hero_palette(*h)));
+                // Legs occupy rows 27..32; left leg columns 5..10, right leg 14..19.
+                let walk_a = hero.lift(5..10, 27..32);
+                let walk_b = hero.lift(14..19, 27..32);
+                [hero.texture(), walk_a.texture(), walk_b.texture()]
+            })
+            .collect();
         Assets {
-            hero: [hero.texture(), walk_a.texture(), walk_b.texture()],
+            heroes,
+            coin: sprites::texture(include_str!("../../../art/src/coin.px")),
             wisp: sprites::texture(include_str!("../../../art/src/wisp.px")),
             kasa: sprites::texture(include_str!("../../../art/src/kasa.px")),
             oni: sprites::texture(include_str!("../../../art/src/oni.px")),
@@ -70,6 +81,14 @@ impl Assets {
         }
     }
 
+    pub fn hero(&self, h: HeroId) -> &[Texture2D; 3] {
+        &self.heroes[ALL_HEROES.iter().position(|x| *x == h).unwrap()]
+    }
+
+    pub fn icon_named(&self, key: &str) -> &Texture2D {
+        &self.icons.iter().find(|(n, _)| *n == key).expect("icon").1
+    }
+
     pub fn icon(&self, u: Upgrade) -> &Texture2D {
         let key = match u {
             Upgrade::Weapon(k) => match k {
@@ -97,6 +116,19 @@ impl Assets {
             Upgrade::Heal => "onigiri",
         };
         &self.icons.iter().find(|(n, _)| *n == key).expect("icon").1
+    }
+}
+
+/// Placeholder looks: Ren's sprite with each hero's own hair / outfit / eye / ribbon colours.
+/// Palette chars: H/h/L hair, C/c outfit, I eyes, R ribbon.
+fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
+    match h {
+        HeroId::Ren => &[],
+        HeroId::Kaede => &[('H', "#33334a"), ('h', "#1c1c2a"), ('L', "#5a5a7a"), ('C', "#2f5a3a"), ('c', "#1d3a25"), ('I', "#e84a4a"), ('R', "#c9a040")],
+        HeroId::Mika => &[('H', "#ffd45a"), ('h', "#d49a2a"), ('L', "#fff0a0"), ('C', "#e88ac8"), ('c', "#b0609a"), ('I', "#4ac0ff"), ('R', "#ff5aa0")],
+        HeroId::Haru => &[('H', "#c8cde0"), ('h', "#8890aa"), ('L', "#ffffff"), ('C', "#3a3a8a"), ('c', "#24245a"), ('I', "#6a7cff"), ('R', "#e83a3a")],
+        HeroId::Nanami => &[('H', "#3ac0a8"), ('h', "#1f8070"), ('L', "#9af0e0"), ('C', "#8a5a3a"), ('c', "#5a3a24"), ('I', "#a06aff"), ('R', "#ffb040")],
+        HeroId::Yuzu => &[('H', "#ff9a3a"), ('h', "#c86420"), ('L', "#ffd0a0"), ('C', "#b05ad8"), ('c', "#7a3aa0"), ('I', "#ff6aa0"), ('R', "#4ad0ff")],
     }
 }
 
@@ -135,6 +167,7 @@ pub struct Fx {
     pub banner: Option<(String, f32)>,
     leveled_once: bool,
     pub low_hp_warned: bool,
+    hero: Option<HeroId>,
 }
 
 const MAX_NUMBERS: usize = 120;
@@ -156,7 +189,15 @@ impl Fx {
         self.banner = None;
         self.leveled_once = false;
         self.low_hp_warned = false;
-        self.say("Night shift. Again.");
+        self.say(self.lines().start);
+    }
+
+    pub fn set_hero(&mut self, h: HeroId) {
+        self.hero = Some(h);
+    }
+
+    pub fn lines(&self) -> voice::Lines {
+        voice::lines(self.hero.unwrap_or(HeroId::Ren))
     }
 
     pub fn say(&mut self, line: &str) {
@@ -188,7 +229,7 @@ impl Fx {
                     };
                     if kind == EnemyKind::NightLord {
                         self.shake = self.shake.max(0.6);
-                        self.say("Case closed. Sunrise is mine.");
+                        self.say(self.lines().night_lord_down);
                     }
                     for k in 0..n {
                         if self.particles.len() >= MAX_PARTICLES {
@@ -208,20 +249,20 @@ impl Fx {
                 Event::PlayerHurt => self.shake = self.shake.max(0.18),
                 Event::LevelUp if !self.leveled_once => {
                     self.leveled_once = true;
-                    self.say("Noted. Moving on.");
+                    self.say(self.lines().first_level);
                 }
                 Event::SpecialUsed { pos } => {
                     self.rings.push((vec2(pos.x, pos.y), 0.0));
                     self.shake = self.shake.max(0.25);
-                    self.say("Purify!");
+                    self.say(self.lines().special);
                 }
                 Event::BossSpawned => {
                     self.announce("A GREAT ONI APPROACHES".into());
-                    self.say("You're not in my ledger. Let's fix that.");
+                    self.say(self.lines().boss);
                 }
                 Event::NightLordSpawned => {
                     self.announce("THE NIGHT LORD RISES".into());
-                    self.say("The big lantern. Before dawn, then.");
+                    self.say(self.lines().night_lord);
                     self.shake = self.shake.max(0.4);
                 }
                 Event::Blink { pos } => {
@@ -242,9 +283,14 @@ impl Fx {
                 Event::BossTelegraph => self.shake = self.shake.max(0.08),
                 Event::ShrineAppeared => {
                     self.announce("A ROADSIDE SHRINE APPEARS".into());
-                    self.say("A shrine. Everything has a price.");
+                    self.say(self.lines().shrine);
                 }
-                Event::ShrineChosen(ev) => self.say(&format!("{}. Noted.", ev.name())),
+                Event::ShrineChosen(ev) => self.say(&format!("{}.", ev.name())),
+                Event::Revived => {
+                    self.announce("REVIVAL".into());
+                    self.say(self.lines().revived);
+                    self.shake = self.shake.max(0.3);
+                }
                 Event::Bolt { from, to } => self.bolts.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
                 Event::Slash { pos, dir, radius, full } => self.slashes.push((vec2(pos.x, pos.y), vec2(dir.x, dir.y), radius, full, 0.0)),
                 Event::Impact { pos, radius } => {
@@ -253,7 +299,7 @@ impl Fx {
                 }
                 Event::Awakened(k) => {
                     self.announce(format!("AWAKENING: {}", sim::content::awakened_name(k)));
-                    self.say("Chapter thirteen starts here.");
+                    self.say(self.lines().awaken);
                 }
                 _ => {}
             }
@@ -380,6 +426,12 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
         );
     }
+    for (c, v) in &world.coins {
+        let size = if *v >= 50 { 16.0 } else if *v >= 5 { 12.0 } else { 10.0 };
+        let bob = ((time * 4.0 + c.x as f64).sin() * 1.0) as f32;
+        draw_circle(c.x, c.y, size * 0.7, Color::new(1.0, 0.85, 0.3, 0.15));
+        draw_texture_ex(&a.coin, (c.x - size / 2.0).round(), (c.y - size / 2.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
+    }
 
     let e = &world.enemies;
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
@@ -451,7 +503,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let tint = if blink { Color::new(1.0, 1.0, 1.0, 0.35) } else { WHITE };
     draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
     draw_texture_ex(
-        &a.hero[frame],
+        &a.hero(world.cfg.hero)[frame],
         (p.x - 12.0).round(),
         (p.y - 26.0).round(),
         tint,
