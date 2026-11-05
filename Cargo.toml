@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/sim", "crates/client", "crates/bench"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+# Keep the sim fast in debug builds too; it's the hot path.
+[profile.dev.package.sim]
+opt-level = 3
