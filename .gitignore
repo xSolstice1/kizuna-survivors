@@ -1,3 +1,6 @@
 target/
 dist/
 .vercel
+
+# Design notes stay local
+PLAN.md
