@@ -5,6 +5,7 @@ pub mod content;
 pub mod grid;
 pub mod math;
 pub mod rng;
+pub mod stage;
 pub mod world;
 
 pub use math::Vec2;

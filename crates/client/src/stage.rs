@@ -1,28 +1,18 @@
 //! Stage 1, Neon Shotengai: tiled night street, scattered props, glows and a vignette.
-//! Layout is a pure function of world coordinates, so it is infinite and identical every run.
+//! The prop layout lives in `sim::stage` (it is also used for collision).
 
 use macroquad::prelude::*;
 
 use crate::render::SCALE;
 use crate::sprites;
 
-const TILE: f32 = 32.0;
-const CHUNK: f32 = 192.0;
+use sim::stage::{chunk_props, hash, PropKind, CHUNK, PATH_EVERY, TILE};
 
 pub struct StageArt {
     tex: Vec<(&'static str, Texture2D)>,
     vignette: Texture2D,
     /// Soft white radial falloff, tinted per light.
     glow: Texture2D,
-}
-
-fn hash(x: i32, y: i32, salt: u32) -> u32 {
-    let mut h = (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA77) ^ salt.wrapping_mul(0xC2B2_AE3D);
-    h ^= h >> 15;
-    h = h.wrapping_mul(0x2C1B_3C6D);
-    h ^= h >> 12;
-    h = h.wrapping_mul(0x297A_2D39);
-    h ^ (h >> 15)
 }
 
 impl StageArt {
@@ -77,7 +67,7 @@ impl StageArt {
         let (tx0, ty0) = ((x0 / TILE).floor() as i32, (y0 / TILE).floor() as i32);
         for ty in ty0..=ty0 + (sh / TILE) as i32 + 1 {
             for tx in tx0..=tx0 + (sw / TILE) as i32 + 1 {
-                let name = if tx.rem_euclid(14) == 0 {
+                let name = if tx.rem_euclid(PATH_EVERY) == 0 {
                     "tactile"
                 } else {
                     match hash(tx, ty, 1) % 200 {
@@ -91,29 +81,21 @@ impl StageArt {
             }
         }
 
-        // Props: up to two per chunk, never on the tactile path.
+        // Props: up to two per chunk, never on the tactile path (layout from the sim).
         let margin = 40.0;
         let (cx0, cy0) = (((x0 - margin) / CHUNK).floor() as i32, ((y0 - margin) / CHUNK).floor() as i32);
         let (cx1, cy1) = (((x0 + sw + margin) / CHUNK).floor() as i32, ((y0 + sh + margin) / CHUNK).floor() as i32);
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
-                let h = hash(cx, cy, 2);
-                let mut placed: Vec<Vec2> = Vec::new();
-                for k in 0..(h % 3) {
-                    let hk = hash(cx, cy, 10 + k);
-                    let px = cx as f32 * CHUNK + (hk % 160) as f32 + 16.0;
-                    let py = cy as f32 * CHUNK + ((hk >> 8) % 160) as f32 + 16.0;
-                    let path_x = ((px / (TILE * 14.0)).round() * TILE * 14.0) + TILE / 2.0;
-                    if (px - path_x).abs() < 40.0 || placed.iter().any(|q| (*q - vec2(px, py)).length() < 56.0) {
-                        continue;
-                    }
-                    placed.push(vec2(px, py));
-                    let (name, glow) = match (hk >> 16) % 10 {
-                        0..=2 => ("lantern", Some(Color::new(1.0, 0.55, 0.3, 0.13))),
-                        3 => ("vending", Some(Color::new(0.4, 0.75, 1.0, 0.12))),
-                        4..=5 => ("stall", Some(Color::new(1.0, 0.8, 0.4, 0.08))),
-                        6..=7 => ("neon_sign", Some(Color::new(1.0, 0.35, 0.7, 0.12))),
-                        _ => ("crates", None),
+                let (props, n) = chunk_props(cx, cy);
+                for prop in &props[..n] {
+                    let (px, py) = (prop.pos.x, prop.pos.y);
+                    let (name, glow) = match prop.kind {
+                        PropKind::Lantern => ("lantern", Some(Color::new(1.0, 0.55, 0.3, 0.13))),
+                        PropKind::Vending => ("vending", Some(Color::new(0.4, 0.75, 1.0, 0.12))),
+                        PropKind::Stall => ("stall", Some(Color::new(1.0, 0.8, 0.4, 0.08))),
+                        PropKind::NeonSign => ("neon_sign", Some(Color::new(1.0, 0.35, 0.7, 0.12))),
+                        PropKind::Crates => ("crates", None),
                     };
                     if let Some(mut g) = glow {
                         let flicker = 0.85 + 0.15 * ((time * 3.0) as f32 + px * 0.13).sin();
@@ -121,6 +103,9 @@ impl StageArt {
                         let r = 64.0;
                         draw_texture_ex(&self.glow, px - r, py - r - 6.0, g, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
                     }
+                    // Contact shadow under the solid footprint.
+                    let (min, max) = prop.footprint();
+                    draw_rectangle(min.x - 1.0, max.y - 2.0, max.x - min.x + 2.0, 3.0, Color::new(0.0, 0.0, 0.0, 0.35));
                     let t = self.get(name);
                     draw_texture(t, (px - t.width() / 2.0).round(), (py - t.height()).round() + 6.0, WHITE);
                 }

@@ -2,6 +2,7 @@
 
 use crate::content::*;
 use crate::grid::Grid;
+use crate::stage;
 use crate::rng::Rng;
 use crate::Vec2;
 
@@ -519,6 +520,7 @@ impl World {
             self.player.facing = d;
         }
         self.player.pos += d * (self.move_speed() * DT);
+        self.player.pos = stage::resolve(self.player.pos, PLAYER_RADIUS);
     }
 
     fn contact_damage(&mut self) {
@@ -635,7 +637,7 @@ impl World {
             if self.shrines_done < SHRINE_TIMES.len() && self.time >= SHRINE_TIMES[self.shrines_done] {
                 self.shrines_done += 1;
                 let a = self.rng.range(0.0, std::f32::consts::TAU);
-                self.shrine = Some(self.player.pos + Vec2::from_angle(a) * 240.0);
+                self.shrine = Some(stage::resolve(self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
                 self.events.push(Event::ShrineAppeared);
             }
             if self.time >= self.next_elite {
@@ -821,10 +823,26 @@ impl World {
             });
             e.vel[i] = seek + sep * 70.0;
         }
-        // Pass 2: integrate.
+        // Pass 2: integrate, then slide around props (bosses smash straight through).
         for i in 0..e.pos.len() {
             let v = e.vel[i] + e.push[i];
             e.pos[i] += v * DT;
+            if !matches!(e.kind[i], EnemyKind::GreatOni | EnemyKind::NightLord) {
+                let before = e.pos[i];
+                let after = stage::resolve_local(before, e.radius[i]);
+                let n = after - before;
+                if n.length_sq() > 1e-8 {
+                    // Blocked: step along the obstacle face, on the side closer to the player.
+                    let n = n.normalize_or_zero();
+                    let t = Vec2::new(-n.y, n.x);
+                    let to_p = player - after;
+                    let dot = t.x * to_p.x + t.y * to_p.y;
+                    let side = if dot.abs() > 1.0 { dot.signum() } else if e.id[i] % 2 == 0 { 1.0 } else { -1.0 };
+                    e.pos[i] = after + t * (side * e.speed[i] * 0.8 * DT);
+                } else {
+                    e.pos[i] = after;
+                }
+            }
             e.push[i] = e.push[i] * 0.86;
             e.flash[i] = e.flash[i].saturating_sub(1);
             e.orb_cd[i] = e.orb_cd[i].saturating_sub(1);
@@ -1934,6 +1952,25 @@ mod tests {
         w.step(Input::default());
         assert_eq!(w.state, RunState::Dead);
         assert!(w.dawn_out);
+    }
+
+    #[test]
+    fn player_cannot_walk_through_props() {
+        // Find a stall and walk straight at it from the left.
+        let (prop, _) = (-30..30)
+            .flat_map(|cy| (-30..30).map(move |cx| (cx, cy)))
+            .find_map(|(cx, cy)| {
+                let (ps, n) = crate::stage::chunk_props(cx, cy);
+                ps[..n].iter().find(|p| p.kind == crate::stage::PropKind::Stall).map(|p| (*p, ()))
+            })
+            .expect("a stall");
+        let (min, max) = prop.footprint();
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.player.pos = Vec2::new(min.x - 20.0, (min.y + max.y) / 2.0);
+        for _ in 0..120 {
+            w.step(Input { move_dir: Vec2::new(1.0, 0.0), ..Default::default() });
+        }
+        assert!(w.player.pos.x <= min.x - PLAYER_RADIUS + 0.5, "walked into the stall: {:?}", w.player.pos);
     }
 
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
