@@ -52,6 +52,7 @@ fn backdrop(time: f64) {
 pub enum MenuAction {
     Start,
     Shop,
+    Settings,
 }
 
 pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAction> {
@@ -67,8 +68,11 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     if button(Rect::new(x, h * 0.42, bw, bh), "Start", true) || is_key_pressed(KeyCode::Enter) {
         action = Some(MenuAction::Start);
     }
-    if button(Rect::new(x, h * 0.42 + 72.0, bw, bh), "Shrine Shop", true) || is_key_pressed(KeyCode::S) {
+    if button(Rect::new(x, h * 0.42 + 68.0, bw, bh), "Shrine Shop", true) || is_key_pressed(KeyCode::S) {
         action = Some(MenuAction::Shop);
+    }
+    if button(Rect::new(x, h * 0.42 + 136.0, bw, bh), "Settings", true) || is_key_pressed(KeyCode::O) {
+        action = Some(MenuAction::Settings);
     }
 
     let unlocked = profile.unlocked.len();
@@ -87,7 +91,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     for (i, l) in lines.iter().enumerate() {
         centered(l, h - 70.0 + i as f32 * 26.0, 20.0, DIM);
     }
-    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.42 + 170.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
+    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.42 + 290.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
     action
 }
 
@@ -264,4 +268,50 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
         centered(&format!("Refund returns all {} Sen spent.", profile.spent), by + 80.0, 18.0, DIM);
     }
     action
+}
+
+// ───────────────────────── Settings ─────────────────────────
+
+pub enum SettingsAction {
+    Back,
+    /// A volume changed: apply it and save.
+    Changed,
+}
+
+/// A 0..=1 slider with -/+ buttons. Returns true if the value changed.
+fn slider(label: &str, y: f32, v: &mut f32) -> bool {
+    let w = screen_width();
+    let x = w / 2.0 - 300.0;
+    draw_text(label, x, y + 30.0, 26.0, WHITE);
+    let before = *v;
+    if button(Rect::new(x + 200.0, y, 48.0, 44.0), "-", true) {
+        *v -= 0.1;
+    }
+    let (bx, bw) = (x + 260.0, 280.0);
+    draw_rectangle(bx, y + 16.0, bw, 12.0, Color::new(1.0, 1.0, 1.0, 0.12));
+    draw_rectangle(bx, y + 16.0, bw * *v, 12.0, ACCENT);
+    let r = Rect::new(bx, y + 4.0, bw, 36.0);
+    if r.contains(mouse_position().into()) && is_mouse_button_down(MouseButton::Left) {
+        *v = (mouse_position().0 - bx) / bw;
+    }
+    if button(Rect::new(bx + bw + 12.0, y, 48.0, 44.0), "+", true) {
+        *v += 0.1;
+    }
+    *v = (*v * 20.0).round() / 20.0;
+    *v = v.clamp(0.0, 1.0);
+    draw_text(&format!("{:.0}%", *v * 100.0), bx + bw + 72.0, y + 30.0, 24.0, DIM);
+    (*v - before).abs() > 1e-6
+}
+
+pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
+    backdrop(time);
+    let h = screen_height();
+    centered("SETTINGS", h * 0.22, 44.0, ACCENT);
+    let mut changed = slider("Music", h * 0.36, &mut profile.music_volume);
+    changed |= slider("Sound effects", h * 0.36 + 70.0, &mut profile.sfx_volume);
+    centered("All music and sound effects are generated in code.", h * 0.36 + 160.0, 18.0, DIM);
+    if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 200.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
+        return Some(SettingsAction::Back);
+    }
+    changed.then_some(SettingsAction::Changed)
 }

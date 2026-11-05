@@ -217,6 +217,11 @@ pub fn prewarm_font() {
     }
 }
 
+pub fn loading() {
+    clear_background(Color::from_rgba(20, 16, 32, 255));
+    centered("Tuning the shamisen...", screen_height() * 0.5, 28.0, Color::new(1.0, 1.0, 1.0, 0.7));
+}
+
 pub fn title(time: f64) {
     clear_background(Color::from_rgba(20, 16, 32, 255));
     let h = screen_height();

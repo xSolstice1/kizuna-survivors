@@ -6,3 +6,11 @@ edition = "2021"
 [dependencies]
 sim = { path = "../sim" }
 macroquad = "0.4"
+
+# Audio is always on in the browser. Natively it needs libasound, so it's opt-in:
+# `cargo run -p client --features native-audio`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+macroquad = { version = "0.4", features = ["audio"] }
+
+[features]
+native-audio = ["macroquad/audio"]

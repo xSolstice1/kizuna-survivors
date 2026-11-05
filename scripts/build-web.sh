@@ -5,7 +5,8 @@ cd "$(dirname "$0")/.."
 # Build output stays on the same drive as the source: the Windows drive clock can drift from
 # WSL's, and cargo's freshness check compares timestamps across the two.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
-RUSTFLAGS="-C target-feature=+simd128" cargo build -p client --release --target wasm32-unknown-unknown
+# --allow-undefined: quad-snd (macroquad audio) declares its JS imports without a module name.
+RUSTFLAGS="-C target-feature=+simd128 -C link-arg=--allow-undefined" cargo build -p client --release --target wasm32-unknown-unknown
 
 rm -rf dist && mkdir -p dist
 cp web/index.html dist/

@@ -3,12 +3,14 @@ use sim::world::DT;
 use sim::meta::{Profile, RunReport};
 use sim::{Input, RunState, Stress, World, WorldConfig};
 
+mod audio;
 mod chest_ui;
 mod menu;
 mod render;
 mod save;
 mod sprites;
 mod stage;
+mod synth;
 mod ui;
 mod voice;
 
@@ -25,6 +27,7 @@ enum Screen {
     Menu,
     Characters,
     Shop,
+    Settings,
     Playing,
     Paused,
 }
@@ -72,10 +75,24 @@ async fn main() {
 
     ui::prewarm_font();
     next_frame().await;
+    ui::loading();
+    next_frame().await;
+    let mut audio = audio::Audio::load(profile.music_volume, profile.sfx_volume).await;
+    // Which run-end jingle has played (so it plays once).
+    let mut jingle_played = false;
 
     loop {
         let dt = get_frame_time().min(0.1);
         let now = get_time();
+        audio.begin_frame();
+        // UI click feedback on any out-of-run screen.
+        if !matches!(screen, Screen::Playing | Screen::Paused | Screen::Title) && (is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter)) {
+            audio.play(synth::Sfx::Click);
+        }
+        match screen {
+            Screen::Title | Screen::Playing | Screen::Paused => {}
+            _ => audio.set_music(Some(synth::Track::Menu)),
+        }
 
         // --- Out-of-run screens ---
         match screen {
@@ -88,6 +105,17 @@ async fn main() {
             Screen::Menu => match menu::main_menu(&profile, &assets, now) {
                 Some(menu::MenuAction::Start) => screen = Screen::Characters,
                 Some(menu::MenuAction::Shop) => screen = Screen::Shop,
+                Some(menu::MenuAction::Settings) => screen = Screen::Settings,
+                None => {}
+            },
+            Screen::Settings => match menu::settings(&mut profile, now) {
+                Some(menu::SettingsAction::Changed) => {
+                    audio.music_volume = profile.music_volume;
+                    audio.sfx_volume = profile.sfx_volume;
+                    audio.apply_music_volume();
+                    save::store(&profile);
+                }
+                Some(menu::SettingsAction::Back) => screen = Screen::Menu,
                 None => {}
             },
             Screen::Characters => match menu::char_select(&mut profile, &assets, &mut hero_cursor, now) {
@@ -97,13 +125,17 @@ async fn main() {
                     report = None;
                     fx.set_hero(profile.selected);
                     fx.clear();
+                    jingle_played = false;
                     screen = Screen::Playing;
                 }
                 Some(menu::SelectAction::Back) => screen = Screen::Menu,
                 None => {}
             },
             Screen::Shop => match menu::shop(&mut profile, &assets, &mut shop_cursor, now) {
-                Some(menu::ShopAction::Changed) => save::store(&profile),
+                Some(menu::ShopAction::Changed) => {
+                    audio.play(synth::Sfx::Buy);
+                    save::store(&profile);
+                }
                 Some(menu::ShopAction::Back) => screen = Screen::Menu,
                 None => {}
             },
@@ -140,6 +172,17 @@ async fn main() {
             report = Some(profile.record_run(&world));
             save::store(&profile);
         }
+        // Music: battle theme, the boss theme while the Night Lord lives, a jingle at the end.
+        if over {
+            audio.set_music(None);
+            if !jingle_played {
+                jingle_played = true;
+                audio.play(if world.state == RunState::Won { synth::Sfx::Victory } else { synth::Sfx::Defeat });
+            }
+        } else {
+            let boss = world.boss().is_some_and(|b| b.2 == sim::content::EnemyKind::NightLord);
+            audio.set_music(Some(if boss { synth::Track::Boss } else { synth::Track::Battle }));
+        }
         if over && (is_key_pressed(KeyCode::M) || is_key_pressed(KeyCode::Escape)) {
             screen = Screen::Menu;
             next_frame().await;
@@ -151,6 +194,7 @@ async fn main() {
         if restart {
             world = new_world(stress, &profile);
             report = None;
+            jingle_played = false;
             fx.clear();
             screen = Screen::Playing;
         }
@@ -207,6 +251,7 @@ async fn main() {
             while acc >= DT && steps < 4 && !world.paused() {
                 world.step(input);
                 fx.absorb(&world.events);
+                audio.absorb(&world.events);
                 // Delivered exactly once, even if the sim steps several times this frame.
                 input.special = false;
                 special_queued = false;
@@ -244,16 +289,23 @@ async fn main() {
         }
         if let Some(items) = world.chest_result.clone() {
             let anim = chest_anim.get_or_insert_with(|| chest_ui::ChestAnim::new(items));
-            if anim.update_and_draw(&assets, dt) {
+            let done = anim.update_and_draw(&assets, dt);
+            for cue in anim.cues.drain(..) {
+                audio.play(cue);
+            }
+            if done {
+                audio.play(synth::Sfx::Click);
                 world.close_chest();
                 chest_anim = None;
             }
         } else if let Some(offer) = world.shrine_offer.clone() {
             if let Some(choice) = ui::shrine(&offer) {
+                audio.play(if choice.is_some() { synth::Sfx::Chime } else { synth::Sfx::Click });
                 world.choose_shrine(choice);
             }
         } else if let Some(offer) = world.offer.clone() {
             if let Some(i) = ui::level_up(&world, &offer, &assets) {
+                audio.play(synth::Sfx::Click);
                 world.choose(i);
             }
         } else if over {

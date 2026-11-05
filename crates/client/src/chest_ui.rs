@@ -5,6 +5,7 @@ use sim::content::{awakened_name, chest_rarity, Upgrade};
 use sim::world::ChestItem;
 
 use crate::render::Assets;
+use crate::synth::Sfx;
 
 const SHAKE: f32 = 0.9;
 const BURST: f32 = 0.45;
@@ -23,6 +24,8 @@ pub struct ChestAnim {
     t: f32,
     confetti: Vec<Confetti>,
     burst_done: bool,
+    /// Sounds to play this frame (drained by the caller).
+    pub cues: Vec<Sfx>,
 }
 
 fn rarity_color(n: usize, time: f32) -> Color {
@@ -51,7 +54,7 @@ fn centered(text: &str, cx: f32, y: f32, size: f32, color: Color) {
 
 impl ChestAnim {
     pub fn new(items: Vec<ChestItem>) -> Self {
-        ChestAnim { items, t: 0.0, confetti: Vec::new(), burst_done: false }
+        ChestAnim { items, t: 0.0, confetti: Vec::new(), burst_done: false, cues: Vec::new() }
     }
 
     fn reveal_end(&self) -> f32 {
@@ -90,7 +93,20 @@ impl ChestAnim {
             }
             self.t = self.reveal_end(); // skip to the end
         }
+        let before = self.t;
         self.t += dt;
+        let crossed = |at: f32| before < at && self.t >= at || (before == 0.0 && at == 0.0);
+        if crossed(0.0) {
+            self.cues.push(Sfx::ChestShake);
+        }
+        if crossed(SHAKE) {
+            self.cues.push(if self.items.len() >= 5 { Sfx::ChestLegendary } else { Sfx::ChestBurst });
+        }
+        for k in 0..self.items.len() {
+            if crossed(SHAKE + BURST + k as f32 * CARD_EVERY) {
+                self.cues.push(Sfx::Card);
+            }
+        }
 
         let (w, h) = (screen_width(), screen_height());
         let center = vec2(w / 2.0, h * 0.40);
