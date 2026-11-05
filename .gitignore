@@ -4,3 +4,6 @@ dist/
 
 # Design notes stay local
 PLAN.md
+
+# Local design docs (characters, story)
+design/
