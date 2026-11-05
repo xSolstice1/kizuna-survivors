@@ -2,6 +2,7 @@ use macroquad::prelude::*;
 use sim::world::DT;
 use sim::{Input, RunState, Stress, World, WorldConfig};
 
+mod chest_ui;
 mod render;
 mod sprites;
 mod ui;
@@ -50,6 +51,7 @@ async fn main() {
     let mut world = new_world(stress);
     let mut acc = 0.0f32;
     let mut sim_ms = 0.0f32;
+    let mut chest_anim: Option<chest_ui::ChestAnim> = None;
 
     loop {
         let dt = get_frame_time().min(0.1);
@@ -89,7 +91,8 @@ async fn main() {
             fx.clear();
             screen = Screen::Playing;
         }
-        // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest.
+        // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest,
+        // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots).
         if is_key_pressed(KeyCode::F2) {
             world.time = world.time.max(sim::content::MIDBOSS_AT - 3.0);
         }
@@ -97,7 +100,13 @@ async fn main() {
             world.debug_max_loadout();
         }
         if is_key_pressed(KeyCode::F4) && !world.paused() {
-            world.open_chest(3);
+            world.open_chest(1);
+        }
+        if is_key_pressed(KeyCode::F5) && !world.paused() {
+            world.open_chest(5);
+        }
+        if is_key_pressed(KeyCode::F6) {
+            world.debug_all_weapons();
         }
         if let Some(s) = stress.as_mut() {
             let mut changed = true;
@@ -152,18 +161,20 @@ async fn main() {
         let cam = render::camera_for(&world, &fx);
         render::draw_world(&world, &assets, &fx, &cam, now);
         set_default_camera();
-        ui::hud(&world);
+        ui::hud(&world, &assets);
         ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
 
-        if let Some((text, left)) = &fx.banner {
+        if let (Some((text, left)), false) = (&fx.banner, world.paused()) {
             ui::banner(text, *left);
         }
         if let Some(items) = world.chest_result.clone() {
-            if ui::chest(&items) {
+            let anim = chest_anim.get_or_insert_with(|| chest_ui::ChestAnim::new(items));
+            if anim.update_and_draw(&assets, dt) {
                 world.close_chest();
+                chest_anim = None;
             }
         } else if let Some(offer) = world.offer.clone() {
-            if let Some(i) = ui::level_up(&world, &offer) {
+            if let Some(i) = ui::level_up(&world, &offer, &assets) {
                 world.choose(i);
             }
         } else if over {

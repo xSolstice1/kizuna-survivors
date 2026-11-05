@@ -1233,6 +1233,15 @@ impl World {
         }
     }
 
+    /// Dev shortcut: every library weapon at level 5, ignoring the hero's pool and slots.
+    pub fn debug_all_weapons(&mut self) {
+        for k in ALL_WEAPONS {
+            if self.weapon_level(k) == 0 {
+                self.weapons.push(OwnedWeapon { kind: k, level: 5, awakened: false, timer: 0.0, phase: 0.0 });
+            }
+        }
+    }
+
     /// Cheap fingerprint of the world state, for determinism tests.
     pub fn state_hash(&self) -> u64 {
         let mut h: u64 = 0xcbf29ce484222325;

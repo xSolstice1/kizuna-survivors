@@ -1,9 +1,10 @@
 //! Screen-space UI: HUD, level-up cards, title / pause / results screens.
 
 use macroquad::prelude::*;
-use sim::content::{awakened_name, Upgrade, RUN_SECONDS};
-use sim::world::ChestItem;
+use sim::content::{awakened_name, complement, hero_def, Upgrade, RUN_SECONDS};
 use sim::World;
+
+use crate::render::Assets;
 
 const PANEL: Color = Color::new(0.06, 0.05, 0.10, 0.85);
 const ACCENT: Color = Color::new(1.0, 0.43, 0.63, 1.0);
@@ -19,7 +20,7 @@ fn fmt_time(t: f32) -> String {
     format!("{:02}:{:02}", s / 60, s % 60)
 }
 
-pub fn hud(world: &World) {
+pub fn hud(world: &World, assets: &Assets) {
     let w = screen_width();
     // XP bar across the top.
     let frac = world.player.xp as f32 / world.xp_to_next() as f32;
@@ -55,30 +56,39 @@ pub fn hud(world: &World) {
     if full {
         draw_text("PURIFY  [Space]", 222.0, 51.0, 18.0, Color::new(1.0, 0.9, 0.5, glow));
     }
-    let mut y = 72.0;
+    let hero = hero_def(world.cfg.hero);
+    let dim = Color::new(1.0, 1.0, 1.0, 0.5);
+    let mut y = 70.0;
+    draw_text(&format!("WEAPONS {}/{}", world.weapons.len(), hero.weapon_slots), 16.0, y, 14.0, dim);
+    y += 6.0;
     for wpn in &world.weapons {
         let label = if wpn.awakened {
-            format!("{}  *", awakened_name(wpn.kind))
+            awakened_name(wpn.kind).to_string()
         } else {
             format!("{}  Lv{}", Upgrade::Weapon(wpn.kind).name(), wpn.level)
         };
         let c = if wpn.awakened { Color::new(1.0, 0.85, 0.4, 1.0) } else { Color::new(1.0, 0.85, 0.9, 1.0) };
-        draw_text(&label, 16.0, y, 18.0, c);
-        y += 18.0;
+        draw_texture(assets.icon(Upgrade::Weapon(wpn.kind)), 16.0, y, WHITE);
+        draw_text(&label, 38.0, y + 13.0, 18.0, c);
+        y += 19.0;
     }
+    y += 12.0;
+    draw_text(&format!("PASSIVES {}/{}", world.passives.len(), hero.passive_slots), 16.0, y, 14.0, dim);
+    y += 6.0;
     for (k, l) in &world.passives {
-        draw_text(&format!("{}  Lv{}", Upgrade::Passive(*k).name(), l), 16.0, y, 16.0, Color::new(0.8, 0.85, 1.0, 1.0));
-        y += 16.0;
+        draw_texture(assets.icon(Upgrade::Passive(*k)), 16.0, y, WHITE);
+        draw_text(&format!("{}  Lv{}", Upgrade::Passive(*k).name(), l), 38.0, y + 13.0, 16.0, Color::new(0.8, 0.85, 1.0, 1.0));
+        y += 18.0;
     }
 }
 
 /// Draws the level-up cards; returns the index of a card that was clicked or picked with 1/2/3.
-pub fn level_up(world: &World, offer: &[Upgrade]) -> Option<usize> {
+pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usize> {
     draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.55));
     centered("LEVEL UP!", screen_height() * 0.22, 48.0, ACCENT);
     centered("Choose an upgrade  (click or press 1-3)", screen_height() * 0.22 + 30.0, 20.0, WHITE);
 
-    let (cw, ch, gap) = (260.0, 170.0, 24.0);
+    let (cw, ch, gap) = (270.0, 200.0, 24.0);
     let total = offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap;
     let x0 = (screen_width() - total) / 2.0;
     let y0 = screen_height() * 0.36;
@@ -97,12 +107,21 @@ pub fn level_up(world: &World, offer: &[Upgrade]) -> Option<usize> {
             Upgrade::Heal => "FOOD".to_string(),
             _ => format!("LEVEL {lvl}"),
         };
-        draw_text(&format!("[{}]", i + 1), x + 12.0, y0 + 26.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.5));
-        draw_text(u.name(), x + 50.0, y0 + 28.0, 26.0, WHITE);
-        draw_text(&tag, x + 50.0, y0 + 48.0, 16.0, ACCENT);
+        draw_text(&format!("{}", i + 1), x + cw - 22.0, y0 + 24.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.4));
+        draw_rectangle(x + 12.0, y0 + 12.0, 52.0, 52.0, Color::new(1.0, 1.0, 1.0, 0.06));
+        draw_texture_ex(assets.icon(u), x + 14.0, y0 + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(48.0, 48.0)), ..Default::default() });
+        draw_text(u.name(), x + 76.0, y0 + 36.0, 24.0, WHITE);
+        draw_text(&tag, x + 76.0, y0 + 56.0, 16.0, ACCENT);
+        if let Upgrade::Weapon(k) = u {
+            let (p, need) = complement(k);
+            let owned = world.passive_level(p) >= need;
+            let txt = format!("Awaken with: {}{}", Upgrade::Passive(p).name(), if owned { " (owned)" } else { "" });
+            let c = if owned { Color::new(0.45, 1.0, 0.6, 1.0) } else { Color::new(1.0, 1.0, 1.0, 0.45) };
+            draw_text(&txt, x + 14.0, y0 + ch - 14.0, 16.0, c);
+        }
         // Naive word wrap for the description.
         let mut line = String::new();
-        let mut ly = y0 + 82.0;
+        let mut ly = y0 + 92.0;
         for word in u.describe(lvl).split_whitespace() {
             if measure_text(&format!("{line} {word}"), None, 18, 1.0).width > cw - 28.0 {
                 draw_text(&line, x + 14.0, ly, 18.0, Color::new(0.9, 0.9, 0.95, 1.0));
@@ -125,23 +144,6 @@ pub fn level_up(world: &World, offer: &[Upgrade]) -> Option<usize> {
         }
     }
     picked
-}
-
-/// Chest rewards; returns true when the player dismisses it.
-pub fn chest(items: &[ChestItem]) -> bool {
-    draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.6));
-    let h = screen_height();
-    centered("TREASURE!", h * 0.28, 52.0, Color::new(1.0, 0.82, 0.35, 1.0));
-    for (i, item) in items.iter().enumerate() {
-        let y = h * 0.40 + i as f32 * 40.0;
-        match item {
-            ChestItem::Awakening(k) => centered(&format!("AWAKENING:  {}", awakened_name(*k)), y, 34.0, Color::new(1.0, 0.85, 0.35, 1.0)),
-            ChestItem::LevelUp(u, lvl) => centered(&format!("{}  ->  Lv{}", u.name(), lvl), y, 26.0, WHITE),
-            ChestItem::Heal => centered("Onigiri  +30 HP", y, 26.0, WHITE),
-        }
-    }
-    centered("Click or press Enter to continue", h * 0.78, 22.0, Color::new(1.0, 1.0, 1.0, 0.7));
-    is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space)
 }
 
 pub fn banner(text: &str, left: f32) {
