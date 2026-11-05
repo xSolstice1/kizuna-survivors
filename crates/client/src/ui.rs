@@ -1,7 +1,7 @@
 //! Screen-space UI: HUD, level-up cards, title / pause / results screens.
 
 use macroquad::prelude::*;
-use sim::content::{awakened_name, complement, hero_def, ShrineEvent, Upgrade, RUN_SECONDS};
+use sim::content::{awakened_name, complement, hero_def, EnemyKind, ShrineEvent, Upgrade, DAWN_LIMIT, RUN_SECONDS};
 use sim::World;
 
 use crate::render::Assets;
@@ -28,13 +28,18 @@ pub fn hud(world: &World, assets: &Assets) {
     draw_rectangle(0.0, 0.0, w * frac.min(1.0), 14.0, XP_BLUE);
     draw_text(&format!("LV {}", world.player.level), w - 70.0, 12.0, 18.0, WHITE);
 
-    // Timer (counts toward dawn) + kills.
-    let remaining = RUN_SECONDS - world.time;
+    // Timer: counts to the Night Lord, then to dawn (which takes the player if it still lives).
     centered(&fmt_time(world.time), 44.0, 34.0, WHITE);
-    centered(&format!("dawn in {}", fmt_time(remaining)), 64.0, 18.0, Color::new(1.0, 1.0, 1.0, 0.6));
-    if let Some((_, frac)) = world.boss() {
+    if world.time < RUN_SECONDS {
+        centered(&format!("the Night Lord comes in {}", fmt_time(RUN_SECONDS - world.time)), 64.0, 18.0, Color::new(1.0, 1.0, 1.0, 0.6));
+    } else {
+        let a = 0.7 + 0.3 * (get_time() * 4.0).sin() as f32;
+        centered(&format!("defeat it before dawn: {}", fmt_time(DAWN_LIMIT - world.time)), 64.0, 18.0, Color::new(1.0, 0.55, 0.45, a));
+    }
+    if let Some((_, frac, kind)) = world.boss() {
         let (bw, bx) = (420.0, (w - 420.0) / 2.0);
-        centered("GREAT ONI", 88.0, 18.0, Color::new(1.0, 0.8, 0.8, 1.0));
+        let name = if kind == EnemyKind::NightLord { "NIGHT LORD  -  CHOCHIN DAIMYO" } else { "GREAT ONI" };
+        centered(name, 88.0, 18.0, Color::new(1.0, 0.8, 0.8, 1.0));
         draw_rectangle(bx, 94.0, bw, 10.0, Color::from_rgba(40, 10, 20, 230));
         draw_rectangle(bx, 94.0, bw * frac, 10.0, Color::from_rgba(230, 60, 70, 255));
         draw_rectangle_lines(bx, 94.0, bw, 10.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.4));
@@ -202,8 +207,8 @@ pub fn title(time: f64) {
     clear_background(Color::from_rgba(20, 16, 32, 255));
     let h = screen_height();
     centered("KIZUNA SURVIVORS", h * 0.36, 72.0, ACCENT);
-    centered("Heroes of many stories. One night. Survive until dawn.", h * 0.36 + 30.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.6));
-    centered("Survive until dawn. Your talismans fire on their own.", h * 0.52, 22.0, WHITE);
+    centered("Heroes of many stories. One night. Defeat the Night Lord before dawn.", h * 0.36 + 30.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.6));
+    centered("Survive the night. Your talismans fire on their own.", h * 0.52, 22.0, WHITE);
     centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.52 + 28.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
     let a = 0.55 + 0.45 * (time * 3.0).sin() as f32;
     centered("Click or press Enter to start", h * 0.72, 30.0, Color::new(1.0, 1.0, 1.0, a));
@@ -221,6 +226,9 @@ pub fn results(world: &World, won: bool) {
     if won {
         centered("DAWN BREAKS", h * 0.32, 64.0, Color::new(1.0, 0.85, 0.5, 1.0));
         centered("Ren: \"Entry closed. Sunrise logged.\"", h * 0.32 + 34.0, 22.0, WHITE);
+    } else if world.dawn_out {
+        centered("DAWN WITHOUT VICTORY", h * 0.32, 64.0, Color::new(1.0, 0.6, 0.4, 1.0));
+        centered("Ren: \"It slipped back into the dark. Next night.\"", h * 0.32 + 34.0, 22.0, WHITE);
     } else {
         centered("FALLEN", h * 0.32, 64.0, ACCENT);
         centered("Ren: \"...to be continued.\"", h * 0.32 + 34.0, 22.0, WHITE);

@@ -14,6 +14,9 @@ pub struct Assets {
     pub wisp: Texture2D,
     pub kasa: Texture2D,
     pub oni: Texture2D,
+    pub chochin: Texture2D,
+    pub nopperabo: Texture2D,
+    pub night_lord: Texture2D,
     pub talisman: Texture2D,
     pub orb: Texture2D,
     pub gem: Texture2D,
@@ -34,6 +37,9 @@ impl Assets {
             wisp: sprites::texture(include_str!("../../../art/src/wisp.px")),
             kasa: sprites::texture(include_str!("../../../art/src/kasa.px")),
             oni: sprites::texture(include_str!("../../../art/src/oni.px")),
+            chochin: sprites::texture(include_str!("../../../art/src/chochin.px")),
+            nopperabo: sprites::texture(include_str!("../../../art/src/nopperabo.px")),
+            night_lord: sprites::texture(include_str!("../../../art/src/night_lord.px")),
             talisman: sprites::texture(include_str!("../../../art/src/talisman.px")),
             orb: sprites::texture(include_str!("../../../art/src/orb.px")),
             gem: sprites::texture(include_str!("../../../art/src/gem.px")),
@@ -176,7 +182,14 @@ impl Fx {
                         EnemyKind::Kasa => (6, Color::from_rgba(194, 59, 59, 255)),
                         EnemyKind::Oni => (24, Color::from_rgba(240, 122, 90, 255)),
                         EnemyKind::GreatOni => (80, Color::from_rgba(255, 200, 90, 255)),
+                        EnemyKind::Chochin => (8, Color::from_rgba(255, 150, 70, 255)),
+                        EnemyKind::Nopperabo => (8, Color::from_rgba(200, 180, 230, 255)),
+                        EnemyKind::NightLord => (200, Color::from_rgba(255, 220, 120, 255)),
                     };
+                    if kind == EnemyKind::NightLord {
+                        self.shake = self.shake.max(0.6);
+                        self.say("Case closed. Sunrise is mine.");
+                    }
                     for k in 0..n {
                         if self.particles.len() >= MAX_PARTICLES {
                             break;
@@ -205,6 +218,26 @@ impl Fx {
                 Event::BossSpawned => {
                     self.announce("A GREAT ONI APPROACHES".into());
                     self.say("You're not in my ledger. Let's fix that.");
+                }
+                Event::NightLordSpawned => {
+                    self.announce("THE NIGHT LORD RISES".into());
+                    self.say("The big lantern. Before dawn, then.");
+                    self.shake = self.shake.max(0.4);
+                }
+                Event::Blink { pos } => {
+                    for k in 0..10 {
+                        if self.particles.len() >= MAX_PARTICLES {
+                            break;
+                        }
+                        let a = k as f32 / 10.0 * std::f32::consts::TAU;
+                        self.particles.push(Particle {
+                            pos: vec2(pos.x, pos.y - 8.0),
+                            vel: vec2(a.cos(), a.sin()) * 40.0,
+                            age: 0.0,
+                            life: 0.35,
+                            color: Color::from_rgba(190, 170, 230, 255),
+                        });
+                    }
                 }
                 Event::BossTelegraph => self.shake = self.shake.max(0.08),
                 Event::ShrineAppeared => {
@@ -378,11 +411,36 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             );
             continue;
         }
+        if e.kind[i] == EnemyKind::NightLord {
+            // Big, bobbing lantern with a warm glow; drawn at 2x (96px).
+            let bob = ((time * 2.0).sin() * 3.0) as f32;
+            let glow = 0.18 + 0.06 * (time * 5.0).sin() as f32;
+            draw_circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
+            draw_ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
+            draw_texture_ex(
+                &a.night_lord,
+                (pos.x - 48.0).round(),
+                (pos.y - 84.0 + bob).round(),
+                tint,
+                DrawTextureParams { dest_size: Some(vec2(96.0, 96.0)), ..Default::default() },
+            );
+            continue;
+        }
         let (tex, half, bottom) = match e.kind[i] {
             EnemyKind::Wisp => (&a.wisp, 8.0, 8.0),
             EnemyKind::Kasa => (&a.kasa, 8.0, 12.0),
+            EnemyKind::Chochin => (&a.chochin, 8.0, 14.0),
+            EnemyKind::Nopperabo => (&a.nopperabo, 8.0, 20.0),
             _ => (&a.oni, 16.0, 26.0),
         };
+        let mut tint = tint;
+        if e.kind[i] == EnemyKind::Chochin {
+            draw_circle(pos.x, pos.y - 4.0, 11.0, Color::new(1.0, 0.6, 0.25, 0.14));
+        } else if e.kind[i] == EnemyKind::Nopperabo && e.ai_state[i] != 0 {
+            // Fading out before a blink (state 1), fading back in after it (state 2).
+            let t = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
+            tint.a = t.clamp(0.1, 1.0) * 0.85;
+        }
         draw_texture_ex(&tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { flip_x: flip, ..Default::default() });
     }
 
@@ -470,6 +528,15 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             ink,
             DrawTextureParams { rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() },
         );
+    }
+
+    // Enemy fireballs: drawn above everything so they always read as danger.
+    for s in &world.shots {
+        let r = sim::content::SHOT_RADIUS;
+        let flick = 0.8 + 0.2 * (time as f32 * 20.0 + s.pos.x).sin();
+        draw_circle(s.pos.x, s.pos.y, r * 2.0, Color::new(1.0, 0.35, 0.15, 0.22 * flick));
+        draw_circle(s.pos.x, s.pos.y, r, Color::new(1.0, 0.45, 0.2, 1.0));
+        draw_circle(s.pos.x, s.pos.y, r * 0.5, Color::new(1.0, 0.95, 0.7, 1.0));
     }
 
     for (c, age) in &fx.rings {
