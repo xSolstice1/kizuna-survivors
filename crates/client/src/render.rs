@@ -316,20 +316,26 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
         let t = (st.delay / 0.6).clamp(0.0, 1.0);
         draw_circle_lines(st.pos.x, st.pos.y, st.radius * (0.4 + 0.6 * t), 1.5, Color::new(1.0, 0.95, 0.5, 0.7));
     }
-    for g in &world.gems.pos {
-        draw_texture(&a.gem, (g.x - 3.5).round(), (g.y - 3.5).round(), WHITE);
-    }
-    if let Some((g, _)) = world.gems.overflow {
-        let bob = (time * 4.0).sin() as f32;
+    // Gems: tier by value (merged gems are worth more and look it).
+    for (g, &v) in world.gems.pos.iter().zip(&world.gems.value) {
+        let (size, tint) = match v {
+            0..=4 => (7.0, WHITE),
+            5..=24 => (9.0, Color::new(0.45, 1.0, 0.45, 1.0)),
+            25..=99 => (11.0, Color::new(1.0, 0.4, 0.45, 1.0)),
+            _ => (14.0, Color::new(1.0, 0.85, 0.3, 1.0)),
+        };
+        if v >= 25 {
+            let pulse = 0.2 + 0.1 * (time * 4.0 + g.x as f64).sin() as f32;
+            draw_circle(g.x, g.y, size * 0.9, Color::new(tint.r, tint.g, tint.b, pulse));
+        }
         draw_texture_ex(
             &a.gem,
-            (g.x - 7.0).round(),
-            (g.y - 7.0 + bob).round(),
-            Color::new(1.0, 0.35, 0.45, 1.0),
-            DrawTextureParams { dest_size: Some(vec2(14.0, 14.0)), ..Default::default() },
+            (g.x - size / 2.0).round(),
+            (g.y - size / 2.0).round(),
+            tint,
+            DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() },
         );
     }
-
     for (c, tier) in &world.chests {
         let bob = ((time * 3.0).sin() * 1.5) as f32;
         let size = if *tier >= 3 { 2.0 } else { 1.0 };

@@ -184,7 +184,7 @@ pub fn results(world: &World, won: bool) {
     let lines = [
         format!("Survived  {}", fmt_time(world.time)),
         format!("Level  {}", world.player.level),
-        format!("Kegare banished  {}", world.kills),
+        format!("Otherworlders defeated  {}", world.kills),
     ];
     for (i, l) in lines.iter().enumerate() {
         centered(l, h * 0.50 + i as f32 * 30.0, 26.0, WHITE);

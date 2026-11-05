@@ -52,6 +52,8 @@ async fn main() {
     let mut acc = 0.0f32;
     let mut sim_ms = 0.0f32;
     let mut chest_anim: Option<chest_ui::ChestAnim> = None;
+    // Space is latched until the sim next steps; at high refresh rates many frames take no step.
+    let mut special_queued = false;
 
     loop {
         let dt = get_frame_time().min(0.1);
@@ -130,14 +132,16 @@ async fn main() {
         if screen == Screen::Playing && !world.paused() {
             acc += dt;
             let mut input = read_input();
-            // A press must reach the sim exactly once even if it steps several times this frame.
-            input.special = is_key_pressed(KeyCode::Space);
+            special_queued |= is_key_pressed(KeyCode::Space);
+            input.special = special_queued;
             let t0 = get_time();
             let mut steps = 0;
             while acc >= DT && steps < 4 && !world.paused() {
                 world.step(input);
                 fx.absorb(&world.events);
+                // Delivered exactly once, even if the sim steps several times this frame.
                 input.special = false;
+                special_queued = false;
                 acc -= DT;
                 steps += 1;
             }
@@ -154,6 +158,8 @@ async fn main() {
             fx.update(dt);
         } else {
             acc = 0.0;
+            // Space on a menu (e.g. dismissing a chest) must not fire Purify afterwards.
+            special_queued = false;
         }
 
         // --- Render ---
