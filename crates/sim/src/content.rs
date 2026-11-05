@@ -149,7 +149,7 @@ impl Upgrade {
             Upgrade::Weapon(k) => {
                 let a = weapon_stats(k, next_level - 1);
                 let b = weapon_stats(k, next_level);
-                let mut parts = vec![format!("Damage {:.0} → {:.0}", a.damage, b.damage)];
+                let mut parts = vec![format!("Damage {:.0} -> {:.0}", a.damage, b.damage)];
                 if b.amount != a.amount {
                     parts.push(format!("+{} {}", b.amount - a.amount, if k == WeaponKind::MoonOrbs { "orb" } else { "talisman" }));
                 }
@@ -166,7 +166,7 @@ impl Upgrade {
             }
             Upgrade::Passive(p) => match p {
                 PassiveKind::Might => "+10% damage.".into(),
-                PassiveKind::Haste => "−8% weapon cooldown.".into(),
+                PassiveKind::Haste => "-8% weapon cooldown.".into(),
                 PassiveKind::Expanse => "+10% area of effect.".into(),
                 PassiveKind::Swiftness => "+8% move speed.".into(),
                 PassiveKind::Magnet => "+30% pickup radius.".into(),
