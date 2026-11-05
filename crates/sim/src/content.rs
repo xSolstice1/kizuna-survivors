@@ -390,9 +390,9 @@ impl Upgrade {
     pub fn describe(self, next_level: u8) -> String {
         match self {
             Upgrade::Weapon(k) if next_level == 1 => match k {
-                WeaponKind::Ofuda => "Throws homing paper talismans at the nearest Kegare.",
+                WeaponKind::Ofuda => "Throws homing paper talismans at the nearest enemy.",
                 WeaponKind::MoonOrbs => "Moon orbs circle you, striking what they touch.",
-                WeaponKind::SakuraField => "A ring of sakura petals hurts nearby Kegare.",
+                WeaponKind::SakuraField => "A ring of sakura petals hurts nearby enemies.",
                 WeaponKind::ThunderChain => "A bolt leaps between nearby enemies.",
                 WeaponKind::Taiko => "Drum beats send out a damaging shockwave.",
                 WeaponKind::StarFall => "Stars crash down on enemies around you.",
@@ -474,7 +474,7 @@ pub fn chest_rarity(count: usize) -> &'static str {
 
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;
-    (5.0 + 3.5 * l + 0.25 * l * l).round() as u32
+    (5.0 + 3.5 * l + 0.35 * l * l).round() as u32
 }
 
 /// Minimum enemies alive at time `t` (seconds). Linear between keyframes.
@@ -485,10 +485,10 @@ pub fn min_alive(t: f32) -> usize {
         (180.0, 150.0),
         (300.0, 220.0),
         (480.0, 380.0),
-        (660.0, 600.0),
-        (780.0, 850.0),
-        (870.0, 1300.0),
-        (900.0, 1500.0),
+        (660.0, 700.0),
+        (780.0, 1100.0),
+        (870.0, 1700.0),
+        (900.0, 2000.0),
     ];
     let m = t.min(900.0);
     for w in KEYS.windows(2) {
@@ -500,9 +500,9 @@ pub fn min_alive(t: f32) -> usize {
     KEYS[KEYS.len() - 1].1 as usize
 }
 
-/// Max new enemies per tick when below `min_alive`: 4 at the start, ~19 by 15:00.
+/// Max new enemies per tick when below `min_alive`: 4 at the start, 24 by 15:00.
 pub fn refill_per_tick(t: f32) -> usize {
-    4 + (t / 60.0) as usize
+    4 + (t / 45.0) as usize
 }
 
 /// Share of new spawns that are Kasa (umbrella) instead of Wisp.
@@ -517,7 +517,21 @@ pub fn kasa_share(t: f32) -> f32 {
 /// Enemy HP multiplier over the run.
 pub fn hp_scale(t: f32) -> f32 {
     let m = t / 60.0;
-    1.0 + 0.12 * m + 0.02 * m * m
+    1.0 + 0.15 * m + 0.03 * m * m
+}
+
+/// Enemy contact-damage multiplier over the run: 1x at the start, 2.5x by 15:00.
+pub fn damage_scale(t: f32) -> f32 {
+    1.0 + t / 600.0
+}
+
+/// Seconds between Oni elites: every 2 minutes, every minute from 10:00.
+pub fn elite_interval(t: f32) -> f32 {
+    if t >= 600.0 {
+        60.0
+    } else {
+        120.0
+    }
 }
 
 pub const ELITE_EVERY: f32 = 120.0;
@@ -536,7 +550,7 @@ mod tests {
             prev = n;
         }
         assert_eq!(min_alive(0.0), 25);
-        assert_eq!(min_alive(900.0), 1500);
+        assert_eq!(min_alive(900.0), 2000);
     }
 
     #[test]

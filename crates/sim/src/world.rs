@@ -11,7 +11,10 @@ const PLAYER_RADIUS: f32 = 8.0;
 const PROJECTILE_RADIUS: f32 = 4.0;
 const SEPARATION_NEIGHBOURS: u32 = 10;
 const MAX_ENEMIES: usize = 4000;
-const MAX_GEMS: usize = 400;
+/// When this many gems are on the field, nearby gems merge into higher-value ones...
+const GEM_MERGE_AT: usize = 400;
+/// ...until at most this many remain.
+const GEM_MERGE_TO: usize = 250;
 const ORB_RADIUS: f32 = 8.0;
 const ORB_ORBIT: f32 = 46.0;
 const FIELD_RADIUS: f32 = 44.0;
@@ -210,8 +213,37 @@ impl Projectiles {
 pub struct Gems {
     pub pos: Vec<Vec2>,
     pub value: Vec<u32>,
-    /// Excess XP once MAX_GEMS is reached collects into one big gem.
-    pub overflow: Option<(Vec2, u32)>,
+}
+
+impl Gems {
+    /// Merges gems that share a grid cell into one gem holding their total value,
+    /// placed at their value-weighted centre. The cell doubles until at most `target`
+    /// gems remain, so XP always stays close to where it dropped. Deterministic.
+    fn merge(&mut self, target: usize) {
+        let mut cell = 48.0f32;
+        while self.pos.len() > target && cell < 4096.0 {
+            let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+            let mut order: Vec<usize> = (0..self.pos.len()).collect();
+            order.sort_by_key(|&i| key(self.pos[i]));
+            let (mut pos, mut value) = (Vec::new(), Vec::new());
+            let mut k = 0;
+            while k < order.len() {
+                let cell_key = key(self.pos[order[k]]);
+                let (mut sum, mut total) = (Vec2::ZERO, 0u32);
+                while k < order.len() && key(self.pos[order[k]]) == cell_key {
+                    let i = order[k];
+                    sum += self.pos[i] * self.value[i] as f32;
+                    total += self.value[i];
+                    k += 1;
+                }
+                pos.push(sum * (1.0 / total as f32));
+                value.push(total);
+            }
+            self.pos = pos;
+            self.value = value;
+            cell *= 2.0;
+        }
+    }
 }
 
 pub struct Player {
@@ -497,7 +529,7 @@ impl World {
         e.hp.push(d.hp * hp_scale(self.time));
         e.speed.push(d.speed * self.rng.range(0.9, 1.1));
         e.radius.push(d.radius);
-        e.damage.push(d.damage);
+        e.damage.push(d.damage * damage_scale(self.time));
         e.xp.push(d.xp);
         e.knock.push(d.knockback);
         e.flash.push(0);
@@ -532,7 +564,7 @@ impl World {
                 self.events.push(Event::BossSpawned);
             }
             if self.time >= self.next_elite {
-                self.next_elite += ELITE_EVERY;
+                self.next_elite += elite_interval(self.time);
                 let p = self.ring_point(self.cfg.spawn_radius);
                 self.spawn_enemy(EnemyKind::Oni, p);
             }
@@ -1017,13 +1049,11 @@ impl World {
     // ───────────── Pickups & levelling ─────────────
 
     fn drop_gem(&mut self, pos: Vec2, value: u32) {
-        if self.gems.pos.len() < MAX_GEMS {
-            self.gems.pos.push(pos);
-            self.gems.value.push(value);
-        } else {
-            let o = self.gems.overflow.get_or_insert((pos, 0));
-            o.1 += value;
+        if self.gems.pos.len() >= GEM_MERGE_AT {
+            self.gems.merge(GEM_MERGE_TO);
         }
+        self.gems.pos.push(pos);
+        self.gems.value.push(value);
     }
 
     fn gain_xp(&mut self, amount: u32) {
@@ -1055,15 +1085,6 @@ impl World {
                 self.gems.pos[i] += d.normalize_or_zero() * (280.0 * DT);
             }
             i += 1;
-        }
-        if let Some((pos, value)) = self.gems.overflow {
-            let d = p - pos;
-            if d.length_sq() < grab2 {
-                gained += value;
-                self.gems.overflow = None;
-            } else if d.length_sq() < magnet * magnet {
-                self.gems.overflow = Some((pos + d.normalize_or_zero() * (280.0 * DT), value));
-            }
         }
         if gained > 0 {
             self.gain_xp(gained);
@@ -1487,11 +1508,33 @@ mod tests {
         assert_eq!(w.awakenable(), vec![WeaponKind::Ofuda]);
     }
 
+    #[test]
+    fn far_kills_still_drop_gems_and_merging_keeps_all_xp() {
+        let mut w = World::new(WorldConfig::default());
+        // Fill the field far from the player, past the merge threshold.
+        for k in 0..(GEM_MERGE_AT as u32 + 300) {
+            let p = Vec2::new(600.0 + (k % 40) as f32 * 9.0, -300.0 + (k / 40) as f32 * 9.0);
+            w.drop_gem(p, 1);
+        }
+        let total: u32 = w.gems.value.iter().sum();
+        assert_eq!(total, GEM_MERGE_AT as u32 + 300, "merging must not lose XP");
+        assert!(w.gems.pos.len() <= GEM_MERGE_AT);
+        assert!(w.gems.value.iter().any(|v| *v > 1), "some gems should have merged up");
+        // A kill far away, with the field crowded, still leaves a gem right there.
+        let far = Vec2::new(-1500.0, 900.0);
+        w.drop_gem(far, 3);
+        assert!(w.gems.pos.iter().zip(&w.gems.value).any(|(p, v)| (*p - far).length() < 1.0 && *v == 3));
+        // Merged gems stay near where their XP dropped.
+        for p in &w.gems.pos {
+            assert!(p.x > 400.0 || (*p - far).length() < 1.0, "gem drifted to {p:?}");
+        }
+    }
+
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn balance_full_run() {
-        for seed in 1..=4 {
+        for seed in 1..=10 {
             let started = std::time::Instant::now();
             let mut w = World::new(WorldConfig { seed, ..Default::default() });
             while w.state == RunState::Playing {

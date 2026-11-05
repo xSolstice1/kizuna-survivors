@@ -26,7 +26,6 @@ impl World {
             .gems
             .pos
             .iter()
-            .chain(self.gems.overflow.as_ref().map(|(g, _)| g))
             .min_by(|a, b| (**a - p).length_sq().partial_cmp(&(**b - p).length_sq()).unwrap())
             .map_or(Vec2::ZERO, |g| (*g - p).normalize_or_zero());
         Input { move_dir: flee * 0.6 + gem, special }
