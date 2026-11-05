@@ -33,7 +33,7 @@ fn read_input() -> Input {
     if is_key_down(KeyCode::D) || is_key_down(KeyCode::Right) {
         d.x += 1.0;
     }
-    Input { move_dir: d }
+    Input { move_dir: d, ..Default::default() }
 }
 
 fn new_world(stress: Option<Stress>) -> World {
@@ -89,6 +89,16 @@ async fn main() {
             fx.clear();
             screen = Screen::Playing;
         }
+        // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest.
+        if is_key_pressed(KeyCode::F2) {
+            world.time = world.time.max(sim::content::MIDBOSS_AT - 3.0);
+        }
+        if is_key_pressed(KeyCode::F3) {
+            world.debug_max_loadout();
+        }
+        if is_key_pressed(KeyCode::F4) && !world.paused() {
+            world.open_chest(3);
+        }
         if let Some(s) = stress.as_mut() {
             let mut changed = true;
             if is_key_pressed(KeyCode::RightBracket) {
@@ -110,14 +120,21 @@ async fn main() {
         // --- Fixed-timestep sim (paused while a menu or level-up is open) ---
         if screen == Screen::Playing && !world.paused() {
             acc += dt;
-            let input = read_input();
+            let mut input = read_input();
+            // A press must reach the sim exactly once even if it steps several times this frame.
+            input.special = is_key_pressed(KeyCode::Space);
             let t0 = get_time();
             let mut steps = 0;
             while acc >= DT && steps < 4 && !world.paused() {
                 world.step(input);
                 fx.absorb(&world.events);
+                input.special = false;
                 acc -= DT;
                 steps += 1;
+            }
+            if !fx.low_hp_warned && world.player.hp < world.player.max_hp * 0.25 {
+                fx.low_hp_warned = true;
+                fx.say("Not... finished... yet.");
             }
             if steps == 4 {
                 acc = 0.0; // too slow: drop backlog rather than spiral
@@ -138,7 +155,14 @@ async fn main() {
         ui::hud(&world);
         ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
 
-        if let Some(offer) = world.offer.clone() {
+        if let Some((text, left)) = &fx.banner {
+            ui::banner(text, *left);
+        }
+        if let Some(items) = world.chest_result.clone() {
+            if ui::chest(&items) {
+                world.close_chest();
+            }
+        } else if let Some(offer) = world.offer.clone() {
             if let Some(i) = ui::level_up(&world, &offer) {
                 world.choose(i);
             }

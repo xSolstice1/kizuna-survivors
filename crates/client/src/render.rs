@@ -17,6 +17,7 @@ pub struct Assets {
     pub talisman: Texture2D,
     pub orb: Texture2D,
     pub gem: Texture2D,
+    pub chest: Texture2D,
 }
 
 impl Assets {
@@ -33,6 +34,7 @@ impl Assets {
             talisman: sprites::texture(include_str!("../../../art/src/talisman.px")),
             orb: sprites::texture(include_str!("../../../art/src/orb.px")),
             gem: sprites::texture(include_str!("../../../art/src/gem.px")),
+            chest: sprites::texture(include_str!("../../../art/src/chest.px")),
         }
     }
 }
@@ -56,8 +58,16 @@ struct Particle {
 pub struct Fx {
     numbers: Vec<DamageNumber>,
     particles: Vec<Particle>,
+    /// Expanding barrier rings: (centre, age).
+    rings: Vec<(Vec2, f32)>,
     pub shake: f32,
     pub show_numbers: bool,
+    /// Short line spoken by the hero, shown above her head.
+    pub bark: Option<(String, f32)>,
+    /// Big centre-screen announcement.
+    pub banner: Option<(String, f32)>,
+    leveled_once: bool,
+    pub low_hp_warned: bool,
 }
 
 const MAX_NUMBERS: usize = 120;
@@ -71,7 +81,20 @@ impl Fx {
     pub fn clear(&mut self) {
         self.numbers.clear();
         self.particles.clear();
+        self.rings.clear();
         self.shake = 0.0;
+        self.banner = None;
+        self.leveled_once = false;
+        self.low_hp_warned = false;
+        self.say("Night shift. Again.");
+    }
+
+    pub fn say(&mut self, line: &str) {
+        self.bark = Some((line.to_string(), 2.2));
+    }
+
+    pub fn announce(&mut self, text: String) {
+        self.banner = Some((text, 2.8));
     }
 
     pub fn absorb(&mut self, events: &[Event]) {
@@ -88,6 +111,7 @@ impl Fx {
                         EnemyKind::Wisp => (5, Color::from_rgba(155, 111, 214, 255)),
                         EnemyKind::Kasa => (6, Color::from_rgba(194, 59, 59, 255)),
                         EnemyKind::Oni => (24, Color::from_rgba(240, 122, 90, 255)),
+                        EnemyKind::GreatOni => (80, Color::from_rgba(255, 200, 90, 255)),
                     };
                     for k in 0..n {
                         if self.particles.len() >= MAX_PARTICLES {
@@ -105,6 +129,24 @@ impl Fx {
                     }
                 }
                 Event::PlayerHurt => self.shake = self.shake.max(0.18),
+                Event::LevelUp if !self.leveled_once => {
+                    self.leveled_once = true;
+                    self.say("Noted. Moving on.");
+                }
+                Event::SpecialUsed { pos } => {
+                    self.rings.push((vec2(pos.x, pos.y), 0.0));
+                    self.shake = self.shake.max(0.25);
+                    self.say("Purify!");
+                }
+                Event::BossSpawned => {
+                    self.announce("A GREAT ONI APPROACHES".into());
+                    self.say("You're not in my ledger. Let's fix that.");
+                }
+                Event::BossTelegraph => self.shake = self.shake.max(0.08),
+                Event::Awakened(k) => {
+                    self.announce(format!("AWAKENING: {}", sim::content::awakened_name(k)));
+                    self.say("Chapter thirteen starts here.");
+                }
                 _ => {}
             }
         }
@@ -122,7 +164,19 @@ impl Fx {
             p.vel *= 0.9;
         }
         self.particles.retain(|p| p.age < p.life);
+        for r in &mut self.rings {
+            r.1 += dt;
+        }
+        self.rings.retain(|r| r.1 < 0.45);
         self.shake = (self.shake - dt).max(0.0);
+        for t in [&mut self.bark, &mut self.banner] {
+            if let Some((_, left)) = t {
+                *left -= dt;
+                if *left <= 0.0 {
+                    *t = None;
+                }
+            }
+        }
     }
 }
 
@@ -157,9 +211,10 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
     // Sakura Field sits on the ground under everything.
     for w in &world.weapons {
         if w.kind == WeaponKind::SakuraField {
-            let r = world.field_radius(w.level);
+            let r = world.field_radius_of(w);
             let pulse = (1.0 - (w.phase / 0.25).min(1.0)) * 0.12;
-            draw_circle(p.x, p.y, r, Color::new(1.0, 0.55, 0.75, 0.10 + pulse));
+            let base = if w.awakened { Color::new(1.0, 0.75, 0.55, 0.14 + pulse) } else { Color::new(1.0, 0.55, 0.75, 0.10 + pulse) };
+            draw_circle(p.x, p.y, r, base);
             draw_circle_lines(p.x, p.y, r, 1.0, Color::new(1.0, 0.7, 0.85, 0.55));
             for k in 0..10 {
                 let ang = time as f32 * 0.8 + k as f32 * 0.628;
@@ -183,17 +238,54 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
         );
     }
 
+    for (c, tier) in &world.chests {
+        let bob = ((time * 3.0).sin() * 1.5) as f32;
+        let size = if *tier >= 3 { 2.0 } else { 1.0 };
+        draw_circle(c.x, c.y + 2.0, 10.0 * size, Color::new(1.0, 0.85, 0.4, 0.12 + 0.06 * (time * 5.0).sin() as f32));
+        draw_texture_ex(
+            &a.chest,
+            (c.x - 7.0 * size).round(),
+            (c.y - 9.0 * size + bob).round(),
+            WHITE,
+            DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
+        );
+    }
+
     let e = &world.enemies;
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
         let pos = e.pos[i];
         let tint = if e.flash[i] > 0 { flash } else { WHITE };
+        let flip = e.kind[i] != EnemyKind::Wisp && pos.x > p.x;
+        if e.kind[i] == EnemyKind::GreatOni {
+            // Double-size oni; flashes and shows its line while winding up a charge.
+            let winding = e.ai_state[i] == 1;
+            if winding {
+                let d = e.ai_dir[i];
+                draw_line(pos.x, pos.y, pos.x + d.x * 230.0, pos.y + d.y * 230.0, 10.0, Color::new(1.0, 0.2, 0.2, 0.22));
+            }
+            let tint = if winding && ((time * 16.0) as i32) % 2 == 0 {
+                Color::new(1.0, 1.0, 1.0, 1.0)
+            } else if e.flash[i] > 0 {
+                flash
+            } else {
+                Color::new(0.85, 0.7, 1.0, 1.0)
+            };
+            draw_ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+            draw_texture_ex(
+                &a.oni,
+                (pos.x - 32.0).round(),
+                (pos.y - 52.0).round(),
+                tint,
+                DrawTextureParams { flip_x: flip, dest_size: Some(vec2(64.0, 64.0)), ..Default::default() },
+            );
+            continue;
+        }
         let (tex, half, bottom) = match e.kind[i] {
             EnemyKind::Wisp => (&a.wisp, 8.0, 8.0),
             EnemyKind::Kasa => (&a.kasa, 8.0, 12.0),
-            EnemyKind::Oni => (&a.oni, 16.0, 26.0),
+            _ => (&a.oni, 16.0, 26.0),
         };
-        let flip = e.kind[i] != EnemyKind::Wisp && pos.x > p.x;
         draw_texture_ex(&tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { flip_x: flip, ..Default::default() });
     }
 
@@ -217,17 +309,16 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
 
     for w in &world.weapons {
         if w.kind == WeaponKind::MoonOrbs {
-            let s = sim::content::weapon_stats(w.kind, w.level);
-            let (orbit, r) = (world.orb_orbit(w.level), world.orb_radius(w.level));
-            for k in 0..s.amount {
-                let ang = w.phase + k as f32 / s.amount as f32 * std::f32::consts::TAU;
-                let c = vec2(p.x + ang.cos() * orbit, p.y + ang.sin() * orbit);
+            let r = world.orb_radius(w.level);
+            for c in world.orb_positions(w) {
                 draw_circle(c.x, c.y, r * 1.3, Color::new(1.0, 0.95, 0.7, 0.18));
                 draw_texture_ex(&a.orb, c.x - r, c.y - r, WHITE, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
             }
         }
     }
 
+    let gold = world.weapons.iter().any(|w| w.kind == WeaponKind::Ofuda && w.awakened);
+    let ink = if gold { Color::new(1.0, 0.85, 0.35, 1.0) } else { WHITE };
     let pr = &world.projectiles;
     for i in 0..pr.len() {
         let (q, v) = (pr.pos[i], pr.vel[i]);
@@ -235,9 +326,16 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
             &a.talisman,
             q.x - 3.0,
             q.y - 5.0,
-            WHITE,
+            ink,
             DrawTextureParams { rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() },
         );
+    }
+
+    for (c, age) in &fx.rings {
+        let t = age / 0.45;
+        let r = sim::content::BARRIER_RADIUS * (0.2 + 0.8 * t.sqrt());
+        draw_circle(c.x, c.y, r, Color::new(1.0, 0.95, 0.85, 0.18 * (1.0 - t)));
+        draw_circle_lines(c.x, c.y, r, 3.0, Color::new(1.0, 0.9, 0.6, 0.9 * (1.0 - t)));
     }
 
     for pt in &fx.particles {
@@ -255,5 +353,12 @@ pub fn draw_world(world: &World, a: &Assets, fx: &Fx, cam: &Camera2D, time: f64)
         let txt = format!("{:.0}", n.amount);
         draw_text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, 18.0, Color::new(0.0, 0.0, 0.0, alpha));
         draw_text(&txt, s.x - 5.0, s.y, 18.0, Color::new(1.0, 1.0, 1.0, alpha));
+    }
+    if let Some((line, left)) = &fx.bark {
+        let s = cam.world_to_screen(vec2(p.x, p.y - 34.0));
+        let d = measure_text(line, None, 20, 1.0);
+        let alpha = left.min(0.4) / 0.4;
+        draw_rectangle(s.x - d.width / 2.0 - 8.0, s.y - 20.0, d.width + 16.0, 28.0, Color::new(0.05, 0.03, 0.1, 0.8 * alpha));
+        draw_text(line, s.x - d.width / 2.0, s.y, 20.0, Color::new(1.0, 0.9, 0.95, alpha));
     }
 }

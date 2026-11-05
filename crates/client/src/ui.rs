@@ -1,7 +1,8 @@
 //! Screen-space UI: HUD, level-up cards, title / pause / results screens.
 
 use macroquad::prelude::*;
-use sim::content::{Upgrade, RUN_SECONDS};
+use sim::content::{awakened_name, Upgrade, RUN_SECONDS};
+use sim::world::ChestItem;
 use sim::World;
 
 const PANEL: Color = Color::new(0.06, 0.05, 0.10, 0.85);
@@ -30,6 +31,13 @@ pub fn hud(world: &World) {
     let remaining = RUN_SECONDS - world.time;
     centered(&fmt_time(world.time), 44.0, 34.0, WHITE);
     centered(&format!("dawn in {}", fmt_time(remaining)), 64.0, 18.0, Color::new(1.0, 1.0, 1.0, 0.6));
+    if let Some((_, frac)) = world.boss() {
+        let (bw, bx) = (420.0, (w - 420.0) / 2.0);
+        centered("GREAT ONI", 88.0, 18.0, Color::new(1.0, 0.8, 0.8, 1.0));
+        draw_rectangle(bx, 94.0, bw, 10.0, Color::from_rgba(40, 10, 20, 230));
+        draw_rectangle(bx, 94.0, bw * frac, 10.0, Color::from_rgba(230, 60, 70, 255));
+        draw_rectangle_lines(bx, 94.0, bw, 10.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.4));
+    }
     let kills = format!("{} kills", world.kills);
     let d = measure_text(&kills, None, 20, 1.0);
     draw_text(&kills, w - d.width - 16.0, 40.0, 20.0, WHITE);
@@ -39,10 +47,23 @@ pub fn hud(world: &World) {
     draw_rectangle(16.0, 24.0, 200.0, 14.0, Color::from_rgba(40, 20, 30, 230));
     draw_rectangle(16.0, 24.0, 200.0 * (p.hp / p.max_hp), 14.0, Color::from_rgba(255, 80, 110, 255));
     draw_text(&format!("{:.0} / {:.0}", p.hp, p.max_hp), 22.0, 36.0, 16.0, WHITE);
-    let mut y = 60.0;
+    // Special meter.
+    let full = p.special >= 1.0;
+    let glow = if full { 0.75 + 0.25 * (get_time() * 6.0).sin() as f32 } else { 1.0 };
+    draw_rectangle(16.0, 42.0, 200.0, 8.0, Color::from_rgba(30, 30, 50, 230));
+    draw_rectangle(16.0, 42.0, 200.0 * p.special, 8.0, Color::new(1.0 * glow, 0.85 * glow, 0.45 * glow, 1.0));
+    if full {
+        draw_text("PURIFY  [Space]", 222.0, 51.0, 18.0, Color::new(1.0, 0.9, 0.5, glow));
+    }
+    let mut y = 72.0;
     for wpn in &world.weapons {
-        let name = Upgrade::Weapon(wpn.kind).name();
-        draw_text(&format!("{name}  Lv{}", wpn.level), 16.0, y, 18.0, Color::new(1.0, 0.85, 0.9, 1.0));
+        let label = if wpn.awakened {
+            format!("{}  *", awakened_name(wpn.kind))
+        } else {
+            format!("{}  Lv{}", Upgrade::Weapon(wpn.kind).name(), wpn.level)
+        };
+        let c = if wpn.awakened { Color::new(1.0, 0.85, 0.4, 1.0) } else { Color::new(1.0, 0.85, 0.9, 1.0) };
+        draw_text(&label, 16.0, y, 18.0, c);
         y += 18.0;
     }
     for (k, l) in &world.passives {
@@ -55,7 +76,7 @@ pub fn hud(world: &World) {
 pub fn level_up(world: &World, offer: &[Upgrade]) -> Option<usize> {
     draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.55));
     centered("LEVEL UP!", screen_height() * 0.22, 48.0, ACCENT);
-    centered("Choose a blessing  (click or press 1-3)", screen_height() * 0.22 + 30.0, 20.0, WHITE);
+    centered("Choose an upgrade  (click or press 1-3)", screen_height() * 0.22 + 30.0, 20.0, WHITE);
 
     let (cw, ch, gap) = (260.0, 170.0, 24.0);
     let total = offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap;
@@ -72,7 +93,7 @@ pub fn level_up(world: &World, offer: &[Upgrade]) -> Option<usize> {
         let lvl = world.next_level(u);
         let tag = match u {
             Upgrade::Weapon(_) if lvl == 1 => "NEW WEAPON".to_string(),
-            Upgrade::Passive(_) if lvl == 1 => "NEW BLESSING".to_string(),
+            Upgrade::Passive(_) if lvl == 1 => "NEW PASSIVE".to_string(),
             Upgrade::Heal => "FOOD".to_string(),
             _ => format!("LEVEL {lvl}"),
         };
@@ -106,13 +127,38 @@ pub fn level_up(world: &World, offer: &[Upgrade]) -> Option<usize> {
     picked
 }
 
+/// Chest rewards; returns true when the player dismisses it.
+pub fn chest(items: &[ChestItem]) -> bool {
+    draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.0, 0.0, 0.0, 0.6));
+    let h = screen_height();
+    centered("TREASURE!", h * 0.28, 52.0, Color::new(1.0, 0.82, 0.35, 1.0));
+    for (i, item) in items.iter().enumerate() {
+        let y = h * 0.40 + i as f32 * 40.0;
+        match item {
+            ChestItem::Awakening(k) => centered(&format!("AWAKENING:  {}", awakened_name(*k)), y, 34.0, Color::new(1.0, 0.85, 0.35, 1.0)),
+            ChestItem::LevelUp(u, lvl) => centered(&format!("{}  ->  Lv{}", u.name(), lvl), y, 26.0, WHITE),
+            ChestItem::Heal => centered("Onigiri  +30 HP", y, 26.0, WHITE),
+        }
+    }
+    centered("Click or press Enter to continue", h * 0.78, 22.0, Color::new(1.0, 1.0, 1.0, 0.7));
+    is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space)
+}
+
+pub fn banner(text: &str, left: f32) {
+    let a = (left / 0.5).min(1.0);
+    let h = screen_height();
+    // Sits under the timer and boss bar, clear of the chest/level-up titles.
+    draw_rectangle(0.0, h * 0.20 - 40.0, screen_width(), 58.0, Color::new(0.05, 0.02, 0.08, 0.6 * a));
+    centered(text, h * 0.20, 40.0, Color::new(1.0, 0.85, 0.45, a));
+}
+
 pub fn title(time: f64) {
     clear_background(Color::from_rgba(20, 16, 32, 255));
     let h = screen_height();
     centered("KIZUNA SURVIVORS", h * 0.36, 72.0, ACCENT);
     centered("Heroes of many stories. One night. Survive until dawn.", h * 0.36 + 30.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.6));
     centered("Survive until dawn. Your talismans fire on their own.", h * 0.52, 22.0, WHITE);
-    centered("WASD / arrows to move   ·   Esc to pause", h * 0.52 + 28.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
+    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.52 + 28.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
     let a = 0.55 + 0.45 * (time * 3.0).sin() as f32;
     centered("Click or press Enter to start", h * 0.72, 30.0, Color::new(1.0, 1.0, 1.0, a));
 }
@@ -128,10 +174,10 @@ pub fn results(world: &World, won: bool) {
     let h = screen_height();
     if won {
         centered("DAWN BREAKS", h * 0.32, 64.0, Color::new(1.0, 0.85, 0.5, 1.0));
-        centered("The Kegare retreat. You survived the night.", h * 0.32 + 34.0, 22.0, WHITE);
+        centered("Ren: \"Entry closed. Sunrise logged.\"", h * 0.32 + 34.0, 22.0, WHITE);
     } else {
         centered("FALLEN", h * 0.32, 64.0, ACCENT);
-        centered("The Kegare overwhelm you...", h * 0.32 + 34.0, 22.0, WHITE);
+        centered("Ren: \"...to be continued.\"", h * 0.32 + 34.0, 22.0, WHITE);
     }
     let lines = [
         format!("Survived  {}", fmt_time(world.time)),
