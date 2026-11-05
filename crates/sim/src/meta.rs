@@ -1,7 +1,7 @@
 //! Meta-progression: Sen (coins), Shrine Shop power-ups, hero unlocks and the save profile.
 //! The profile is plain `key=value` text so the client can keep it in localStorage.
 
-use crate::content::{HeroId, ALL_HEROES};
+use crate::content::{EnemyKind, HeroId, PassiveKind, ShrineEvent, WeaponKind, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
 use crate::world::{RunState, World};
 
 /// Additive stat bonuses from a hero's innate passive plus Shrine Shop ranks. Neutral by default.
@@ -184,6 +184,15 @@ pub struct Profile {
     pub best_level: u32,
     pub great_onis: u32,
     pub night_lords: u32,
+    /// Collection: kills per enemy kind (indexed like `ALL_ENEMIES`; > 0 = discovered).
+    pub enemy_kills: [u64; ALL_ENEMIES.len()],
+    pub weapons_found: Vec<WeaponKind>,
+    pub awakenings_found: Vec<WeaponKind>,
+    pub passives_found: Vec<PassiveKind>,
+    pub shrines_found: Vec<ShrineEvent>,
+    /// Settings (0..=1).
+    pub music_volume: f32,
+    pub sfx_volume: f32,
 }
 
 impl Default for Profile {
@@ -200,6 +209,13 @@ impl Default for Profile {
             best_level: 0,
             great_onis: 0,
             night_lords: 0,
+            enemy_kills: [0; ALL_ENEMIES.len()],
+            weapons_found: Vec::new(),
+            awakenings_found: Vec::new(),
+            passives_found: Vec::new(),
+            shrines_found: Vec::new(),
+            music_volume: 0.6,
+            sfx_volume: 0.8,
         }
     }
 }
@@ -209,6 +225,8 @@ impl Default for Profile {
 pub struct RunReport {
     pub sen: u32,
     pub unlocked: Vec<HeroId>,
+    /// New Collection entries this run.
+    pub discovered: u32,
 }
 
 impl Profile {
@@ -270,7 +288,29 @@ impl Profile {
         self.great_onis += w.great_oni_defeated as u32;
         let night_lord = w.state == RunState::Won;
         self.night_lords += night_lord as u32;
-        let mut report = RunReport { sen: w.sen, unlocked: Vec::new() };
+        let mut report = RunReport { sen: w.sen, unlocked: Vec::new(), discovered: 0 };
+        for (i, k) in w.kills_by_kind.iter().enumerate() {
+            report.discovered += (self.enemy_kills[i] == 0 && *k > 0) as u32;
+            self.enemy_kills[i] += *k as u64;
+        }
+        fn add<T: PartialEq + Copy>(set: &mut Vec<T>, v: T, n: &mut u32) {
+            if !set.contains(&v) {
+                set.push(v);
+                *n += 1;
+            }
+        }
+        for wpn in &w.weapons {
+            add(&mut self.weapons_found, wpn.kind, &mut report.discovered);
+            if wpn.awakened {
+                add(&mut self.awakenings_found, wpn.kind, &mut report.discovered);
+            }
+        }
+        for (k, _) in &w.passives {
+            add(&mut self.passives_found, *k, &mut report.discovered);
+        }
+        for ev in &w.shrines_taken {
+            add(&mut self.shrines_found, *ev, &mut report.discovered);
+        }
         for h in ALL_HEROES {
             let earned = match h {
                 HeroId::Ren => true,
@@ -283,6 +323,7 @@ impl Profile {
             if earned && !self.is_unlocked(h) {
                 self.unlocked.push(h);
                 report.unlocked.push(h);
+                report.discovered += 1;
             }
         }
         report
@@ -297,6 +338,14 @@ impl Profile {
         for p in ALL_POWERUPS {
             s += &format!("rank.{}={}\n", p.key(), self.rank(p));
         }
+        for (i, k) in ALL_ENEMIES.iter().enumerate() {
+            s += &format!("enemy.{}={}\n", key_of(k), self.enemy_kills[i]);
+        }
+        s += &format!("weapons={}\n", join(&self.weapons_found));
+        s += &format!("awakenings={}\n", join(&self.awakenings_found));
+        s += &format!("passives={}\n", join(&self.passives_found));
+        s += &format!("shrines={}\n", join(&self.shrines_found));
+        s += &format!("music_volume={}\nsfx_volume={}\n", self.music_volume, self.sfx_volume);
         s
     }
 
@@ -327,7 +376,18 @@ impl Profile {
                         }
                     }
                 }
+                "weapons" => p.weapons_found = split(v, &ALL_WEAPONS),
+                "awakenings" => p.awakenings_found = split(v, &ALL_WEAPONS),
+                "passives" => p.passives_found = split(v, &ALL_PASSIVES),
+                "shrines" => p.shrines_found = split(v, &ALL_SHRINE_EVENTS),
+                "music_volume" => p.music_volume = v.parse::<f32>().unwrap_or(0.6).clamp(0.0, 1.0),
+                "sfx_volume" => p.sfx_volume = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
                 _ => {
+                    if let Some(key) = k.strip_prefix("enemy.") {
+                        if let Some(i) = ALL_ENEMIES.iter().position(|e| key_of(e) == key) {
+                            p.enemy_kills[i] = v.parse().unwrap_or(0);
+                        }
+                    }
                     if let Some(key) = k.strip_prefix("rank.") {
                         if let Some(pu) = ALL_POWERUPS.iter().find(|pu| pu.key() == key) {
                             p.ranks[pu.index()] = v.parse::<u8>().unwrap_or(0).min(pu.max_rank());
@@ -343,6 +403,35 @@ impl Profile {
     }
 }
 
+/// Save key for an enum value: its variant name in lower case (never rename variants).
+fn key_of<T: std::fmt::Debug>(v: &T) -> String {
+    format!("{v:?}").to_lowercase()
+}
+
+fn join<T: std::fmt::Debug>(items: &[T]) -> String {
+    items.iter().map(key_of).collect::<Vec<_>>().join(",")
+}
+
+fn split<T: std::fmt::Debug + Copy>(v: &str, all: &[T]) -> Vec<T> {
+    v.split(',').filter_map(|k| all.iter().find(|x| key_of(*x) == k).copied()).collect()
+}
+
+/// Discovered / total entries in the Collection.
+pub fn collection_progress(p: &Profile) -> (usize, usize) {
+    let found = p.enemy_kills.iter().filter(|k| **k > 0).count()
+        + p.weapons_found.len()
+        + p.awakenings_found.len()
+        + p.passives_found.len()
+        + p.shrines_found.len()
+        + p.unlocked.len();
+    let total = ALL_ENEMIES.len() + 2 * ALL_WEAPONS.len() + ALL_PASSIVES.len() + ALL_SHRINE_EVENTS.len() + ALL_HEROES.len();
+    (found, total)
+}
+
+pub fn enemy_found(p: &Profile, k: EnemyKind) -> bool {
+    p.enemy_kills[k.index()] > 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +443,12 @@ mod tests {
         p.ranks[PowerUp::Greed.index()] = 4;
         p.unlocked.push(HeroId::Kaede);
         p.selected = HeroId::Kaede;
+        p.enemy_kills[2] = 77;
+        p.weapons_found = vec![WeaponKind::Ofuda, WeaponKind::Taiko];
+        p.awakenings_found = vec![WeaponKind::Taiko];
+        p.passives_found = vec![PassiveKind::Guard];
+        p.shrines_found = vec![ShrineEvent::GlassBlade];
+        p.music_volume = 0.25;
         assert_eq!(Profile::parse(&p.serialize()), p);
         assert_eq!(Profile::parse("garbage\nsen=abc\nrank.might=99"), Profile { ranks: { let mut r = [0; 11]; r[0] = 5; r }, ..Default::default() });
     }
@@ -381,6 +476,8 @@ mod tests {
         w.state = RunState::Dead;
         let r = p.record_run(&w);
         assert_eq!(r.unlocked, vec![HeroId::Kaede]);
+        assert!(p.weapons_found.contains(&WeaponKind::Ofuda));
+        assert!(r.discovered >= 2, "Kaede + Ofuda");
         assert_eq!(p.sen, 40);
         assert!(p.record_run(&w).unlocked.is_empty(), "only unlocks once");
     }

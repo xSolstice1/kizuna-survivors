@@ -22,6 +22,48 @@ pub enum EnemyKind {
     NightLord,
 }
 
+pub const ALL_ENEMIES: [EnemyKind; 7] = [
+    EnemyKind::Wisp,
+    EnemyKind::Kasa,
+    EnemyKind::Chochin,
+    EnemyKind::Nopperabo,
+    EnemyKind::Oni,
+    EnemyKind::GreatOni,
+    EnemyKind::NightLord,
+];
+
+impl EnemyKind {
+    pub fn index(self) -> usize {
+        ALL_ENEMIES.iter().position(|k| *k == self).unwrap()
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            EnemyKind::Wisp => "Hitodama Wisp",
+            EnemyKind::Kasa => "Kasa-obake",
+            EnemyKind::Chochin => "Chochin-obake",
+            EnemyKind::Nopperabo => "Nopperabo",
+            EnemyKind::Oni => "Oni",
+            EnemyKind::GreatOni => "Great Oni",
+            EnemyKind::NightLord => "Night Lord: Chochin Daimyo",
+        }
+    }
+    /// Collection entry text.
+    pub fn lore(self) -> &'static str {
+        match self {
+            EnemyKind::Wisp => "A stray soul-flame from a story nobody finished. Alone it flickers; a crowd of them smothers.",
+            EnemyKind::Kasa => "An umbrella left behind too long. Hops on one leg and stares with its one eye.",
+            EnemyKind::Chochin => "A paper lantern with a grudge. Keeps its distance and spits fireballs.",
+            EnemyKind::Nopperabo => "A faceless passer-by. Fades out and reappears right beside you.",
+            EnemyKind::Oni => "A horned brute from the old tales. Hits hard and guards a treasure chest.",
+            EnemyKind::GreatOni => "Arrives at 8:00. Plants its feet, then charges in a straight line.",
+            EnemyKind::NightLord => "Lantern warlord of the Shotengai, risen at 15:00. Defeat it before dawn.",
+        }
+    }
+    pub fn is_boss(self) -> bool {
+        matches!(self, EnemyKind::GreatOni | EnemyKind::NightLord)
+    }
+}
+
 pub struct EnemyDef {
     pub hp: f32,
     pub speed: f32,
@@ -332,6 +374,20 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::StarFall => "Meteor Festival",
         WeaponKind::Crescent => "Full Moon Cut",
         WeaponKind::FlamePool => "Undying Foxfire",
+    }
+}
+
+/// Collection text for an Awakening.
+pub fn awakened_text(kind: WeaponKind) -> &'static str {
+    match kind {
+        WeaponKind::Ofuda => "Twice the talismans, sharper homing, +3 pierce and +20% damage.",
+        WeaponKind::MoonOrbs => "A second, counter-rotating ring of moons and +25% damage.",
+        WeaponKind::SakuraField => "+30% area and +20% damage; the petals never wilt.",
+        WeaponKind::ThunderChain => "Twice the bolts, +30% damage, strikes 20% more often.",
+        WeaponKind::Taiko => "An extra beat, +30% area and +30% damage.",
+        WeaponKind::StarFall => "Twice the stars and +20% damage.",
+        WeaponKind::Crescent => "Cuts a full circle with +30% damage.",
+        WeaponKind::FlamePool => "Pools burn 60% longer, 25% wider, 25% hotter.",
     }
 }
 

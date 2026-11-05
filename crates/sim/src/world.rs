@@ -87,6 +87,12 @@ pub enum Event {
     SenPicked { amount: u32 },
     /// A Nopperabo reappeared beside the player.
     Blink { pos: Vec2 },
+    /// XP gems were collected this tick.
+    GemsPicked,
+    /// An enemy fired a fireball.
+    EnemyShot,
+    /// A weapon fired a volley / beat / pool (once per trigger, not per projectile).
+    Fired(WeaponKind),
 }
 
 /// Enemy fireball.
@@ -322,6 +328,10 @@ pub struct World {
     /// Sen coins on the ground: (position, value).
     pub coins: Vec<(Vec2, u32)>,
     pub great_oni_defeated: bool,
+    /// Kills per enemy kind, indexed like `ALL_ENEMIES`.
+    pub kills_by_kind: [u32; ALL_ENEMIES.len()],
+    /// Shrine Events taken this run.
+    pub shrines_taken: Vec<ShrineEvent>,
     /// True if the run ended because dawn arrived with the Night Lord alive.
     pub dawn_out: bool,
     night_lord_spawned: bool,
@@ -388,6 +398,8 @@ impl World {
             sen: 0,
             coins: Vec::new(),
             great_oni_defeated: false,
+            kills_by_kind: [0; ALL_ENEMIES.len()],
+            shrines_taken: Vec::new(),
             dawn_out: false,
             night_lord_spawned: false,
             pending_spawns: Vec::new(),
@@ -731,6 +743,7 @@ impl World {
                     if e.ai_timer[i] <= 0.0 && d < 300.0 {
                         e.ai_timer[i] = 4.5;
                         self.shots.push(Shot { pos: p, vel: dir * 115.0, life: 4.0 });
+                        self.events.push(Event::EnemyShot);
                     }
                     continue;
                 }
@@ -935,6 +948,7 @@ impl World {
             }
             self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
             self.events.push(Event::Kill { pos, kind });
+            self.kills_by_kind[kind.index()] += 1;
             if self.cfg.stress.is_none() {
                 let coin = match kind {
                     EnemyKind::NightLord => 150,
@@ -978,6 +992,7 @@ impl World {
                         let n = s.amount as f32;
                         let homing = if w.awakened { 9.0 } else { 4.5 };
                         let spread = if w.awakened { 0.22 } else { 0.13 };
+                        self.events.push(Event::Fired(WeaponKind::Ofuda));
                         for k in 0..s.amount {
                             let a = base + (k as f32 - (n - 1.0) / 2.0) * spread;
                             let life = 1.4 * self.persistence();
@@ -1114,6 +1129,7 @@ impl World {
                 }
             }
             WeaponKind::Taiko => {
+                self.events.push(Event::Fired(WeaponKind::Taiko));
                 for n in 0..s.amount {
                     // Later waves start "behind" the first so they arrive as separate beats.
                     let start = -40.0 * n as f32;
@@ -1150,6 +1166,7 @@ impl World {
                 }
             }
             WeaponKind::FlamePool => {
+                self.events.push(Event::Fired(WeaponKind::FlamePool));
                 let r = 26.0 * area;
                 for pos in self.random_targets(220.0, s.amount) {
                     self.pools.push(Pool { pos, radius: r, life: s.duration, max_life: s.duration, tick: 0.0, damage: dmg });
@@ -1333,6 +1350,7 @@ impl World {
         }
         if gained > 0 {
             self.gain_xp(gained);
+            self.events.push(Event::GemsPicked);
         }
         let mut sen = 0;
         self.coins.retain_mut(|(c, v)| {
@@ -1474,6 +1492,7 @@ impl World {
     pub fn choose_shrine(&mut self, choice: Option<usize>) {
         let Some(offer) = self.shrine_offer.take() else { return };
         let Some(&ev) = choice.and_then(|i| offer.get(i)) else { return };
+        self.shrines_taken.push(ev);
         let m = &mut self.mods;
         match ev {
             ShrineEvent::Fury => {
