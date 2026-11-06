@@ -300,6 +300,7 @@ async fn main() {
                 sim_ms = sim_ms * 0.95 + ((get_time() - t0) * 1000.0 / steps as f64) as f32 * 0.05;
             }
             fx.update(dt);
+            fx.track_trail(&world, dt);
         } else {
             acc = 0.0;
             // Space on a menu (e.g. dismissing a chest) must not fire Purify afterwards.

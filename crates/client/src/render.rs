@@ -20,6 +20,7 @@ pub struct Assets {
     riku_fox: [Texture2D; 3],
     /// Shun in Hannya Unbound form, and his blade in both forms.
     shun_hannya: [Texture2D; 3],
+    toya_mukade: [Texture2D; 3],
     cleaver: Texture2D,
     cleaver_hannya: Texture2D,
     cleaver_rest: Texture2D,
@@ -56,6 +57,7 @@ impl Assets {
             .map(|h| match h {
                 HeroId::Riku => frames(sprites::parse(include_str!("../../../art/src/riku.px"))),
                 HeroId::Shun => frames(sprites::parse(include_str!("../../../art/src/shun.px"))),
+                HeroId::Toya => frames(sprites::parse(include_str!("../../../art/src/toya.px"))),
                 _ => frames(sprites::parse(&sprites::recolor(base, hero_palette(*h)))),
             })
             .collect();
@@ -63,6 +65,7 @@ impl Assets {
             heroes,
             riku_fox: frames(sprites::parse(include_str!("../../../art/src/riku_fox.px"))),
             shun_hannya: frames(sprites::parse(include_str!("../../../art/src/shun_hannya.px"))),
+            toya_mukade: frames(sprites::parse(include_str!("../../../art/src/toya_mukade.px"))),
             cleaver: sprites::texture(include_str!("../../../art/src/cleaver.px")),
             cleaver_hannya: sprites::texture(include_str!("../../../art/src/cleaver_hannya.px")),
             cleaver_rest: sprites::texture(include_str!("../../../art/src/cleaver_rest.px")),
@@ -95,6 +98,10 @@ impl Assets {
             ("soul_tether", sprites::texture(include_str!("../../../art/src/icons/soul_tether.px"))),
             ("lantern_vigil", sprites::texture(include_str!("../../../art/src/icons/lantern_vigil.px"))),
             ("iai_flash", sprites::texture(include_str!("../../../art/src/icons/iai_flash.px"))),
+            ("crimson_tendrils", sprites::texture(include_str!("../../../art/src/icons/crimson_tendrils.px"))),
+            ("mukade_spines", sprites::texture(include_str!("../../../art/src/icons/mukade_spines.px"))),
+            ("devour", sprites::texture(include_str!("../../../art/src/icons/devour.px"))),
+            ("venom_fang", sprites::texture(include_str!("../../../art/src/icons/venom_fang.px"))),
             ("guard", sprites::texture(include_str!("../../../art/src/icons/guard.px"))),
             ("haste", sprites::texture(include_str!("../../../art/src/icons/haste.px"))),
             ("magnetism", sprites::texture(include_str!("../../../art/src/icons/magnetism.px"))),
@@ -123,6 +130,7 @@ impl Assets {
         match (h, form) {
             (HeroId::Riku, true) => &self.riku_fox[0],
             (HeroId::Shun, true) => &self.shun_hannya[0],
+            (HeroId::Toya, true) => &self.toya_mukade[0],
             _ => &self.hero(h)[0],
         }
     }
@@ -150,6 +158,10 @@ impl Assets {
                 WeaponKind::SoulTether => "soul_tether",
                 WeaponKind::LanternVigil => "lantern_vigil",
                 WeaponKind::IaiFlash => "iai_flash",
+                WeaponKind::CrimsonTendrils => "crimson_tendrils",
+                WeaponKind::MukadeSpines => "mukade_spines",
+                WeaponKind::Devour => "devour",
+                WeaponKind::VenomFang => "venom_fang",
             },
             Upgrade::Passive(p) => match p {
                 PassiveKind::Might => "might",
@@ -173,7 +185,7 @@ impl Assets {
 /// Palette chars: H/h/L hair, C/c outfit, I eyes, R ribbon.
 fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
     match h {
-        HeroId::Ren | HeroId::Riku | HeroId::Shun => &[],
+        HeroId::Ren | HeroId::Riku | HeroId::Shun | HeroId::Toya => &[],
         HeroId::Kaede => &[('H', "#33334a"), ('h', "#1c1c2a"), ('L', "#5a5a7a"), ('C', "#2f5a3a"), ('c', "#1d3a25"), ('I', "#e84a4a"), ('R', "#c9a040")],
         HeroId::Mika => &[('H', "#ffd45a"), ('h', "#d49a2a"), ('L', "#fff0a0"), ('C', "#e88ac8"), ('c', "#b0609a"), ('I', "#4ac0ff"), ('R', "#ff5aa0")],
         HeroId::Haru => &[('H', "#c8cde0"), ('h', "#8890aa"), ('L', "#ffffff"), ('C', "#3a3a8a"), ('c', "#24245a"), ('I', "#6a7cff"), ('R', "#e83a3a")],
@@ -217,6 +229,13 @@ pub struct Fx {
     sig_rings: Vec<f32>,
     /// Iai Flash cuts: (from, to, age).
     iai: Vec<(Vec2, Vec2, f32)>,
+    /// Tendril lashes: (from, to, age).
+    lashes: Vec<(Vec2, Vec2, f32)>,
+    /// Devour pulses: (pos, radius, age).
+    devours: Vec<(Vec2, f32, f32)>,
+    /// Recent player positions for Rampage afterimages: (pos, facing left, age).
+    trail: Vec<(Vec2, bool, f32)>,
+    trail_tick: f32,
     /// Lantern pulse rings: (pos, radius, age).
     pulses: Vec<(Vec2, f32, f32)>,
     /// Shadow Step streaks: (from, to, age).
@@ -258,6 +277,9 @@ impl Fx {
         self.sig_rings.clear();
         self.steps.clear();
         self.iai.clear();
+        self.lashes.clear();
+        self.devours.clear();
+        self.trail.clear();
         self.pulses.clear();
         self.shake = 0.0;
         self.banner = None;
@@ -416,7 +438,18 @@ impl Fx {
                     self.say(self.lines().special);
                     self.shake = self.shake.max(0.5);
                 }
-                Event::FoxFaded => self.say("Phew... the foxfire's cooling."),
+                Event::FoxFaded => {
+                    if self.hero == Some(HeroId::Riku) {
+                        self.say("Phew... the foxfire's cooling.");
+                    }
+                }
+                Event::Lash { from, to } => self.lashes.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
+                Event::Devour { pos, radius } => self.devours.push((vec2(pos.x, pos.y), radius, 0.0)),
+                Event::MukadeAwakened { .. } => {
+                    self.announce("HUNDRED-LEG RAMPAGE".into());
+                    self.say(self.lines().special);
+                    self.shake = self.shake.max(0.55);
+                }
                 Event::CloneSummoned { pos } => self.smokes.push((vec2(pos.x, pos.y), 16.0, 0.0)),
                 Event::ClonePopped { pos, radius } => self.smokes.push((vec2(pos.x, pos.y), radius, 0.0)),
                 Event::Awakened(k) => {
@@ -425,6 +458,16 @@ impl Fx {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Records Rampage afterimages while Toya moves in his form.
+    pub fn track_trail(&mut self, world: &World, dt: f32) {
+        self.trail_tick -= dt;
+        if world.form_kind() == Some(SpecialKind::Mukade) && world.player.moving && self.trail_tick <= 0.0 {
+            self.trail_tick = 0.05;
+            let p = world.player.pos;
+            self.trail.push((vec2(p.x, p.y), world.player.facing.x < 0.0, 0.0));
         }
     }
 
@@ -458,6 +501,12 @@ impl Fx {
         self.sig_rings.retain(|r| *r < 0.5);
         self.iai.iter_mut().for_each(|b| b.2 += dt);
         self.iai.retain(|b| b.2 < 0.25);
+        self.lashes.iter_mut().for_each(|b| b.2 += dt);
+        self.lashes.retain(|b| b.2 < 0.22);
+        self.devours.iter_mut().for_each(|b| b.2 += dt);
+        self.devours.retain(|b| b.2 < 0.4);
+        self.trail.iter_mut().for_each(|b| b.2 += dt);
+        self.trail.retain(|b| b.2 < 0.35);
         self.pulses.iter_mut().for_each(|b| b.2 += dt);
         self.pulses.retain(|b| b.2 < 0.4);
         self.steps.iter_mut().for_each(|b| b.2 += dt);
@@ -661,6 +710,15 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if hannya {
         draw_hannya_aura(world, t);
     }
+    let mukade = form == Some(SpecialKind::Mukade);
+    if world.cfg.hero == HeroId::Toya {
+        draw_tendrils_and_tail(world, t, mukade);
+        // Rampage afterimages trailing behind.
+        for (pos, left, age) in &fx.trail {
+            let k = 1.0 - age / 0.35;
+            draw_texture_ex(&a.toya_mukade[0], (pos.x - 12.0).round(), (pos.y - 26.0).round(), Color::new(0.9, 0.1, 0.15, 0.35 * k), DrawTextureParams { flip_x: *left, ..Default::default() });
+        }
+    }
     // Shadow Step afterimages (explode shortly) and streaks.
     for (c, left) in &world.afterimages {
         let k = left / 0.35;
@@ -717,12 +775,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         &a.riku_fox[frame]
     } else if hannya {
         &a.shun_hannya[frame]
+    } else if mukade {
+        &a.toya_mukade[frame]
     } else {
         &a.hero(world.cfg.hero)[frame]
     };
     let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
     let params = DrawTextureParams { flip_x: pl.facing.x < 0.0, ..Default::default() };
-    if fox || hannya {
+    if fox || hannya || mukade {
         // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread), offset around.
         let flare = 0.45 + 0.25 * (t * 9.0).sin();
         let glow = if fox { Color::new(1.0, 0.75, 0.2, flare) } else { Color::new(0.75, 0.0, 0.1, flare + 0.2) };
@@ -744,6 +804,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     match world.cfg.hero {
         HeroId::Riku => draw_spirit_motes(p, t, fox),
         HeroId::Shun => draw_reaper_wisps(p, t, hannya),
+        HeroId::Toya => draw_curse_motes(p, t, mukade),
         _ => {}
     }
     // Small HP bar under the player.
@@ -916,6 +977,19 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 draw_circle(q.x, q.y, 6.0, Color::new(0.55, 0.8, 1.0, 0.3));
                 draw_circle(q.x, q.y, 3.0, Color::new(0.9, 0.97, 1.0, 1.0));
             }
+            ProjKind::Fang => {
+                let back = v.normalize_or_zero() * -1.0;
+                for k in 1..4 {
+                    let c = q + back * (k as f32 * 3.5);
+                    draw_circle(c.x, c.y, 2.5 - k as f32 * 0.5, Color::new(0.45, 0.9, 0.3, 0.6 - k as f32 * 0.15));
+                }
+                let a0 = v.y.atan2(v.x);
+                let tip = q + sim::Vec2::from_angle(a0) * 6.0;
+                let b1 = q + sim::Vec2::from_angle(a0 + 2.4) * 4.0;
+                let b2 = q + sim::Vec2::from_angle(a0 - 2.4) * 4.0;
+                draw_triangle(vec2(tip.x, tip.y), vec2(b1.x, b1.y), vec2(b2.x, b2.y), Color::new(0.95, 0.92, 0.85, 1.0));
+                draw_circle(q.x, q.y, 1.5, Color::new(0.5, 0.95, 0.35, 1.0));
+            }
             ProjKind::Shuriken => {
                 let size = pr.radius[i] * 2.2;
                 draw_circle(q.x, q.y, size * 0.55, Color::new(0.8, 0.9, 1.0, 0.12));
@@ -965,6 +1039,29 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 10.0 * k, Color::new(0.55, 0.45, 1.0, 0.5 * k));
         draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0, Color::new(1.0, 1.0, 1.0, k));
     }
+    for (from, to, age) in &fx.lashes {
+        let k = 1.0 - age / 0.22;
+        let d = *to - *from;
+        let n = vec2(-d.y, d.x).normalize_or_zero();
+        let mut prev = *from;
+        for s in 1..=10 {
+            let u = s as f32 / 10.0;
+            let bend = (u * std::f32::consts::PI).sin() * 10.0 * (1.0 - age / 0.22);
+            let pt = *from + d * u + n * bend;
+            let wdt = (9.0 * (1.0 - u * 0.65)) * k;
+            draw_line(prev.x, prev.y - 8.0, pt.x, pt.y - 8.0, wdt + 2.0, Color::new(0.08, 0.0, 0.02, 0.8 * k));
+            draw_line(prev.x, prev.y - 8.0, pt.x, pt.y - 8.0, wdt, Color::new(0.85, 0.12, 0.2, k));
+            prev = pt;
+        }
+        draw_circle(to.x, to.y - 8.0, 4.0 * k, Color::new(1.0, 0.4, 0.4, k));
+    }
+    for (c, r, age) in &fx.devours {
+        // Collapses inward: the hunger pulls.
+        let k = age / 0.4;
+        let rr = r * (1.0 - 0.7 * k);
+        draw_circle(c.x, c.y, rr, Color::new(0.35, 0.0, 0.06, 0.2 * (1.0 - k)));
+        draw_circle_lines(c.x, c.y, rr, 3.0, Color::new(0.9, 0.15, 0.2, 0.8 * (1.0 - k)));
+    }
     for (c, r, age) in &fx.pulses {
         let k = age / 0.4;
         draw_circle_lines(c.x, c.y, r * (0.4 + 0.6 * k), 2.5, Color::new(0.6, 0.85, 1.0, 0.8 * (1.0 - k)));
@@ -995,6 +1092,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             style::SKYBOLT => (Color::new(0.7, 0.85, 1.0, 0.4 * fade), Color::new(1.0, 1.0, 1.0, fade), 3.0),
             style::COMET => (Color::new(0.3, 0.6, 1.0, 0.45 * fade), Color::new(0.85, 0.95, 1.0, fade), 4.0),
             style::QUAKE => (Color::new(1.0, 0.6, 0.2, 0.25 * fade), Color::new(1.0, 0.85, 0.4, fade), 6.0),
+            style::SPINE => (Color::new(0.4, 0.02, 0.06, 0.35 * fade), Color::new(0.9, 0.2, 0.25, fade), 2.0),
+            style::VENOM => (Color::new(0.3, 0.75, 0.2, 0.35 * fade), Color::new(0.6, 1.0, 0.4, fade), 2.0),
+            style::FRENZY => (Color::new(0.5, 0.0, 0.08, 0.4 * fade), Color::new(1.0, 0.25, 0.3, fade), 6.0),
             2 => (Color::new(0.6, 0.0, 0.1, 0.4 * fade), Color::new(1.0, 0.3, 0.3, 0.9 * fade), 3.0),
             3 => (Color::new(0.25, 0.0, 0.05, 0.55 * fade), Color::new(1.0, 0.15, 0.2, fade), 8.0),
             _ => (Color::new(0.3, 0.65, 1.0, 0.35 * fade), Color::new(0.8, 0.95, 1.0, 0.9 * fade), 2.0),
@@ -1031,6 +1131,20 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             }
             style::QUAKE => {
                 draw_circle_lines(c.x, c.y, rr * 0.6, 3.0, Color::new(1.0, 0.4, 0.3, 0.8 * fade));
+            }
+            style::SPINE => draw_spine_burst(vec2(c.x, c.y), *r, k),
+            style::FRENZY => {
+                // Thousand-Leg Burst: a crown of spikes radiating out.
+                for i in 0..28 {
+                    let a = i as f32 / 28.0 * std::f32::consts::TAU;
+                    let r0 = rr * 0.35;
+                    let r1 = rr * (0.85 + 0.15 * ((i * 7 % 5) as f32 / 5.0));
+                    let base = vec2(c.x, c.y);
+                    let l = base + vec2((a - 0.05).cos(), (a - 0.05).sin()) * r0;
+                    let rgt = base + vec2((a + 0.05).cos(), (a + 0.05).sin()) * r0;
+                    let tip = base + vec2(a.cos(), a.sin()) * r1;
+                    draw_triangle(l, rgt, tip, Color::new(0.75, 0.08, 0.15, fade));
+                }
             }
             _ => {}
         }
@@ -1143,6 +1257,9 @@ fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
 
 fn burst_life(st: u8) -> f32 {
     match st {
+        style::SPINE => 0.45,
+        style::FRENZY => 0.7,
+        style::VENOM => 0.3,
         style::METEOR => 0.8,
         style::SKYBOLT => 0.3,
         style::COMET => 0.5,
@@ -1268,5 +1385,97 @@ fn draw_blasts(world: &World, t: f32) {
             }
             _ => {}
         }
+    }
+}
+
+/// Spines erupting from the ground: a cracked ring and segmented spikes thrusting up.
+fn draw_spine_burst(c: Vec2, r: f32, k: f32) {
+    let rise = (k / 0.35).min(1.0);
+    let fade = 1.0 - k;
+    draw_ellipse(c.x, c.y + 2.0, r * 0.8, r * 0.3, 0.0, Color::new(0.1, 0.0, 0.02, 0.5 * fade));
+    for i in 0..5 {
+        let a = i as f32 * 1.256 + c.x * 0.01;
+        let off = vec2(a.cos() * r * 0.35, a.sin() * r * 0.15);
+        let h = r * (0.7 + 0.3 * ((i * 3 % 4) as f32 / 4.0)) * rise;
+        let base = c + off;
+        // Segments stacked up the spike.
+        for s in 0..4 {
+            let y0 = base.y - h * s as f32 / 4.0;
+            let w = (4.0 - s as f32) * 1.4;
+            let col = if s % 2 == 0 { Color::new(0.75, 0.1, 0.18, fade) } else { Color::new(0.3, 0.02, 0.06, fade) };
+            draw_rectangle(base.x - w / 2.0, y0 - h / 4.0, w, h / 4.0 + 1.0, col);
+        }
+        draw_triangle(vec2(base.x - 1.5, base.y - h), vec2(base.x + 1.5, base.y - h), vec2(base.x, base.y - h - 6.0), Color::new(0.92, 0.86, 0.78, fade));
+    }
+}
+
+/// Toya's four crimson tendrils (base form) or the great centipede tail (Rampage).
+fn draw_tendrils_and_tail(world: &World, t: f32, mukade: bool) {
+    let p = world.player.pos;
+    let root = vec2(p.x, p.y - 8.0);
+    let back = if world.player.facing.x < 0.0 { 1.0 } else { -1.0 };
+    let (n, len, width) = if mukade { (6, 34.0, 4.0) } else { (4, 20.0, 2.6) };
+    for k in 0..n {
+        let kf = k as f32;
+        let base_a = -std::f32::consts::FRAC_PI_2 + back * (0.5 + 0.35 * kf / n as f32) + if k % 2 == 0 { 0.25 } else { -0.25 };
+        let mut prev = root;
+        for s in 1..=8 {
+            let u = s as f32 / 8.0;
+            let sway = (t * 3.0 + kf * 1.7 + u * 3.0).sin() * 0.5 * u;
+            let a = base_a + sway + back * u * 0.8;
+            let pt = prev + vec2(a.cos(), a.sin()) * (len / 8.0);
+            let wd = width * (1.0 - u * 0.6);
+            draw_line(prev.x, prev.y, pt.x, pt.y, wd + 1.5, Color::new(0.06, 0.0, 0.02, 0.9));
+            draw_line(prev.x, prev.y, pt.x, pt.y, wd, Color::new(0.78, 0.1, 0.18, 1.0));
+            prev = pt;
+        }
+        draw_circle(prev.x, prev.y, width * 0.5, Color::new(1.0, 0.45, 0.45, 1.0));
+    }
+    if mukade {
+        // The great centipede tail: a segmented arc over his back with legs along it.
+        let segs = 14;
+        let mut pts = Vec::with_capacity(segs);
+        for s in 0..segs {
+            let u = s as f32 / (segs - 1) as f32;
+            let ang = std::f32::consts::PI * (0.15 + 0.85 * u);
+            let wave = (t * 4.0 - u * 6.0).sin() * 4.0;
+            let x = root.x + back * (ang.cos() * -34.0 - 6.0) + back * wave * 0.3;
+            let y = root.y - ang.sin() * 46.0 + u * 10.0 + wave * 0.5;
+            pts.push(vec2(x, y));
+        }
+        for (s, pt) in pts.iter().enumerate().rev() {
+            let u = s as f32 / (segs - 1) as f32;
+            let r = 7.0 * (1.0 - u * 0.55);
+            // Legs.
+            let leg = (t * 12.0 + s as f32).sin() * 3.0;
+            draw_line(pt.x - r, pt.y, pt.x - r - 5.0, pt.y + 4.0 + leg, 1.5, Color::new(0.85, 0.2, 0.25, 1.0));
+            draw_line(pt.x + r, pt.y, pt.x + r + 5.0, pt.y + 4.0 - leg, 1.5, Color::new(0.85, 0.2, 0.25, 1.0));
+            draw_circle(pt.x, pt.y, r + 1.5, Color::new(0.06, 0.0, 0.02, 1.0));
+            draw_circle(pt.x, pt.y, r, if s % 2 == 0 { Color::new(0.55, 0.05, 0.12, 1.0) } else { Color::new(0.25, 0.02, 0.05, 1.0) });
+            // Blood-red energy pulsing down the segments.
+            let pulse = ((t * 6.0 - u * 8.0).sin() * 0.5 + 0.5).powi(3);
+            draw_circle(pt.x, pt.y - r * 0.3, r * 0.45, Color::new(1.0, 0.25, 0.3, 0.3 + 0.6 * pulse));
+        }
+        // Pincers at the tip.
+        if let Some(tip) = pts.last() {
+            draw_triangle(*tip, *tip + vec2(-6.0, -6.0), *tip + vec2(-1.0, -9.0), Color::new(0.92, 0.86, 0.78, 1.0));
+            draw_triangle(*tip, *tip + vec2(6.0, -6.0), *tip + vec2(1.0, -9.0), Color::new(0.92, 0.86, 0.78, 1.0));
+        }
+        draw_circle(p.x, p.y - 6.0, 60.0, Color::new(0.5, 0.0, 0.08, 0.08 + 0.04 * (t * 6.0).sin()));
+    }
+}
+
+/// Dark crimson motes and black fragments around Toya.
+fn draw_curse_motes(p: sim::Vec2, t: f32, mukade: bool) {
+    let n = if mukade { 22 } else { 7 };
+    for k in 0..n {
+        let kf = k as f32;
+        let ph = (t * (0.6 + (k % 4) as f32 * 0.1) + kf * 0.31).fract();
+        let a = kf * 2.39;
+        let r = if mukade { 12.0 + (k % 6) as f32 * 7.0 } else { 10.0 + (k % 3) as f32 * 3.0 };
+        let x = p.x + a.cos() * r;
+        let y = p.y - 8.0 + a.sin() * r * 0.5 - ph * if mukade { 34.0 } else { 14.0 };
+        let c = if k % 3 == 0 { Color::new(0.05, 0.0, 0.02, 0.9 * (1.0 - ph)) } else { Color::new(0.9, 0.12, 0.2, 0.8 * (1.0 - ph)) };
+        draw_rectangle(x, y, 2.0, 2.0, c);
     }
 }

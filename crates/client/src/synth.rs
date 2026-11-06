@@ -197,9 +197,12 @@ pub enum Sfx {
     Pulse,
     Thunder,
     Meteor,
+    LashSfx,
+    Chomp,
+    Crunch,
 }
 
-pub const ALL_SFX: [Sfx; 50] = [
+pub const ALL_SFX: [Sfx; 53] = [
     Sfx::Hit,
     Sfx::Pop,
     Sfx::BigPop,
@@ -250,6 +253,9 @@ pub const ALL_SFX: [Sfx; 50] = [
     Sfx::Pulse,
     Sfx::Thunder,
     Sfx::Meteor,
+    Sfx::LashSfx,
+    Sfx::Chomp,
+    Sfx::Crunch,
 ];
 
 /// Bell-like tone: inharmonic sine partials.
@@ -558,6 +564,26 @@ pub fn sfx(s: Sfx) -> Buf {
             b.add(0.0, Note::new(Sine, 70.0, 1.2, 0.9).slide(28.0).env(0.001, 1.8));
             b.add(0.0, Note::new(Noise, 1.0, 1.0, 0.7).lp(1600.0).env(0.001, 1.8));
             b.add(0.0, Note::new(Noise, 1.0, 0.1, 0.5).lp(8000.0).env(0.001, 3.0));
+        }
+        Sfx::LashSfx => {
+            // A wet whip-crack.
+            b = Buf::new(0.18);
+            b.add(0.0, Note::new(Noise, 1.0, 0.12, 0.45).lp(3500.0).env(0.002, 2.5));
+            b.add(0.0, Note::new(Saw, 420.0, 0.12, 0.15).slide(140.0).lp(1600.0));
+        }
+        Sfx::Chomp => {
+            b = Buf::new(0.3);
+            b.add(0.0, Note::new(Square(0.5), 160.0, 0.08, 0.35).slide(80.0).lp(900.0));
+            b.add(0.1, Note::new(Square(0.5), 140.0, 0.1, 0.35).slide(60.0).lp(900.0));
+            b.add(0.0, Note::new(Noise, 1.0, 0.25, 0.25).lp(1200.0));
+        }
+        Sfx::Crunch => {
+            // Spines tearing up through the ground.
+            b = Buf::new(0.35);
+            for k in 0..4 {
+                b.add(k as f32 * 0.03, Note::new(Noise, 1.0, 0.08, 0.35).lp(2500.0 - 400.0 * k as f32).env(0.001, 2.5));
+            }
+            b.add(0.0, Note::new(Sine, 110.0, 0.25, 0.3).slide(55.0));
         }
         Sfx::Poof => {
             // Smoke puff: soft noise burst with a dropping pitch.

@@ -153,6 +153,7 @@ pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, t
                 sim::content::SpecialKind::Barrier => "a purifying ring that erases fireballs",
                 sim::content::SpecialKind::NineTails => "8s transformation: nine tails, aura, golden orb volleys",
                 sim::content::SpecialKind::Hannya => "8s berserk: beams, crescent waves, shadow steps, finale blast",
+                sim::content::SpecialKind::Mukade => "8s predator form: tendril barrage, eruptions, regeneration",
             };
             kit::text(&format!("Special: {} ({what})", def.special_name), px + 20.0, py + 178.0, 18.0, Color::new(1.0, 0.8, 0.45, 1.0));
         }

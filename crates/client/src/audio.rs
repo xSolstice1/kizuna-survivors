@@ -63,6 +63,9 @@ fn tuning(s: Sfx) -> (f32, f64) {
         Sfx::Chain => (0.35, 0.15),
         Sfx::IaiSfx => (0.45, 0.1),
         Sfx::Pulse => (0.25, 0.12),
+        Sfx::LashSfx => (0.3, 0.06),
+        Sfx::Chomp => (0.4, 0.2),
+        Sfx::Crunch => (0.4, 0.07),
         Sfx::Thunder => (0.55, 0.12),
         Sfx::Meteor => (0.8, 0.2),
         Sfx::BeamSfx => (0.4, 0.12),
@@ -189,6 +192,8 @@ impl Audio {
                     sim::world::style::SKYBOLT => Sfx::Thunder,
                     sim::world::style::QUAKE => Sfx::Drum,
                     sim::world::style::SEAL => Sfx::Pop,
+                    sim::world::style::SPINE => Sfx::Crunch,
+                    sim::world::style::FRENZY => Sfx::Boom,
                     _ => Sfx::FoxBurst,
                 },
                 Event::Signature(k) => match k {
@@ -214,6 +219,9 @@ impl Audio {
                 Event::FinaleBlast { .. } => Sfx::Boom,
                 Event::Iai { .. } => continue, // the Fired cue covers the cut
                 Event::LanternPulse { .. } => Sfx::Pulse,
+                Event::Lash { .. } => Sfx::LashSfx,
+                Event::Devour { .. } => Sfx::Chomp,
+                Event::MukadeAwakened { .. } => Sfx::Roar,
             };
             self.play(s);
         }

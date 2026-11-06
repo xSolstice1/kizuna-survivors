@@ -83,7 +83,10 @@ pub fn hud(world: &World, assets: &Assets) {
         Some(kind) => {
             let f = p.form / kind.duration();
             let flick = 0.8 + 0.2 * (t * 14.0).sin();
-            let c = if kind == SpecialKind::Hannya { Color::new(0.9 * flick, 0.1, 0.15, 1.0) } else { Color::new(1.0, 0.6 * flick, 0.15, 1.0) };
+            let c = match kind {
+                SpecialKind::Hannya | SpecialKind::Mukade => Color::new(0.9 * flick, 0.1, 0.15, 1.0),
+                _ => Color::new(1.0, 0.6 * flick, 0.15, 1.0),
+            };
             kit::bar(92.0, 62.0, 206.0, 10.0, f, c, Color::new(0.1, 0.08, 0.16, 0.95));
             kit::text(&format!("{}  {:.0}s", hero.special_name.to_uppercase(), p.form.ceil()), 94.0, 90.0, 14.0, c);
         }
