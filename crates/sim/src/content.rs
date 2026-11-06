@@ -288,6 +288,29 @@ pub const MUKADE_MOVE_SPEED: f32 = 1.3;
 pub const MUKADE_HASTE: f32 = 0.7;
 pub const MUKADE_DAMAGE_TAKEN: f32 = 0.75;
 
+// ───────────────────────── Ren: Barrier and Divine Purification ─────────────────────────
+
+/// Ren's Barrier blocks a fireball, then recharges (faster with levels).
+pub fn barrier_recharge(level: u32) -> f32 {
+    (4.0 - 0.04 * level as f32).max(1.5)
+}
+/// Fireballs that do land on Ren hurt this much less.
+pub const BARRIER_SHOT_DAMAGE: f32 = 0.75;
+pub const DIVINE_DURATION: f32 = 8.0;
+/// Ofuda Storm: homing talismans every this many seconds.
+pub const DIVINE_OFUDA_EVERY: f32 = 0.08;
+pub const DIVINE_OFUDA_DAMAGE: f32 = 14.0;
+/// Yin-Yang Cataclysm: giant orbs crash onto enemy groups.
+pub const DIVINE_ORB_EVERY: f32 = 1.0;
+pub const DIVINE_ORB_DAMAGE: f32 = 70.0;
+/// Spirit-seal barrage rings.
+pub const DIVINE_RING_EVERY: f32 = 1.4;
+pub const DIVINE_RING_DAMAGE: f32 = 30.0;
+/// Final Purification: a magic circle charges, then explodes.
+pub const DIVINE_FINALE_CHARGE: f32 = 1.2;
+pub const DIVINE_FINALE_RADIUS: f32 = 380.0;
+pub const DIVINE_FINALE_DAMAGE: f32 = 300.0;
+
 // ───────────────────────── Kuon: Stillness and Endless Firmament ─────────────────────────
 
 /// Stillness: enemies this close to Kuon move at this fraction of their speed.
@@ -363,9 +386,15 @@ pub enum WeaponKind {
     RepulsionStar,
     /// A slow purple orb that erases everything in its line.
     VoidLance,
+    /// Two yin-yang orbs that orbit Ren, swinging wide and back (Ren).
+    YinYangOrbs,
+    /// Spirit orbs gather around Ren, then home in and burst (Ren).
+    SpiritSeal,
+    /// A wide purifying ring that blasts enemies back and erases fireballs (Ren).
+    PurificationWave,
 }
 
-pub const ALL_WEAPONS: [WeaponKind; 23] = [
+pub const ALL_WEAPONS: [WeaponKind; 26] = [
     WeaponKind::Ofuda,
     WeaponKind::MoonOrbs,
     WeaponKind::SakuraField,
@@ -389,6 +418,9 @@ pub const ALL_WEAPONS: [WeaponKind; 23] = [
     WeaponKind::GravityWell,
     WeaponKind::RepulsionStar,
     WeaponKind::VoidLance,
+    WeaponKind::YinYangOrbs,
+    WeaponKind::SpiritSeal,
+    WeaponKind::PurificationWave,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -581,6 +613,31 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             speed: 150.0,
             ..base
         },
+        WeaponKind::YinYangOrbs => WeaponStats {
+            damage: 12.0 + 3.0 * k,
+            cooldown: 0.4, // re-hit interval
+            amount: 2 + at(l, 4) + at(l, 7),
+            area: 1.0 + 0.07 * k,
+            speed: 3.0 + 0.12 * k, // orbit radians / second
+            ..base
+        },
+        WeaponKind::SpiritSeal => WeaponStats {
+            damage: 18.0 + 4.5 * k, // per orb burst
+            cooldown: 2.6 - 0.09 * k,
+            amount: 5 + at(l, 3) + at(l, 5) + at(l, 7),
+            area: 1.0 + 0.07 * k,
+            speed: 300.0,
+            duration: 0.6, // gathering time
+            ..base
+        },
+        WeaponKind::PurificationWave => WeaponStats {
+            damage: 14.0 + 3.5 * k,
+            cooldown: 3.2 - 0.12 * k,
+            amount: 1,
+            area: 1.0 + 0.09 * k,
+            speed: 300.0,
+            ..base
+        },
         WeaponKind::IaiFlash => WeaponStats {
             damage: 30.0 + 8.0 * k,
             cooldown: 2.2 - 0.08 * k,
@@ -611,6 +668,8 @@ pub enum Tag {
     Curse,
     /// Kuon's star-reading arts.
     Star,
+    /// Ren's shrine arts.
+    Shrine,
     Shared,
 }
 
@@ -650,6 +709,9 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
         WeaponKind::GravityWell => (&[Star], (P::Expanse, 1)),
         WeaponKind::RepulsionStar => (&[Star], (P::Might, 1)),
         WeaponKind::VoidLance => (&[Star], (P::Persistence, 1)),
+        WeaponKind::YinYangOrbs => (&[Shrine], (P::Swiftness, 1)),
+        WeaponKind::SpiritSeal => (&[Shrine], (P::Abundance, 1)),
+        WeaponKind::PurificationWave => (&[Shrine], (P::Guard, 1)),
     };
     WeaponDef { tags, complement }
 }
@@ -690,6 +752,8 @@ pub enum SpecialKind {
     Mukade,
     /// Domain: Endless Firmament: enemies in the domain freeze and take damage; ends in a giant lance.
     Firmament,
+    /// Divine Purification: invulnerable shrine-maiden barrage ending in a great purifying blast.
+    Divine,
 }
 
 impl SpecialKind {
@@ -701,6 +765,7 @@ impl SpecialKind {
             SpecialKind::Hannya => HANNYA_DURATION,
             SpecialKind::Mukade => MUKADE_DURATION,
             SpecialKind::Firmament => DOMAIN_DURATION,
+            SpecialKind::Divine => DIVINE_DURATION,
         }
     }
 }
@@ -753,7 +818,7 @@ pub fn hero_def(id: HeroId) -> HeroDef {
     use Tag::*;
     let b = Bonus::default();
     let (name, archetype, innate_text, innate, signature, pool_tags, finished): (_, _, _, _, _, &'static [Tag], _) = match id {
-        HeroId::Ren => ("Ren Amane", "Shrine maiden", "+10% pickup radius", Bonus { magnet: 0.10, ..b }, WeaponKind::Ofuda, &[Talisman, Celestial, Nature, Festival], true),
+        HeroId::Ren => ("Ren Amane", "Shrine maiden", "Barrier: blocks a fireball every few seconds; +10% pickup radius", Bonus { magnet: 0.10, ..b }, WeaponKind::Ofuda, &[Shrine, Talisman, Celestial, Nature, Festival], true),
         HeroId::Kaede => ("Kaede Kurogane", "Ninja", "+10% move speed", Bonus { move_speed: 0.10, ..b }, WeaponKind::ThunderChain, &[Thunder, Blade, Talisman, Fire], false),
         HeroId::Mika => ("Mika Hoshizora", "Magical girl", "+8% damage", Bonus { might: 0.08, ..b }, WeaponKind::StarFall, &[Celestial, Nature, Festival, Thunder], false),
         HeroId::Haru => ("Haru Tachibana", "Swordsman", "+1 armor", Bonus { armor: 1.0, ..b }, WeaponKind::Crescent, &[Blade, Nature, Festival, Thunder], false),
@@ -765,7 +830,7 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Shun => ("Shun Yamikiri", "Spirit ferryman", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::GraveCleaver, &[Spirit, Blade, Thunder, Fire], true),
     };
     let (special, special_name) = match id {
-        HeroId::Ren => (SpecialKind::Barrier, "Purify"),
+        HeroId::Ren => (SpecialKind::Divine, "Divine Purification"),
         HeroId::Riku => (SpecialKind::NineTails, "Ninefold Foxfire"),
         HeroId::Shun => (SpecialKind::Hannya, "Hannya Unbound"),
         HeroId::Toya => (SpecialKind::Mukade, "Hundred-Leg Rampage"),
@@ -811,6 +876,9 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::GravityWell => "Event Horizon",
         WeaponKind::RepulsionStar => "Red Nova",
         WeaponKind::VoidLance => "Void Cascade",
+        WeaponKind::YinYangOrbs => "Great Yin-Yang",
+        WeaponKind::SpiritSeal => "Myriad Spirit Seal",
+        WeaponKind::PurificationWave => "Heaven-Sweeping Wave",
     }
 }
 
@@ -840,6 +908,9 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::GravityWell => "Event Horizon: a vast singularity swallows the horde every few seconds.",
         WeaponKind::RepulsionStar => "Red Nova: a ring of crimson stars blasts outward every few seconds.",
         WeaponKind::VoidLance => "Void Cascade: three void lances fan out across the field every few seconds.",
+        WeaponKind::YinYangOrbs => "Great Yin-Yang: the orbs grow huge, and a giant yin-yang crashes down on the horde every few seconds.",
+        WeaponKind::SpiritSeal => "Myriad Spirit Seal: more orbs, and a full ring of seal orbs bursts out every few seconds.",
+        WeaponKind::PurificationWave => "Heaven-Sweeping Wave: a second, wider wave follows every pulse.",
     }
 }
 
@@ -918,6 +989,9 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
         WeaponKind::GravityWell => s.area *= 1.3,
         WeaponKind::RepulsionStar => s.amount += 1,
         WeaponKind::VoidLance => s.area *= 1.3,
+        WeaponKind::YinYangOrbs => s.area *= 1.6,
+        WeaponKind::SpiritSeal => s.amount += 3,
+        WeaponKind::PurificationWave => s.area *= 1.3,
     }
     // Every Awakening is a real power spike on top of its own changes (and its signature).
     s.damage *= AWAKEN_DAMAGE;
@@ -953,6 +1027,9 @@ pub fn signature_every(kind: WeaponKind) -> f32 {
         WeaponKind::GravityWell => 4.0,
         WeaponKind::RepulsionStar => 2.6,
         WeaponKind::VoidLance => 3.5,
+        WeaponKind::YinYangOrbs => 2.8,
+        WeaponKind::SpiritSeal => 3.0,
+        WeaponKind::PurificationWave => 0.0, // the double wave is part of every pulse
     }
 }
 
@@ -982,6 +1059,9 @@ pub fn signature_name(kind: WeaponKind) -> &'static str {
         WeaponKind::GravityWell => "Event Horizon",
         WeaponKind::RepulsionStar => "Red Nova",
         WeaponKind::VoidLance => "Void Cascade",
+        WeaponKind::YinYangOrbs => "Yin-Yang Crash",
+        WeaponKind::SpiritSeal => "Seal Ring",
+        WeaponKind::PurificationWave => "Double Wave",
     }
 }
 
@@ -1059,6 +1139,9 @@ impl Upgrade {
             Upgrade::Weapon(WeaponKind::GravityWell) => "Gravity Well",
             Upgrade::Weapon(WeaponKind::RepulsionStar) => "Repulsion Star",
             Upgrade::Weapon(WeaponKind::VoidLance) => "Void Lance",
+            Upgrade::Weapon(WeaponKind::YinYangOrbs) => "Yin-Yang Orbs",
+            Upgrade::Weapon(WeaponKind::SpiritSeal) => "Spirit Seal",
+            Upgrade::Weapon(WeaponKind::PurificationWave) => "Purification Wave",
             Upgrade::Passive(PassiveKind::Might) => "Might",
             Upgrade::Passive(PassiveKind::Haste) => "Haste",
             Upgrade::Passive(PassiveKind::Expanse) => "Expanse",
@@ -1107,6 +1190,9 @@ impl Upgrade {
                 WeaponKind::GravityWell => "A gravity singularity drags a cluster of enemies together, then crushes them.",
                 WeaponKind::RepulsionStar => "A crimson star tears through enemies and blasts them back.",
                 WeaponKind::VoidLance => "A slow orb of void erases everything along its line.",
+                WeaponKind::YinYangOrbs => "Two yin-yang orbs circle you, swinging wide and back through enemies.",
+                WeaponKind::SpiritSeal => "Spirit orbs gather around you, then home in on enemies and burst.",
+                WeaponKind::PurificationWave => "A wide purifying ring blasts enemies back and erases fireballs.",
             }
             .into(),
             Upgrade::Weapon(k) => {
@@ -1137,6 +1223,9 @@ impl Upgrade {
                         WeaponKind::GravityWell => "well",
                         WeaponKind::RepulsionStar => "star",
                         WeaponKind::VoidLance => "lance",
+                        WeaponKind::YinYangOrbs => "orb",
+                        WeaponKind::SpiritSeal => "orb",
+                        WeaponKind::PurificationWave => "",
                         WeaponKind::SakuraField => "",
                     };
                     parts.push(format!("+{} {unit}", b.amount - a.amount));

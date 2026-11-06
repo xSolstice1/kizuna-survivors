@@ -128,6 +128,11 @@ pub enum Event {
     WellCollapse { pos: Vec2, radius: f32 },
     /// Kuon's ward negated a hit.
     Warded,
+    /// Ren's barrier blocked a fireball.
+    BarrierBlock,
+    /// Divine Purification began / its final circle is charging.
+    DivineAwakened { pos: Vec2 },
+    DivineCharge { pos: Vec2 },
     /// Domain: Endless Firmament opened / is charging its finale / launched Void Lance: Maximum.
     DomainOpened { pos: Vec2 },
     VoidCharge { pos: Vec2 },
@@ -232,6 +237,8 @@ pub struct Wave {
     pub max_radius: f32,
     pub speed: f32,
     pub damage: f32,
+    /// Purification Wave: blasts enemies back harder and erases fireballs it passes.
+    pub purify: bool,
 }
 
 /// Star Fall strike waiting to land.
@@ -347,6 +354,8 @@ pub enum ProjKind {
     RedStar,
     /// Void Lance: a slow orb that erases its line.
     VoidOrb,
+    /// Spirit Seal orb: gathers around Ren, then homes in and bursts.
+    SealOrb,
 }
 
 /// A Gravity Well singularity: pulls enemies in, then collapses.
@@ -369,6 +378,9 @@ pub mod style {
     pub const SKYBOLT: u8 = 9;
     pub const COMET: u8 = 10;
     pub const QUAKE: u8 = 11;
+    /// Giant yin-yang crash and Final Purification.
+    pub const YINYANG: u8 = 19;
+    pub const PURIFY: u8 = 20;
     pub const SPINE: u8 = 12;
     pub const VENOM: u8 = 13;
     /// Thousand-Leg Burst.
@@ -559,6 +571,12 @@ pub struct World {
     pub clones: Vec<MirageClone>,
     pub tethers: Vec<Tether>,
     pub wells: Vec<Well>,
+    /// Ren's barrier: seconds until it blocks again.
+    pub barrier_cd: f32,
+    divine_ofuda: f32,
+    divine_orb: f32,
+    divine_ring: f32,
+    divine_charging: bool,
     /// Kuon's ward: seconds until it can block again (0 = ready).
     pub ward_cd: f32,
     /// Centre of Endless Firmament while it is open.
@@ -663,6 +681,11 @@ impl World {
             clones: Vec::new(),
             tethers: Vec::new(),
             wells: Vec::new(),
+            barrier_cd: 0.0,
+            divine_ofuda: 0.0,
+            divine_orb: 0.0,
+            divine_ring: 0.0,
+            divine_charging: false,
             ward_cd: 0.0,
             domain_center: Vec2::ZERO,
             domain_charging: false,
@@ -723,6 +746,7 @@ impl World {
         self.update_hannya();
         self.update_mukade();
         self.update_domain();
+        self.update_divine();
         self.update_clones();
         self.update_spirit_arts();
         self.update_effects();
@@ -813,6 +837,19 @@ impl World {
     }
 
     /// World positions of each moon orb. Awakened adds a counter-rotating outer ring.
+    /// Yin-yang orbs: they orbit Ren on a radius that swings wide and back.
+    pub fn yinyang_positions(&self, w: &OwnedWeapon) -> Vec<Vec2> {
+        let s = self.stats_of(w);
+        let n = s.amount.max(1);
+        let swing = 0.5 + 0.5 * (w.phase * 0.35).sin();
+        let r = (34.0 + 52.0 * swing) * s.area * self.area_mult();
+        (0..n).map(|k| self.player.pos + Vec2::new(0.0, -6.0) + Vec2::from_angle(w.phase + k as f32 / n as f32 * std::f32::consts::TAU) * r).collect()
+    }
+
+    pub fn yinyang_radius(&self, w: &OwnedWeapon) -> f32 {
+        9.0 * self.stats_of(w).area * self.area_mult()
+    }
+
     pub fn orb_positions(&self, w: &OwnedWeapon) -> Vec<Vec2> {
         let s = self.stats_of(w);
         let orbit = ORB_ORBIT * s.area * self.area_mult();
@@ -848,6 +885,10 @@ impl World {
 
     /// Applies a hit to the player (after armor) and handles death / Revival.
     fn hurt_player(&mut self, raw: f32) {
+        // Divine Purification: nothing touches the shrine maiden.
+        if self.form_kind() == Some(SpecialKind::Divine) {
+            return;
+        }
         // Kuon's ward: a hit is simply not allowed to land.
         if self.cfg.hero == HeroId::Kuon && self.ward_cd <= 0.0 {
             self.ward_cd = WARD_RECHARGE;
@@ -1265,6 +1306,7 @@ impl World {
             ProjKind::Seal => style::SEAL,
             ProjKind::Familiar => style::FOX,
             ProjKind::Fang => style::VENOM,
+            ProjKind::SealOrb => style::SEAL,
             _ => style::FOXFIRE,
         };
         self.events.push(Event::Burst { pos: c, radius: r, style: st });
@@ -1332,7 +1374,7 @@ impl World {
                 }
                 WeaponKind::Taiko => {
                     // Festival Quake: a colossal shockwave.
-                    self.waves.push(Wave { center: p, radius: 0.0, max_radius: 320.0 * area, speed: 420.0, damage: dmg * 1.8 });
+                    self.waves.push(Wave { center: p, radius: 0.0, max_radius: 320.0 * area, speed: 420.0, damage: dmg * 1.8, purify: false });
                     self.events.push(Event::Burst { pos: p, radius: 60.0, style: style::QUAKE });
                 }
                 WeaponKind::StarFall => {
@@ -1385,6 +1427,21 @@ impl World {
                             let d = (self.enemies.pos[j] - l).normalize_or_zero();
                             self.projectiles.push_kind(ProjKind::SpiritBolt, 5.0, l + Vec2::new(0.0, -12.0), d * 320.0, 0.9, dmg * 0.9, 2, 6.0);
                         }
+                    }
+                }
+                WeaponKind::YinYangOrbs => {
+                    // Yin-Yang Crash: a giant orb crashes onto the horde.
+                    if let Some(t) = self.random_targets(300.0, 1).first().copied() {
+                        self.blasts.push(Blast { pos: t, delay: 0.6, max_delay: 0.6, radius: 90.0 * area, damage: dmg * 4.0, style: style::YINYANG, burns: false });
+                    }
+                }
+                WeaponKind::SpiritSeal => {
+                    // Seal Ring: a full ring of seal orbs.
+                    for k in 0..14 {
+                        let a = k as f32 / 14.0 * std::f32::consts::TAU;
+                        self.projectiles.push_kind(ProjKind::SealOrb, 7.0, p, Vec2::from_angle(a) * 300.0, 1.8, dmg, 1, 5.0);
+                        let last = self.projectiles.len() - 1;
+                        self.projectiles.burst[last] = 26.0 * area;
                     }
                 }
                 WeaponKind::GravityWell => {
@@ -1490,6 +1547,77 @@ impl World {
             let tip = from + (to - from).normalize_or_zero() * ((to - from).length() + 20.0);
             self.hurt_along(from, tip, 8.0, dmg);
             self.events.push(Event::Lash { from, to: tip });
+        }
+    }
+
+    fn start_divine(&mut self) {
+        let p = self.player.pos;
+        self.player.form = DIVINE_DURATION;
+        self.player.iframes = BARRIER_IFRAMES;
+        self.divine_ofuda = 0.0;
+        self.divine_orb = 0.3;
+        self.divine_ring = 0.5;
+        self.divine_charging = false;
+        self.shots.clear();
+        self.events.push(Event::DivineAwakened { pos: p });
+    }
+
+    fn update_divine(&mut self) {
+        self.barrier_cd = (self.barrier_cd - DT).max(0.0);
+        if self.form_kind() != Some(SpecialKind::Divine) {
+            return;
+        }
+        self.player.form -= DT;
+        let p = self.player.pos;
+        let power = self.fox_power();
+        // Ofuda Storm: a stream of homing talismans in every direction.
+        self.divine_ofuda -= DT;
+        while self.divine_ofuda <= 0.0 {
+            self.divine_ofuda += DIVINE_OFUDA_EVERY;
+            for _ in 0..3 {
+                let a = self.rng.range(0.0, std::f32::consts::TAU);
+                self.projectiles.push_kind(ProjKind::Seal, 6.0, p, Vec2::from_angle(a) * 360.0, 1.6, DIVINE_OFUDA_DAMAGE * power, 1, 9.0);
+                let last = self.projectiles.len() - 1;
+                self.projectiles.burst[last] = 22.0;
+            }
+        }
+        // Yin-Yang Cataclysm: giant orbs crash onto enemy groups.
+        self.divine_orb -= DT;
+        if self.divine_orb <= 0.0 {
+            self.divine_orb = DIVINE_ORB_EVERY;
+            for t in self.random_targets(340.0, 3) {
+                let d = self.rng.range(0.35, 0.7);
+                self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 80.0, damage: DIVINE_ORB_DAMAGE * power, style: style::YINYANG, burns: false });
+            }
+        }
+        // Spirit-seal barrage: rings of orbs in every direction.
+        self.divine_ring -= DT;
+        if self.divine_ring <= 0.0 {
+            self.divine_ring = DIVINE_RING_EVERY;
+            let rot = self.time;
+            for k in 0..18 {
+                let a = rot + k as f32 / 18.0 * std::f32::consts::TAU;
+                self.projectiles.push_kind(ProjKind::SealOrb, 8.0, p, Vec2::from_angle(a) * 260.0, 1.8, DIVINE_RING_DAMAGE * power, 1, 2.0);
+                let last = self.projectiles.len() - 1;
+                self.projectiles.burst[last] = 26.0;
+            }
+        }
+        if !self.divine_charging && self.player.form <= DIVINE_FINALE_CHARGE {
+            self.divine_charging = true;
+            self.events.push(Event::DivineCharge { pos: p });
+        }
+        if self.player.form <= 0.0 {
+            self.player.form = 0.0;
+            // Final Purification.
+            self.query_circle(p, DIVINE_FINALE_RADIUS);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let dir = self.enemies.pos[j] - p;
+                self.hurt_enemy(j, DIVINE_FINALE_DAMAGE * power, dir);
+                self.enemies.push[j] += dir.normalize_or_zero() * (450.0 * self.enemies.knock[j]);
+            }
+            self.shots.clear();
+            self.events.push(Event::Burst { pos: p, radius: DIVINE_FINALE_RADIUS, style: style::PURIFY });
         }
     }
 
@@ -2198,6 +2326,24 @@ impl World {
                     }
                     self.weapons[wi].timer = timer;
                 }
+                WeaponKind::YinYangOrbs => {
+                    let phase = w.phase + s.speed * DT;
+                    self.weapons[wi].phase = phase;
+                    let rehit = (s.cooldown * 60.0) as u8;
+                    let r = 9.0 * s.area * self.area_mult();
+                    let current = self.weapons[wi];
+                    for c in self.yinyang_positions(&current) {
+                        self.query_circle(c, r);
+                        for idx in 0..self.scratch.len() {
+                            let j = self.scratch[idx] as usize;
+                            if self.enemies.orb_cd[j] == 0 {
+                                self.enemies.orb_cd[j] = rehit;
+                                let dir = self.enemies.pos[j] - self.player.pos;
+                                self.hurt_enemy(j, s.damage * might, dir);
+                            }
+                        }
+                    }
+                }
                 WeaponKind::MoonOrbs => {
                     let phase = w.phase + s.speed * DT;
                     self.weapons[wi].phase = phase;
@@ -2254,7 +2400,9 @@ impl World {
                 | WeaponKind::VenomFang
                 | WeaponKind::GravityWell
                 | WeaponKind::RepulsionStar
-                | WeaponKind::VoidLance => {
+                | WeaponKind::VoidLance
+                | WeaponKind::SpiritSeal
+                | WeaponKind::PurificationWave => {
                     let timer = w.timer - DT;
                     if timer <= 0.0 {
                         self.weapons[wi].timer = s.cooldown * haste;
@@ -2345,7 +2493,7 @@ impl World {
                 for n in 0..s.amount {
                     // Later waves start "behind" the first so they arrive as separate beats.
                     let start = -40.0 * n as f32;
-                    self.waves.push(Wave { center: p, radius: start, max_radius: 135.0 * area, speed: s.speed, damage: dmg });
+                    self.waves.push(Wave { center: p, radius: start, max_radius: 135.0 * area, speed: s.speed, damage: dmg, purify: false });
                 }
             }
             WeaponKind::StarFall => {
@@ -2517,6 +2665,24 @@ impl World {
                     self.projectiles.burst[last] = 26.0 * area;
                 }
             }
+            WeaponKind::SpiritSeal => {
+                self.events.push(Event::Fired(WeaponKind::SpiritSeal));
+                let n = s.amount;
+                for k in 0..n {
+                    let slot = k as f32 / n as f32 * std::f32::consts::TAU;
+                    self.projectiles.push_kind(ProjKind::SealOrb, 7.0, p, Vec2::from_angle(slot) * s.speed, 2.0, dmg, 1, 8.0);
+                    let last = self.projectiles.len() - 1;
+                    self.projectiles.charge[last] = s.duration + 0.05 * k as f32;
+                    self.projectiles.burst[last] = 26.0 * area;
+                }
+            }
+            WeaponKind::PurificationWave => {
+                self.events.push(Event::Fired(WeaponKind::PurificationWave));
+                self.waves.push(Wave { center: p, radius: 0.0, max_radius: 150.0 * area, speed: s.speed, damage: dmg, purify: true });
+                if w.awakened {
+                    self.waves.push(Wave { center: p, radius: -70.0, max_radius: 230.0 * area, speed: s.speed * 1.1, damage: dmg * 1.4, purify: true });
+                }
+            }
             WeaponKind::GravityWell => {
                 self.events.push(Event::Fired(WeaponKind::GravityWell));
                 for t in self.random_targets(260.0, s.amount) {
@@ -2601,7 +2767,14 @@ impl World {
                     if self.enemies.wave_cd[j] == 0 && off.length_sq() >= band.max(0.0) * band.max(0.0) {
                         self.enemies.wave_cd[j] = 20;
                         self.hurt_enemy(j, wv.damage, off * 2.0);
+                        if wv.purify {
+                            self.enemies.push[j] += off.normalize_or_zero() * (380.0 * self.enemies.knock[j].max(0.3));
+                        }
                     }
+                }
+                if wv.purify {
+                    let (c, r) = (wv.center, wv.radius);
+                    self.shots.retain(|s| ((s.pos - c).length() - r).abs() > 14.0);
                 }
             }
             i += 1;
@@ -2652,8 +2825,15 @@ impl World {
             // Charging in the hand: follow the player, then launch at the nearest enemy.
             if self.projectiles.charge[i] > 0.0 {
                 self.projectiles.charge[i] -= DT;
-                let hand = Vec2::new(if self.player.facing.x < 0.0 { -9.0 } else { 9.0 }, -6.0);
-                self.projectiles.pos[i] = self.player.pos + hand;
+                if self.projectiles.kind[i] == ProjKind::SealOrb {
+                    // Gather in a ring around the player (the slot angle rides in the velocity).
+                    let v = self.projectiles.vel[i];
+                    let a = v.y.atan2(v.x) + self.time * 5.0;
+                    self.projectiles.pos[i] = self.player.pos + Vec2::new(0.0, -8.0) + Vec2::from_angle(a) * 30.0;
+                } else {
+                    let hand = Vec2::new(if self.player.facing.x < 0.0 { -9.0 } else { 9.0 }, -6.0);
+                    self.projectiles.pos[i] = self.player.pos + hand;
+                }
                 if self.projectiles.charge[i] <= 0.0 {
                     let speed = self.projectiles.vel[i].length().max(1.0);
                     let dir = match self.nearest_enemy(380.0) {
@@ -2846,6 +3026,16 @@ impl World {
             s.life > 0.0
         });
         if hit && self.cfg.stress.is_none() && self.player.iframes <= 0.0 {
+            if self.cfg.hero == HeroId::Ren {
+                // Barrier: blocks a fireball outright when charged; otherwise softens it.
+                if self.barrier_cd <= 0.0 {
+                    self.barrier_cd = barrier_recharge(self.player.level);
+                    self.events.push(Event::BarrierBlock);
+                    return;
+                }
+                self.hurt_player(SHOT_DAMAGE * damage_scale(self.time) * BARRIER_SHOT_DAMAGE);
+                return;
+            }
             self.hurt_player(SHOT_DAMAGE * damage_scale(self.time));
         }
     }
@@ -2920,6 +3110,7 @@ impl World {
             SpecialKind::Hannya => return self.start_hannya(),
             SpecialKind::Mukade => return self.start_mukade(),
             SpecialKind::Firmament => return self.start_domain(),
+            SpecialKind::Divine => return self.start_divine(),
             SpecialKind::Barrier => {}
         }
         self.player.iframes = BARRIER_IFRAMES;
@@ -3238,6 +3429,7 @@ mod tests {
     #[test]
     fn barrier_needs_full_meter_and_hits_nearby() {
         let mut w = play(9, 60 * 20);
+        w.cfg.hero = HeroId::Kaede; // a hero whose special is the plain Barrier
         w.player.special = 0.5;
         w.use_special();
         assert!(w.player.iframes <= 1.0, "barrier must not fire on a half meter");
@@ -3449,7 +3641,7 @@ mod tests {
 
     #[test]
     fn chochin_fires_and_fireballs_hurt() {
-        let mut w = World::new(WorldConfig { seed: 8, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        let mut w = World::new(WorldConfig { seed: 8, hero: HeroId::Kaede, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
         w.cfg.stress = None;
         w.weapons.clear();
         w.time = 1.0;
@@ -3467,7 +3659,7 @@ mod tests {
 
     #[test]
     fn barrier_erases_fireballs() {
-        let mut w = World::new(WorldConfig::default());
+        let mut w = World::new(WorldConfig { hero: HeroId::Kaede, ..Default::default() });
         w.shots.push(Shot { pos: Vec2::new(50.0, 0.0), vel: Vec2::ZERO, life: 5.0 });
         w.shots.push(Shot { pos: Vec2::new(900.0, 0.0), vel: Vec2::ZERO, life: 5.0 });
         w.player.special = 1.0;
@@ -3793,6 +3985,36 @@ mod tests {
         assert!(finale, "Void Lance: Maximum should launch at the end");
         assert!(w.kills >= 10, "domain waves should kill the suspended ring, killed {}", w.kills);
         let _ = frozen_at;
+    }
+
+    #[test]
+    fn ren_barrier_blocks_fireballs_and_divine_purification_is_invulnerable() {
+        let mut w = World::new(WorldConfig::default());
+        assert_eq!(hero_def(HeroId::Ren).special, SpecialKind::Divine);
+        let hp = w.player.hp;
+        w.shots.push(Shot { pos: w.player.pos, vel: Vec2::ZERO, life: 5.0 });
+        w.step(Input::default());
+        assert_eq!(w.player.hp, hp, "the barrier blocks the first fireball");
+        assert!(w.barrier_cd > 0.0);
+        // Divine Purification: invulnerable, storms talismans, ends in the final blast.
+        w.weapons.clear();
+        for k in 0..30 {
+            w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(k as f32 * 0.21) * (90.0 + (k % 3) as f32 * 60.0));
+        }
+        w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        w.player.special = 1.0;
+        w.step(Input { special: true, ..Default::default() });
+        assert!(w.events.iter().any(|e| matches!(e, Event::DivineAwakened { .. })));
+        let hp = w.player.hp;
+        w.hurt_player(999.0);
+        assert_eq!(w.player.hp, hp, "invulnerable during the form");
+        let mut finale = false;
+        for _ in 0..60 * 9 {
+            w.step(Input::default());
+            finale |= w.events.iter().any(|e| matches!(e, Event::Burst { style: s, .. } if *s == style::PURIFY));
+        }
+        assert!(finale, "Final Purification should go off");
+        assert!(w.kills >= 20, "killed {}", w.kills);
     }
 
     fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {
