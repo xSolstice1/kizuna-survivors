@@ -607,6 +607,8 @@ pub enum Track {
     Menu,
     Battle,
     Boss,
+    /// Battle theme of campaign world 1..=5.
+    World(u8),
 }
 
 struct SongSpec {
@@ -739,6 +741,16 @@ pub fn music(t: Track) -> Buf {
         Track::Battle => song(SongSpec { bpm: 132.0, scale: &[0, 3, 5, 7, 10], root: 57.0, bars: 16, seed: 0xC0DE_0007, chords: &[0, 0, 3, 4], drums: 1, pad: false }),
         // In scale (dark), driving drums.
         Track::Boss => song(SongSpec { bpm: 148.0, scale: &[0, 1, 5, 7, 8], root: 50.0, bars: 16, seed: 0xD00D_0042, chords: &[0, 1, 0, 3], drums: 2, pad: true }),
+        // Hidden Shrine Valley: bright yo scale, quick and airy.
+        Track::World(1) => song(SongSpec { bpm: 140.0, scale: &[0, 2, 5, 7, 9], root: 64.0, bars: 16, seed: 0x5A1E_0101, chords: &[0, 3, 4, 0], drums: 1, pad: true }),
+        // Ember Leaf Frontier: minyo with war drums.
+        Track::World(2) => song(SongSpec { bpm: 152.0, scale: &[0, 3, 5, 7, 10], root: 55.0, bars: 16, seed: 0xE3B5_0202, chords: &[0, 4, 3, 4], drums: 2, pad: false }),
+        // Pale Citadel: in scale, slow and wide.
+        Track::World(3) => song(SongSpec { bpm: 120.0, scale: &[0, 1, 5, 7, 8], root: 52.0, bars: 16, seed: 0x9A1E_0303, chords: &[0, 1, 3, 0], drums: 1, pad: true }),
+        // Rainward 13: low, heavy, minor.
+        Track::World(4) => song(SongSpec { bpm: 112.0, scale: &[0, 3, 5, 7, 10], root: 48.0, bars: 16, seed: 0x4A1D_0404, chords: &[0, 0, 1, 4], drums: 2, pad: true }),
+        // Shatterline Crossing: tense, driving.
+        Track::World(_) => song(SongSpec { bpm: 156.0, scale: &[0, 1, 3, 6, 7], root: 50.0, bars: 16, seed: 0x5AA7_0505, chords: &[0, 3, 1, 4], drums: 2, pad: true }),
     }
 }
 

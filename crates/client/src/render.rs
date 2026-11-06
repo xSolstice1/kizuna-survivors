@@ -3,7 +3,7 @@
 use macroquad::prelude::*;
 
 use crate::kit;
-use sim::content::{EnemyKind, HeroId, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
+use sim::content::{EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
 use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
@@ -19,6 +19,53 @@ pub fn world_scale() -> f32 {
     } else {
         2.0
     }
+}
+
+/// Source of a campaign enemy's sprite (None for prologue enemies, which have named fields).
+fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
+    Some(match k {
+        EnemyKind::Kodama => include_str!("../../../art/src/w1/fodder_a.px"),
+        EnemyKind::PaperCrane => include_str!("../../../art/src/w1/fodder_b.px"),
+        EnemyKind::LanternFairy => include_str!("../../../art/src/w1/ranged.px"),
+        EnemyKind::FoxMaskPhantom => include_str!("../../../art/src/w1/blinker.px"),
+        EnemyKind::Komainu => include_str!("../../../art/src/w1/elite.px"),
+        EnemyKind::BellMaiden => include_str!("../../../art/src/w1/mini.px"),
+        EnemyKind::ToriiSerpent => include_str!("../../../art/src/w1/boss.px"),
+        EnemyKind::Mitsuhime => include_str!("../../../art/src/w1/final.px"),
+        EnemyKind::StrawPuppet => include_str!("../../../art/src/w2/fodder_a.px"),
+        EnemyKind::LeafShinobi => include_str!("../../../art/src/w2/fodder_b.px"),
+        EnemyKind::KunaiThrower => include_str!("../../../art/src/w2/ranged.px"),
+        EnemyKind::SmokeNinja => include_str!("../../../art/src/w2/blinker.px"),
+        EnemyKind::IronRonin => include_str!("../../../art/src/w2/elite.px"),
+        EnemyKind::Kagerou => include_str!("../../../art/src/w2/mini.px"),
+        EnemyKind::EmberToad => include_str!("../../../art/src/w2/boss.px"),
+        EnemyKind::BurningShogun => include_str!("../../../art/src/w2/final.px"),
+        EnemyKind::LostSoul => include_str!("../../../art/src/w3/fodder_a.px"),
+        EnemyKind::MaskedHound => include_str!("../../../art/src/w3/fodder_b.px"),
+        EnemyKind::PaleArcher => include_str!("../../../art/src/w3/ranged.px"),
+        EnemyKind::ShadeDancer => include_str!("../../../art/src/w3/blinker.px"),
+        EnemyKind::BoneSentinel => include_str!("../../../art/src/w3/elite.px"),
+        EnemyKind::GateCaptain => include_str!("../../../art/src/w3/mini.px"),
+        EnemyKind::HollowMonarch => include_str!("../../../art/src/w3/boss.px"),
+        EnemyKind::PaleSeraph => include_str!("../../../art/src/w3/final.px"),
+        EnemyKind::DrownedRat => include_str!("../../../art/src/w4/fodder_a.px"),
+        EnemyKind::RainGhoul => include_str!("../../../art/src/w4/fodder_b.px"),
+        EnemyKind::GutterSpitter => include_str!("../../../art/src/w4/ranged.px"),
+        EnemyKind::UmbrellaStalker => include_str!("../../../art/src/w4/blinker.px"),
+        EnemyKind::WardButcher => include_str!("../../../art/src/w4/elite.px"),
+        EnemyKind::NightInvestigator => include_str!("../../../art/src/w4/mini.px"),
+        EnemyKind::GutterMother => include_str!("../../../art/src/w4/boss.px"),
+        EnemyKind::CrimsonRainLord => include_str!("../../../art/src/w4/final.px"),
+        EnemyKind::CursedSpawn => include_str!("../../../art/src/w5/fodder_a.px"),
+        EnemyKind::WailingCommuter => include_str!("../../../art/src/w5/fodder_b.px"),
+        EnemyKind::CurseEye => include_str!("../../../art/src/w5/ranged.px"),
+        EnemyKind::GlitchShade => include_str!("../../../art/src/w5/blinker.px"),
+        EnemyKind::GradeOneBrute => include_str!("../../../art/src/w5/elite.px"),
+        EnemyKind::PatchworkSorcerer => include_str!("../../../art/src/w5/mini.px"),
+        EnemyKind::CrossingCalamity => include_str!("../../../art/src/w5/boss.px"),
+        EnemyKind::ShatterSovereign => include_str!("../../../art/src/w5/final.px"),
+        _ => return None,
+    })
 }
 
 pub struct Assets {
@@ -53,6 +100,8 @@ pub struct Assets {
     pub chest_open: Texture2D,
     pub shrine: Texture2D,
     icons: Vec<(&'static str, Texture2D)>,
+    /// Campaign enemies, indexed like `ALL_ENEMIES` (None for the prologue's own sprites).
+    world_enemies: Vec<Option<Texture2D>>,
 }
 
 impl Assets {
@@ -148,7 +197,28 @@ impl Assets {
             ("taiko", sprites::texture(include_str!("../../../art/src/icons/taiko.px"))),
             ("thunder_chain", sprites::texture(include_str!("../../../art/src/icons/thunder_chain.px"))),
             ("vitality", sprites::texture(include_str!("../../../art/src/icons/vitality.px"))),
+            ("relic_w1", sprites::texture(include_str!("../../../art/src/icons/relic_w1.px"))),
+            ("relic_w2", sprites::texture(include_str!("../../../art/src/icons/relic_w2.px"))),
+            ("relic_w3", sprites::texture(include_str!("../../../art/src/icons/relic_w3.px"))),
+            ("relic_w4", sprites::texture(include_str!("../../../art/src/icons/relic_w4.px"))),
+            ("relic_w5", sprites::texture(include_str!("../../../art/src/icons/relic_w5.px"))),
             ],
+            world_enemies: sim::content::ALL_ENEMIES.iter().map(|k| world_enemy_src(*k).map(sprites::texture)).collect(),
+        }
+    }
+
+    /// Any enemy's sprite (prologue kinds use their named textures).
+    pub fn enemy_tex(&self, k: EnemyKind) -> &Texture2D {
+        if let Some(t) = &self.world_enemies[k.index()] {
+            return t;
+        }
+        match k {
+            EnemyKind::Wisp => &self.wisp,
+            EnemyKind::Kasa => &self.kasa,
+            EnemyKind::Chochin => &self.chochin,
+            EnemyKind::Nopperabo => &self.nopperabo,
+            EnemyKind::NightLord => &self.night_lord,
+            _ => &self.oni,
         }
     }
 
@@ -299,6 +369,10 @@ pub struct Fx {
     leveled_once: bool,
     pub low_hp_warned: bool,
     hero: Option<HeroId>,
+    /// The stage's accent colour (kill sparks, boss auras).
+    pub accent: Color,
+    /// Lightning flash, 0..1, decays.
+    pub flash: f32,
 }
 
 const MAX_NUMBERS: usize = 120;
@@ -367,8 +441,15 @@ impl Fx {
                         EnemyKind::Chochin => (8, Color::from_rgba(255, 150, 70, 255)),
                         EnemyKind::Nopperabo => (8, Color::from_rgba(200, 180, 230, 255)),
                         EnemyKind::NightLord => (200, Color::from_rgba(255, 220, 120, 255)),
+                        k => match k.rank() {
+                            Rank::Fodder => (6, self.accent),
+                            Rank::Elite => (24, self.accent),
+                            Rank::Mini => (80, Color::from_rgba(255, 200, 90, 255)),
+                            Rank::Boss => (140, Color::from_rgba(255, 210, 110, 255)),
+                            Rank::Final => (200, Color::from_rgba(255, 220, 120, 255)),
+                        },
                     };
-                    if kind == EnemyKind::NightLord {
+                    if kind.rank() == Rank::Final {
                         self.shake = self.shake.max(0.6);
                         self.say(self.lines().night_lord_down);
                     }
@@ -397,15 +478,37 @@ impl Fx {
                     self.shake = self.shake.max(0.25);
                     self.say(self.lines().special);
                 }
-                Event::BossSpawned => {
-                    self.announce("A GREAT ONI APPROACHES".into());
+                Event::BossSpawned(kind) => {
+                    let name = if kind == EnemyKind::GreatOni { "A GREAT ONI".to_string() } else { kind.name().to_uppercase() };
+                    self.announce(format!("{name} APPROACHES"));
                     self.say(self.lines().boss);
                 }
-                Event::NightLordSpawned => {
-                    self.announce("THE NIGHT LORD RISES".into());
+                Event::EliteWave => {
+                    self.announce("ELITE WAVE".into());
+                    self.shake = self.shake.max(0.2);
+                }
+                Event::NightLordSpawned(kind) => {
+                    self.announce(if kind == EnemyKind::NightLord { "THE NIGHT LORD RISES".into() } else { format!("{} DESCENDS", kind.name().to_uppercase()) });
                     self.say(self.lines().night_lord);
                     self.shake = self.shake.max(0.4);
                 }
+                Event::BossPhase { pos } => {
+                    self.bursts.push((vec2(pos.x, pos.y), 90.0, 0.0, 1));
+                    self.shake = self.shake.max(0.35);
+                }
+                Event::Hazard { pos, radius, kind } => {
+                    let style = match kind {
+                        0 => style::METEOR,
+                        1 => style::SKYBOLT,
+                        _ => 3,
+                    };
+                    self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, style));
+                    if kind == 1 {
+                        self.flash = 1.0;
+                    }
+                    self.shake = self.shake.max(if kind == 2 { 0.3 } else { 0.12 });
+                }
+                Event::Curtain => {}
                 Event::Blink { pos } => {
                     for k in 0..10 {
                         if self.particles.len() >= MAX_PARTICLES {
@@ -548,6 +651,7 @@ impl Fx {
     }
 
     pub fn update(&mut self, dt: f32) {
+        self.flash = (self.flash - dt * 4.0).max(0.0);
         for n in &mut self.numbers {
             n.age += dt;
             n.pos.y -= 28.0 * dt;
@@ -603,6 +707,116 @@ impl Fx {
     }
 }
 
+/// A campaign enemy: sized by rank, with its telegraphs (charge lines, dash crouch) and a
+/// boss aura in the stage's accent colour.
+fn draw_world_enemy(world: &World, i: usize, t: &Texture2D, tint: Color, flip: bool, accent: Color, time: f64) {
+    use sim::content::{enemy_def, Ai, Rank};
+    let e = &world.enemies;
+    let (pos, kind) = (e.pos[i], e.kind[i]);
+    let rank = kind.rank();
+    let ai = enemy_def(kind).ai;
+    let scale = match rank {
+        Rank::Mini | Rank::Boss => 2.0,
+        Rank::Final => 2.2,
+        _ => 1.0,
+    };
+    let (w, h) = (t.width() * scale, t.height() * scale);
+    let tf = time as f32;
+    let bob = if rank >= Rank::Mini { (tf * 2.0 + i as f32).sin() * 2.5 } else { 0.0 };
+    let mut tint = tint;
+    let mut warn = false;
+    match ai {
+        Ai::Charger { .. } if e.ai_state[i] == 1 => {
+            let d = e.ai_dir[i];
+            draw_line(pos.x, pos.y, pos.x + d.x * 230.0, pos.y + d.y * 230.0, e.radius[i] * 0.8, Color::new(1.0, 0.2, 0.2, 0.22));
+            warn = true;
+        }
+        Ai::Boss if e.ai_busy[i] > 0.7 => {
+            let d = e.ai_aux[i];
+            draw_line(pos.x, pos.y, pos.x + d.x * 320.0, pos.y + d.y * 320.0, e.radius[i] * 1.4, Color::new(1.0, 0.2, 0.2, 0.2));
+            warn = true;
+        }
+        Ai::Dash if e.ai_busy[i] > 0.5 => {
+            let d = e.ai_aux[i];
+            draw_line(pos.x, pos.y, pos.x + d.x * 80.0, pos.y + d.y * 80.0, 3.0, Color::new(1.0, 0.3, 0.3, 0.35));
+            warn = true;
+        }
+        Ai::Blink if e.ai_state[i] != 0 => {
+            let f = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
+            tint.a = f.clamp(0.1, 1.0) * 0.85;
+        }
+        _ => {}
+    }
+    if warn && ((tf * 16.0) as i32) % 2 == 0 && e.flash[i] == 0 {
+        tint = Color::new(1.0, 0.75, 0.75, 1.0);
+    }
+    if rank >= Rank::Mini {
+        let pulse = 0.16 + 0.06 * (tf * 4.0).sin();
+        draw_circle(pos.x, pos.y - h * 0.3 + bob, w * 0.55, Color::new(accent.r, accent.g, accent.b, pulse * 0.6));
+        draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 4.0, 2.0, Color::new(accent.r, accent.g, accent.b, 0.35));
+    } else if matches!(ai, Ai::Ranged { .. }) {
+        draw_circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
+    }
+    draw_ellipse(pos.x, pos.y + h * 0.25 - 1.0, w * 0.32, (w * 0.09).max(2.5), 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+    draw_texture_ex(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+}
+
+/// World hazards: tag/blast and lightning telegraphs, spirit pressure, hostile domains.
+fn draw_hazards(world: &World, t: f32) {
+    use sim::world::HazardKind;
+    for h in &world.hazards {
+        let (x, y, r) = (h.pos.x, h.pos.y, h.radius);
+        match h.kind {
+            HazardKind::Blast { .. } => {
+                // A paper tag / falling strike: a ring that fills as it is about to go off.
+                let k = (1.0 - h.warn / 1.3).clamp(0.0, 1.0);
+                draw_circle(x, y, r * k, Color::new(1.0, 0.35, 0.15, 0.22));
+                draw_circle_lines(x, y, r, 2.0, Color::new(1.0, 0.45, 0.2, 0.55 + 0.4 * (t * 14.0).sin().abs()));
+                draw_rectangle(x - 3.0, y - 5.0, 6.0, 10.0, Color::new(0.95, 0.9, 0.75, 0.9));
+                draw_rectangle(x - 1.0, y - 3.0, 2.0, 6.0, Color::new(0.85, 0.15, 0.15, 1.0));
+            }
+            HazardKind::Lightning { .. } => {
+                let k = (1.0 - h.warn / 1.2).clamp(0.0, 1.0);
+                draw_circle(x, y, r * k, Color::new(0.7, 0.85, 1.0, 0.18));
+                draw_circle_lines(x, y, r, 2.0, Color::new(0.75, 0.9, 1.0, 0.5 + 0.5 * (t * 18.0).sin().abs()));
+                draw_line(x - r * 0.4, y, x + r * 0.4, y, 1.5, Color::new(0.85, 0.95, 1.0, 0.6));
+                draw_line(x, y - r * 0.4, x, y + r * 0.4, 1.5, Color::new(0.85, 0.95, 1.0, 0.6));
+            }
+            HazardKind::Pressure => {
+                let live = h.warn <= 0.0;
+                let a = if live { (h.life / 2.0).min(1.0) } else { 0.4 * (1.0 - h.warn) };
+                draw_circle(x, y, r, Color::new(0.45, 0.6, 1.0, 0.14 * a));
+                for k in 0..3 {
+                    let rr = r * (((t * 0.6 + k as f32 / 3.0) % 1.0) * 0.8 + 0.2);
+                    draw_circle_lines(x, y, rr, 1.5, Color::new(0.65, 0.8, 1.0, 0.35 * a * (1.0 - rr / r)));
+                }
+                draw_circle_lines(x, y, r, 2.0, Color::new(0.7, 0.85, 1.0, 0.45 * a));
+            }
+            HazardKind::Domain { .. } => {
+                if h.warn > 0.0 {
+                    // The domain is forming: a flickering boundary.
+                    let blink = ((t * 8.0) as i32 % 2 == 0) as i32 as f32;
+                    let segs = 48;
+                    for k in (0..segs).step_by(2) {
+                        let a0 = k as f32 / segs as f32 * std::f32::consts::TAU + t * 0.5;
+                        let a1 = a0 + std::f32::consts::TAU / segs as f32;
+                        draw_line(x + a0.cos() * r, y + a0.sin() * r, x + a1.cos() * r, y + a1.sin() * r, 3.0, Color::new(0.75, 0.3, 1.0, 0.4 + 0.5 * blink));
+                    }
+                } else {
+                    let a = (h.life / 1.0).min(1.0);
+                    draw_circle(x, y, r, Color::new(0.18, 0.02, 0.28, 0.32 * a));
+                    draw_circle_lines(x, y, r, 4.0, Color::new(0.75, 0.3, 1.0, 0.8 * a));
+                    for k in 0..12 {
+                        let ang = k as f32 / 12.0 * std::f32::consts::TAU - t * 0.3;
+                        let (cx, cy) = (x + ang.cos() * (r - 12.0), y + ang.sin() * (r - 12.0));
+                        draw_poly(cx, cy, 3, 5.0, ang.to_degrees(), Color::new(0.9, 0.5, 1.0, 0.7 * a));
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
     let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
     let p = world.player.pos;
@@ -614,7 +828,7 @@ pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
 
 pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx: &Fx, cam: &Camera2D, time: f64) {
     set_camera(cam);
-    stage.draw_ground(cam, time);
+    stage.draw_ground(world.cfg.stage, cam, time);
     let p = world.player.pos;
 
     // Sakura Field sits on the ground under everything.
@@ -789,6 +1003,11 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 tint,
                 DrawTextureParams { dest_size: Some(vec2(96.0, 96.0)), ..Default::default() },
             );
+            continue;
+        }
+        let kind = e.kind[i];
+        if let Some(t) = &a.world_enemies[kind.index()] {
+            draw_world_enemy(world, i, t, tint, flip, fx.accent, time);
             continue;
         }
         let (tex, half, bottom) = match e.kind[i] {
@@ -1355,12 +1574,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
 
     // Enemy fireballs: drawn above everything so they always read as danger.
+    draw_hazards(world, time as f32);
     for s in &world.shots {
         let r = sim::content::SHOT_RADIUS;
         let flick = 0.8 + 0.2 * (time as f32 * 20.0 + s.pos.x).sin();
-        draw_circle(s.pos.x, s.pos.y, r * 2.0, Color::new(1.0, 0.35, 0.15, 0.22 * flick));
-        draw_circle(s.pos.x, s.pos.y, r, Color::new(1.0, 0.45, 0.2, 1.0));
-        draw_circle(s.pos.x, s.pos.y, r * 0.5, Color::new(1.0, 0.95, 0.7, 1.0));
+        let c = crate::stage::bullet_color(s.style);
+        draw_circle(s.pos.x, s.pos.y, r * 2.0, Color::new(c.r, c.g * 0.8, c.b * 0.8, 0.24 * flick));
+        draw_circle(s.pos.x, s.pos.y, r, c);
+        draw_circle(s.pos.x, s.pos.y, r * 0.5, Color::new(1.0, 0.97, 0.9, 1.0));
     }
 
     for (c, age) in &fx.rings {

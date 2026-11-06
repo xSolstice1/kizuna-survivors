@@ -29,6 +29,8 @@ enum Screen {
     /// Click-to-start splash (browsers need a click before audio/focus).
     Title,
     Menu,
+    /// Map select (world + difficulty), before character select.
+    Stages,
     Characters,
     Shop,
     Collection,
@@ -57,7 +59,7 @@ fn read_input() -> Input {
 
 fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
     let seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
-    World::new(WorldConfig { seed, stress, hero: profile.selected, meta: profile.bonus(), ..Default::default() })
+    World::new(WorldConfig { seed, stress, hero: profile.selected, meta: profile.bonus(), stage: profile.stage, difficulty: profile.difficulty, ..Default::default() })
 }
 
 #[macroquad::main(window_conf)]
@@ -118,11 +120,20 @@ async fn main() {
             _ => audio.set_music(Some(synth::Track::Menu)),
         }
         // Dev (remove before release): F7 on the menu or character select unlocks every hero.
-        if matches!(screen, Screen::Menu | Screen::Characters) && is_key_pressed(KeyCode::F7) {
+        if matches!(screen, Screen::Menu | Screen::Characters | Screen::Stages) && is_key_pressed(KeyCode::F7) {
             for h in sim::content::ALL_HEROES {
                 if !profile.unlocked.contains(&h) {
                     profile.unlocked.push(h);
                 }
+            }
+            save::store(&profile);
+            audio.play(synth::Sfx::Buy);
+        }
+        // Dev (remove before release): F6 on the map select opens every world and difficulty.
+        if screen == Screen::Stages && is_key_pressed(KeyCode::F6) {
+            for row in profile.cleared.iter_mut() {
+                row[0] = true;
+                row[1] = true;
             }
             save::store(&profile);
             audio.play(synth::Sfx::Buy);
@@ -137,7 +148,7 @@ async fn main() {
                 }
             }
             Screen::Menu => match menu::main_menu(&profile, &assets, now) {
-                Some(menu::MenuAction::Start) => screen = Screen::Characters,
+                Some(menu::MenuAction::Start) => screen = Screen::Stages,
                 Some(menu::MenuAction::Shop) => screen = Screen::Shop,
                 Some(menu::MenuAction::Collection) => screen = Screen::Collection,
                 Some(menu::MenuAction::Stats) => screen = Screen::Stats,
@@ -164,17 +175,32 @@ async fn main() {
                 Some(menu::SettingsAction::Back) => screen = Screen::Menu,
                 None => {}
             },
+            Screen::Stages => match menu::stage_select(&mut profile, &assets, &stage_art, now) {
+                Some(menu::StageAction::Go) => {
+                    save::store(&profile);
+                    screen = Screen::Characters;
+                }
+                Some(menu::StageAction::Back) => {
+                    save::store(&profile);
+                    screen = Screen::Menu;
+                }
+                None => {}
+            },
             Screen::Characters => match menu::char_select(&mut profile, &assets, &mut hero_cursor, now) {
                 Some(menu::SelectAction::Begin) => {
                     save::store(&profile);
+                    if profile.stage.index() > 0 {
+                        audio.prepare(synth::Track::World(profile.stage.index() as u8)).await;
+                    }
                     world = new_world(stress, &profile);
                     report = None;
                     fx.set_hero(profile.selected);
+                    fx.accent = stage::accent(profile.stage);
                     fx.clear();
                     jingle_played = false;
                     screen = Screen::Playing;
                 }
-                Some(menu::SelectAction::Back) => screen = Screen::Menu,
+                Some(menu::SelectAction::Back) => screen = Screen::Stages,
                 None => {}
             },
             Screen::Shop => match menu::shop(&mut profile, &assets, &mut shop_cursor, now) {
@@ -226,8 +252,12 @@ async fn main() {
                 audio.play(if world.state == RunState::Won { synth::Sfx::Victory } else { synth::Sfx::Defeat });
             }
         } else {
-            let boss = world.boss().is_some_and(|b| b.2 == sim::content::EnemyKind::NightLord);
-            audio.set_music(Some(if boss { synth::Track::Boss } else { synth::Track::Battle }));
+            let boss = world.boss().is_some_and(|b| b.2.rank() >= sim::content::Rank::Boss);
+            let theme = match world.cfg.stage.index() {
+                0 => synth::Track::Battle,
+                i => synth::Track::World(i as u8),
+            };
+            audio.set_music(Some(if boss { synth::Track::Boss } else { theme }));
         }
         let restart = (is_key_pressed(KeyCode::R) && screen == Screen::Paused) || toggle_stress;
         if restart {
@@ -239,10 +269,16 @@ async fn main() {
         }
         // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest,
         // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots), F7 shrine underfoot,
-        // F8 skip to the Night Lord, F9 fill the special meter, F10 Awaken every owned weapon,
+        // F8 skip to the final boss, B skip to the second boss, F9 fill the special meter, F10 Awaken every owned weapon,
         // P drop a random pickup nearby, O drop a chest nearby.
         if is_key_pressed(KeyCode::F2) {
-            world.time = world.time.max(sim::content::MIDBOSS_AT - 3.0);
+            world.time = world.time.max(world.stage().mini_at - 3.0);
+        }
+        // Dev: B skips to the stage's second boss.
+        if is_key_pressed(KeyCode::B) {
+            if let Some((_, at)) = world.stage().boss {
+                world.time = world.time.max(at - 3.0);
+            }
         }
         if is_key_pressed(KeyCode::F3) {
             world.debug_max_loadout();
@@ -277,7 +313,7 @@ async fn main() {
             world.player.special = 1.0;
         }
         if is_key_pressed(KeyCode::F8) {
-            world.time = world.time.max(sim::content::RUN_SECONDS - 3.0);
+            world.time = world.time.max(world.stage().final_at - 3.0);
         }
         if let Some(s) = stress.as_mut() {
             let mut changed = true;
@@ -346,6 +382,10 @@ async fn main() {
         let cam = render::camera_for(&world, &fx);
         render::draw_world(&world, &assets, &stage_art, &fx, &cam, now);
         set_default_camera();
+        if world.stage().mechanic == sim::campaign::Mechanic::Downpour {
+            let pp = cam.world_to_screen(vec2(world.player.pos.x, world.player.pos.y));
+            stage_art.draw_downpour(pp, now, fx.flash);
+        }
         stage_art.draw_vignette();
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {

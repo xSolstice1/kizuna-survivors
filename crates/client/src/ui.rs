@@ -2,8 +2,7 @@
 
 use macroquad::prelude::*;
 use sim::content::{
-    awakened_name, complement, hero_def, passive_max, EnemyKind, ShrineEvent, SpecialKind, Upgrade, AWAKEN_FROM, DAWN_LIMIT, MAX_LEVEL,
-    MIDBOSS_AT, RUN_SECONDS, SHRINE_TIMES,
+    awakened_name, complement, hero_def, passive_max, EnemyKind, ShrineEvent, SpecialKind, Upgrade, AWAKEN_FROM, MAX_LEVEL,
 };
 use sim::World;
 
@@ -152,17 +151,29 @@ pub fn hud(world: &World, assets: &Assets) {
     // Timer card, top-centre.
     let (tw, tx) = (220.0, (w - 220.0) / 2.0);
     kit::panel(tx, 22.0, tw, 62.0);
-    let night = world.time >= RUN_SECONDS;
+    let st = world.stage();
+    let night = world.time >= st.final_at;
     centered(&fmt_time(world.time), 60.0, 36.0, if night { Color::new(1.0, 0.55, 0.45, 1.0) } else { INK });
-    let sub = if !night { format!("Night Lord in {}", fmt_time(RUN_SECONDS - world.time)) } else { format!("dawn in {}", fmt_time(DAWN_LIMIT - world.time)) };
-    centered(&sub, 77.0, 13.0, if night { Color::new(1.0, 0.6, 0.5, 0.8 + 0.2 * (t * 4.0).sin()) } else { DIM });
+    let sub = if !night { format!("{} in {}", st.final_boss.short_name(), fmt_time(st.final_at - world.time)) } else { format!("dawn in {}", fmt_time(st.limit - world.time)) };
+    kit::text_fit_centered(&sub, w / 2.0, 77.0, tw - 16.0, 13.0, if night { Color::new(1.0, 0.6, 0.5, 0.8 + 0.2 * (t * 4.0).sin()) } else { DIM });
 
     // Boss bar.
     if let Some((_, frac, kind)) = world.boss() {
         let (bw, bx) = (460.0, (w - 460.0) / 2.0);
-        let name = if kind == EnemyKind::NightLord { "NIGHT LORD  ·  CHOCHIN DAIMYO" } else { "GREAT ONI" };
+        let name = match kind {
+            EnemyKind::NightLord => "NIGHT LORD  ·  CHOCHIN DAIMYO".to_string(),
+            k => k.name().to_uppercase(),
+        };
         kit::panel_ex(bx - 10.0, 90.0, bw + 20.0, 40.0, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
-        centered(name, 106.0, 14.0, Color::new(1.0, 0.75, 0.75, 1.0));
+        kit::text_fit_centered(&name, w / 2.0, 106.0, bw, 14.0, Color::new(1.0, 0.75, 0.75, 1.0));
+        // Phase pips for bosses that fight in phases.
+        let phases = sim::content::boss_phases(kind, world.cfg.difficulty.extra_phases());
+        if kind != EnemyKind::NightLord && kind != EnemyKind::GreatOni && phases > 1 {
+            for k in 1..phases {
+                let x = bx + bw * (1.0 - k as f32 / phases as f32);
+                draw_line(x, 111.0, x, 123.0, 2.0, Color::new(1.0, 0.9, 0.7, 0.8));
+            }
+        }
         kit::bar(bx, 112.0, bw, 10.0, frac, Color::new(0.9, 0.22, 0.28, 1.0), Color::new(0.2, 0.04, 0.08, 1.0));
     }
 
@@ -410,22 +421,26 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> 
 
     // ── Right: night progress, stats, actions ──
     kit::panel(rx, top, rw, 200.0);
-    kit::panel_title("THE NIGHT SO FAR", rx + 18.0, top + 32.0, 16.0, GOLD);
+    kit::panel_title(&format!("{}  ·  {}", world.stage().name.to_uppercase(), world.cfg.difficulty.name().to_uppercase()), rx + 18.0, top + 32.0, 16.0, GOLD);
     // Timeline 0 -> dawn with markers.
     let (tx, tw2, ty) = (rx + 30.0, rw - 60.0, top + 70.0);
-    let at = |s: f32| tx + tw2 * (s / DAWN_LIMIT).min(1.0);
-    kit::bar(tx, ty, tw2, 10.0, world.time / DAWN_LIMIT, Color::new(0.55, 0.45, 0.95, 1.0), Color::new(1.0, 1.0, 1.0, 0.08));
+    let st = world.stage();
+    let at = |s: f32| tx + tw2 * (s / st.limit).min(1.0);
+    kit::bar(tx, ty, tw2, 10.0, world.time / st.limit, Color::new(0.55, 0.45, 0.95, 1.0), Color::new(1.0, 1.0, 1.0, 0.08));
     let mark = |x: f32, label: &str, c: Color, up: bool| {
         draw_line(x, ty - 4.0, x, ty + 14.0, 2.0, c);
         let d = kit::measure(label, 12);
         kit::text(label, x - d.width / 2.0, if up { ty - 8.0 } else { ty + 30.0 }, 12.0, c);
     };
-    for st in SHRINE_TIMES {
-        mark(at(st), "shrine", Color::new(1.0, 0.85, 0.5, 0.6), true);
+    for s in st.shrine_times {
+        mark(at(*s), "shrine", Color::new(1.0, 0.85, 0.5, 0.6), true);
     }
-    mark(at(MIDBOSS_AT), "Great Oni", Color::new(1.0, 0.5, 0.5, 0.9), false);
-    mark(at(RUN_SECONDS), "Night Lord", Color::new(1.0, 0.35, 0.35, 1.0), false);
-    mark(at(DAWN_LIMIT), "dawn", Color::new(1.0, 0.9, 0.6, 1.0), false);
+    mark(at(st.mini_at), "mini-boss", Color::new(1.0, 0.5, 0.5, 0.9), false);
+    if let Some((_, b)) = st.boss {
+        mark(at(b), "boss", Color::new(1.0, 0.42, 0.42, 0.95), true);
+    }
+    mark(at(st.final_at), st.final_boss.short_name(), Color::new(1.0, 0.35, 0.35, 1.0), false);
+    mark(at(st.limit), "dawn", Color::new(1.0, 0.9, 0.6, 1.0), false);
     draw_poly(at(world.time), ty + 5.0, 4, 8.0, 45.0, INK);
     // Stat chips.
     let mut cx = rx + 18.0;
@@ -529,6 +544,18 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
             centered(&format!("{} new Collection entr{}", r.discovered, if r.discovered == 1 { "y" } else { "ies" }), y, 17.0, SKY);
             y += 28.0;
         }
+        if let Some(d) = r.first_clear {
+            centered(&format!("FIRST {} CLEAR  ·  +{} Sen bonus", d.name().to_uppercase(), d.first_clear_sen()), y, 20.0, GOLD);
+            y += 28.0;
+        }
+        if let Some(rel) = r.relic {
+            centered(&format!("RELIC EARNED: {} ({})", rel.name(), rel.describe()), y, 18.0, Color::new(0.75, 0.9, 1.0, 1.0));
+            y += 26.0;
+        }
+        if let Some(stg) = r.stage_unlocked {
+            centered(&format!("NEW WORLD OPEN: {}", stg.def().name), y, 20.0, JADE);
+            y += 28.0;
+        }
         for hero in &r.unlocked {
             let pulse = 0.75 + 0.25 * (get_time() * 4.0).sin() as f32;
             centered(&format!("NEW HERO UNLOCKED: {}", hero_def(*hero).name), y, 22.0, Color::new(1.0, 0.6, 0.85, pulse));
@@ -571,9 +598,11 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
     };
     if big {
         dim_screen(0.6);
-        centered("NIGHT MAP", 64.0, 36.0, INK);
+        centered(&world.stage().name.to_uppercase(), 64.0, 36.0, INK);
     }
     kit::panel(x, y, size, size);
+    let g = crate::stage::ground_color(world.cfg.stage);
+    kit::rounded(x + 3.0, y + 3.0, size - 6.0, size - 6.0, 10.0, Color::new(g.r, g.g, g.b, 0.55));
     let c = vec2(x + size / 2.0, y + size / 2.0);
     let scale = (size / 2.0 - 6.0) / range;
     let p = world.player.pos;
@@ -603,6 +632,12 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
     }
     // Markers, drawn by kind (ordinary enemies first so important ones sit on top).
     let pulse = 0.6 + 0.4 * (get_time() as f32 * 5.0).sin();
+    // The sprite of whatever elite / boss the stage fields.
+    let st = world.stage();
+    let boss_kind = |q: sim::Vec2| {
+        let e = &world.enemies;
+        (0..e.len()).filter(|&i| e.kind[i].is_boss()).min_by(|&a, &b| (e.pos[a] - q).length_sq().partial_cmp(&(e.pos[b] - q).length_sq()).unwrap()).map(|i| e.kind[i])
+    };
     let mut markers = world.map_markers();
     markers.sort_by_key(|m| !matches!(m.kind, sim::MarkerKind::Enemy));
     for m in markers {
@@ -614,19 +649,20 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
             }
             sim::MarkerKind::Elite => {
                 let s = if big { 16.0 } else { 11.0 };
-                draw_texture_ex(&assets.oni, q.x - s / 2.0, q.y - s / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
+                draw_texture_ex(assets.enemy_tex(st.elite), q.x - s / 2.0, q.y - s / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
             }
             sim::MarkerKind::MiniBoss => {
                 let s = if big { 24.0 } else { 16.0 };
                 draw_circle(q.x, q.y, s * 0.7, Color::new(0.6, 0.4, 1.0, 0.25 + 0.2 * pulse));
                 draw_circle_lines(q.x, q.y, s * 0.7, 1.5, Color::new(0.8, 0.6, 1.0, 1.0));
-                draw_texture_ex(&assets.oni, q.x - s / 2.0, q.y - s / 2.0, Color::new(0.85, 0.7, 1.0, 1.0), DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
+                draw_texture_ex(assets.enemy_tex(st.mini), q.x - s / 2.0, q.y - s / 2.0, if st.mini == EnemyKind::GreatOni { Color::new(0.85, 0.7, 1.0, 1.0) } else { WHITE }, DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
             }
             sim::MarkerKind::Boss => {
                 let s = if big { 28.0 } else { 18.0 };
                 draw_circle(q.x, q.y, s * 0.75, Color::new(1.0, 0.3, 0.1, 0.25 + 0.25 * pulse));
                 draw_circle_lines(q.x, q.y, s * 0.75 + 2.0 * pulse, 2.0, Color::new(1.0, 0.5, 0.2, 1.0));
-                draw_texture_ex(&assets.night_lord, q.x - s / 2.0, q.y - s / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
+                let k = boss_kind(m.pos).unwrap_or(st.final_boss);
+                draw_texture_ex(assets.enemy_tex(k), q.x - s / 2.0, q.y - s / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
             }
             sim::MarkerKind::Chest { tier } => {
                 let s = if tier >= 3 { 1.5 } else { 1.0 };
@@ -662,9 +698,9 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
         let items: [(&str, Color); 7] = [
             ("you", INK),
             ("Otherworlders", Color::new(1.0, 0.25, 0.3, 1.0)),
-            ("Oni", Color::new(1.0, 0.45, 0.35, 1.0)),
-            ("Great Oni", Color::new(0.8, 0.6, 1.0, 1.0)),
-            ("Night Lord", Color::new(1.0, 0.5, 0.2, 1.0)),
+            ("elite", Color::new(1.0, 0.45, 0.35, 1.0)),
+            ("mini-boss", Color::new(0.8, 0.6, 1.0, 1.0)),
+            ("boss", Color::new(1.0, 0.5, 0.2, 1.0)),
             ("chest", GOLD),
             ("pickup", JADE),
         ];

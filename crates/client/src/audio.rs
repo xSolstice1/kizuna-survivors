@@ -2,7 +2,7 @@
 //! Backed by macroquad audio in the browser (and natively with `--features native-audio`);
 //! otherwise every call is a silent no-op.
 
-use sim::content::{EnemyKind, WeaponKind};
+use sim::content::{Rank, WeaponKind};
 use sim::Event;
 
 use crate::synth::{self, Sfx, Track, ALL_SFX};
@@ -110,6 +110,16 @@ impl Audio {
         Audio { sfx, music, current: None, next_ok: vec![0.0; ALL_SFX.len()], this_frame: 0, music_volume, sfx_volume }
     }
 
+    /// Synthesises and loads a track if it isn't loaded yet (world themes load on demand).
+    pub async fn prepare(&mut self, t: Track) {
+        if self.music.iter().any(|(x, _)| *x == t) {
+            return;
+        }
+        if let Some(h) = backend::load(&synth::music(t).wav()).await {
+            self.music.push((t, h));
+        }
+    }
+
     /// Call once per frame before any `play`.
     pub fn begin_frame(&mut self) {
         self.this_frame = 0;
@@ -155,15 +165,22 @@ impl Audio {
         for ev in events {
             let s = match *ev {
                 Event::Hit { .. } => Sfx::Hit,
-                Event::Kill { kind, .. } => match kind {
-                    EnemyKind::GreatOni | EnemyKind::NightLord => Sfx::Boom,
-                    EnemyKind::Oni => Sfx::BigPop,
-                    _ => Sfx::Pop,
+                Event::Kill { kind, .. } => match kind.rank() {
+                    Rank::Mini | Rank::Boss | Rank::Final => Sfx::Boom,
+                    Rank::Elite => Sfx::BigPop,
+                    Rank::Fodder => Sfx::Pop,
                 },
+                Event::BossPhase { .. } => Sfx::GongDeep,
+                Event::Hazard { kind, .. } => match kind {
+                    0 => Sfx::Meteor,
+                    1 => Sfx::Thunder,
+                    _ => Sfx::GongDeep,
+                },
+                Event::Curtain => Sfx::Chime,
                 Event::PlayerHurt => Sfx::Hurt,
                 Event::LevelUp => Sfx::LevelUp,
                 Event::SpecialUsed { .. } => Sfx::Special,
-                Event::BossSpawned => Sfx::Gong,
+                Event::BossSpawned(_) | Event::EliteWave => Sfx::Gong,
                 Event::BossTelegraph => Sfx::Rumble,
                 Event::Awakened(_) => Sfx::Awaken,
                 Event::Bolt { .. } => Sfx::Zap,
@@ -171,7 +188,7 @@ impl Audio {
                 Event::Impact { .. } => Sfx::Thud,
                 Event::ShrineAppeared => Sfx::Bell,
                 Event::ShrineChosen(_) => Sfx::Chime,
-                Event::NightLordSpawned => Sfx::GongDeep,
+                Event::NightLordSpawned(_) => Sfx::GongDeep,
                 Event::Revived => Sfx::Revive,
                 Event::SenPicked { .. } => Sfx::Coin,
                 Event::Blink { .. } => Sfx::Warble,

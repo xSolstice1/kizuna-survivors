@@ -5,6 +5,7 @@ use macroquad::prelude::*;
 use crate::kit;
 use crate::kit::{mouse_position, screen_height, screen_width};
 use sim::content::{awakened_name, awakened_text, complement, hero_def, EnemyKind, Upgrade, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
+use sim::campaign::{Difficulty, StageId, ALL_DIFFICULTIES, ALL_RELICS, ALL_STAGES};
 use sim::meta::{collection_progress, enemy_found, unlock_text, PowerUp, Profile, ALL_POWERUPS};
 
 use crate::render::Assets;
@@ -21,7 +22,7 @@ fn centered(text: &str, y: f32, size: f32, color: Color) {
 
 /// Draws a button; returns true when clicked. Main actions get the vermilion style.
 fn button(r: Rect, label: &str, enabled: bool) -> bool {
-    let primary = matches!(label, "Start" | "Begin the night" | "Buy");
+    let primary = matches!(label, "Start" | "Begin the night" | "Buy" | "Choose hero");
     kit::button(r, label, enabled, if primary { kit::Style::Primary } else { kit::Style::Secondary })
 }
 
@@ -71,7 +72,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     backdrop(time);
     let (w, h) = (screen_width(), screen_height());
     centered("KIZUNA SURVIVORS", h * 0.24, 72.0, ACCENT);
-    centered("Heroes of many stories. One night. Defeat the Night Lord before dawn.", h * 0.24 + 32.0, 20.0, DIM);
+    centered("Heroes of many stories. Five worlds. Defeat what rules each night before dawn.", h * 0.24 + 32.0, 20.0, DIM);
     sen_badge(assets, profile.sen);
 
     let (bw, bh) = (320.0, 56.0);
@@ -307,9 +308,10 @@ pub enum Tab {
     Passives,
     Shrines,
     Heroes,
+    Relics,
 }
 
-const TABS: [Tab; 6] = [Tab::Otherworlders, Tab::Weapons, Tab::Awakenings, Tab::Passives, Tab::Shrines, Tab::Heroes];
+const TABS: [Tab; 7] = [Tab::Otherworlders, Tab::Weapons, Tab::Awakenings, Tab::Passives, Tab::Shrines, Tab::Heroes, Tab::Relics];
 
 impl Tab {
     fn name(self) -> &'static str {
@@ -320,6 +322,7 @@ impl Tab {
             Tab::Passives => "Passives",
             Tab::Shrines => "Shrine Events",
             Tab::Heroes => "Heroes",
+            Tab::Relics => "Relics",
         }
     }
     fn len(self) -> usize {
@@ -329,6 +332,7 @@ impl Tab {
             Tab::Passives => ALL_PASSIVES.len(),
             Tab::Shrines => ALL_SHRINE_EVENTS.len(),
             Tab::Heroes => ALL_HEROES.len(),
+            Tab::Relics => ALL_RELICS.len(),
         }
     }
 }
@@ -354,15 +358,7 @@ struct Entry<'a> {
 }
 
 fn enemy_icon(assets: &Assets, k: EnemyKind) -> (&Texture2D, Color) {
-    match k {
-        EnemyKind::Wisp => (&assets.wisp, WHITE),
-        EnemyKind::Kasa => (&assets.kasa, WHITE),
-        EnemyKind::Chochin => (&assets.chochin, WHITE),
-        EnemyKind::Nopperabo => (&assets.nopperabo, WHITE),
-        EnemyKind::Oni => (&assets.oni, WHITE),
-        EnemyKind::GreatOni => (&assets.oni, Color::new(0.85, 0.7, 1.0, 1.0)),
-        EnemyKind::NightLord => (&assets.night_lord, WHITE),
-    }
+    (assets.enemy_tex(k), if k == EnemyKind::GreatOni { Color::new(0.85, 0.7, 1.0, 1.0) } else { WHITE })
 }
 
 fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry<'a> {
@@ -376,7 +372,10 @@ fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry
                 icon,
                 tint,
                 name: k.name().into(),
-                lines: vec![k.lore().into(), format!("Defeated: {kills}{}", if k.is_boss() { "   (boss)" } else { "" })],
+                lines: vec![
+                    k.lore().into(),
+                    format!("{}  ·  Defeated: {kills}{}", sim::campaign::home_stage(k).def().name, if k.is_boss() { "   (boss)" } else { "" }),
+                ],
             }
         }
         Tab::Weapons => {
@@ -437,6 +436,17 @@ fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry
                 ],
             }
         }
+        Tab::Relics => {
+            let r = ALL_RELICS[i];
+            let home = ALL_STAGES.iter().find(|s| s.def().relic == Some(r)).map_or("", |s| s.def().name);
+            Entry {
+                found: profile.relics.contains(&r),
+                icon: assets.icon_named(r.icon()),
+                tint: WHITE,
+                name: r.name().into(),
+                lines: vec![r.describe().into(), format!("Always active. Earned by clearing {home} on Nightmare.")],
+            }
+        }
     }
 }
 
@@ -448,6 +458,7 @@ fn hint(tab: Tab) -> &'static str {
         Tab::Passives => "Not yet found.",
         Tab::Shrines => "Not yet chosen at a roadside shrine.",
         Tab::Heroes => "Locked.",
+        Tab::Relics => "Clear its world on Nightmare to earn it.",
     }
 }
 
@@ -460,7 +471,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     centered(&format!("{found} / {total} discovered"), 92.0, 20.0, DIM);
 
     // Tabs.
-    let (tw, th, tg) = (170.0, 36.0, 8.0);
+    let (tw, th, tg) = (156.0, 36.0, 8.0);
     let tx0 = (w - (TABS.len() as f32 * tw + (TABS.len() as f32 - 1.0) * tg)) / 2.0;
     let mouse: Vec2 = mouse_position().into();
     for (i, t) in TABS.iter().enumerate() {
@@ -484,8 +495,8 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
 
     // Grid.
     let n = st.tab.len();
-    let cols = 10.min(n);
-    let (cw, gap) = (84.0, 10.0);
+    // Big tabs (the bestiary) use smaller cells so the detail panel still fits.
+    let (cols, cw, gap) = if n > 30 { (16.min(n), 62.0, 8.0) } else { (10.min(n), 84.0, 10.0) };
     let x0 = (w - (cols as f32 * cw + (cols as f32 - 1.0) * gap)) / 2.0;
     let y0 = 160.0;
     for i in 0..n {
@@ -495,7 +506,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL }, if sel { ACCENT } else if r.contains(mouse) { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         // Fit the icon into the cell keeping its aspect ratio.
         let (iw, ih) = (e.icon.width(), e.icon.height());
-        let k = (60.0 / iw.max(ih)).floor().max(1.0).min(4.0);
+        let k = ((cw - 22.0) / iw.max(ih)).floor().max(1.0).min(4.0);
         let (dw, dh) = (iw * k, ih * k);
         let tint = if e.found { e.tint } else { Color::new(0.0, 0.0, 0.0, 0.85) };
         draw_texture_ex(e.icon, (r.x + (cw - dw) / 2.0).round(), (r.y + (cw - dh) / 2.0).round(), tint, DrawTextureParams { dest_size: Some(vec2(dw, dh)), ..Default::default() });
@@ -506,6 +517,9 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
             st.cursor = i;
         }
+    }
+    if st.tab == Tab::Relics && st.cursor >= n {
+        st.cursor = 0;
     }
     if is_key_pressed(KeyCode::Left) || is_key_pressed(KeyCode::A) {
         st.cursor = (st.cursor + n - 1) % n;
@@ -741,4 +755,162 @@ pub fn stats(profile: &Profile, assets: &Assets, time: f64) -> bool {
     }
 
     button(Rect::new((w - 200.0) / 2.0, hy + 112.0, 200.0, 46.0), "Back", true) || is_key_pressed(KeyCode::Escape)
+}
+
+// ───────────────────────── Map select ─────────────────────────
+
+pub enum StageAction {
+    Go,
+    Back,
+}
+
+fn requirement(s: StageId) -> String {
+    match s.requires() {
+        Some(r) => format!("Clear {} on Normal", r.def().name),
+        None => String::new(),
+    }
+}
+
+/// Map select: one card per world (art, name, lock, difficulty clears and best times,
+/// boss progress, relic preview), a difficulty picker and the world's twist.
+pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::StageArt, time: f64) -> Option<StageAction> {
+    backdrop(time);
+    let w = screen_width();
+    centered("CHOOSE YOUR BATTLEFIELD", 62.0, 40.0, ACCENT);
+    sen_badge(assets, profile.sen);
+    let mouse: Vec2 = mouse_position().into();
+    let (cols, gap) = (3usize, 16.0);
+    let cw = ((w - 60.0 - gap * 2.0) / 3.0).min(390.0);
+    let ch = 222.0;
+    let x0 = (w - (cols as f32 * cw + 2.0 * gap)) / 2.0;
+    let y0 = 84.0;
+    let t = time as f32;
+    for (i, sid) in ALL_STAGES.iter().enumerate() {
+        let def = sid.def();
+        let r = Rect::new(x0 + (i % cols) as f32 * (cw + gap), y0 + (i / cols) as f32 * (ch + gap), cw, ch);
+        let open = profile.stage_open(*sid);
+        let sel = profile.stage == *sid;
+        let hover = r.contains(mouse);
+        let acc = crate::stage::accent(*sid);
+        kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.18, 0.11, 0.24, 0.97) } else { PANEL }, if sel { acc } else if hover { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.18) });
+        // Art strip: the world's ground with its final boss standing on it.
+        let (ax, ay, aw, ah) = (r.x + 8.0, r.y + 8.0, r.w - 16.0, 104.0);
+        art.draw_patch(*sid, ax, ay, aw, ah, 1.5);
+        draw_rectangle(ax, ay, aw, ah, Color::new(0.0, 0.0, 0.0, 0.25));
+        if let Some(prop) = art.world_tex(*sid, 4) {
+            let s = 1.6;
+            draw_texture_ex(prop, ax + 18.0, ay + ah - prop.height() * s - 4.0, if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.8) }, DrawTextureParams { dest_size: Some(vec2(prop.width() * s, prop.height() * s)), ..Default::default() });
+        }
+        let boss = assets.enemy_tex(def.final_boss);
+        let bs = (ah - 6.0) / boss.height();
+        let bob = if sel && open { (t * 2.5).sin() * 2.0 } else { 0.0 };
+        if open {
+            draw_circle(ax + aw - 60.0, ay + ah * 0.55, 46.0, Color::new(acc.r, acc.g, acc.b, 0.16));
+        }
+        draw_texture_ex(boss, ax + aw - 60.0 - boss.width() * bs / 2.0, ay + 3.0 + bob, if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) }, DrawTextureParams { dest_size: Some(vec2(boss.width() * bs, boss.height() * bs)), ..Default::default() });
+        // Name.
+        kit::text(def.chapter, r.x + 14.0, r.y + 132.0, 14.0, if open { acc } else { DIM });
+        kit::text_fit(def.name, r.x + 14.0, r.y + 156.0, r.w - 28.0, 22.0, if open { WHITE } else { DIM });
+        if !open {
+            draw_rectangle(r.x + 2.0, r.y + 2.0, r.w - 4.0, r.h - 4.0, Color::new(0.0, 0.0, 0.0, 0.45));
+            kit::text_fit_centered("LOCKED", r.x + r.w / 2.0, r.y + 60.0, r.w - 30.0, 26.0, Color::new(1.0, 1.0, 1.0, 0.8));
+            kit::text_fit_centered(&requirement(*sid), r.x + r.w / 2.0, r.y + 88.0, r.w - 30.0, 15.0, GOLD);
+        } else {
+            // Difficulty clears / best times.
+            let si = sid.index();
+            let dw = (r.w - 28.0) / 3.0;
+            for d in ALL_DIFFICULTIES {
+                let dx = r.x + 14.0 + d.index() as f32 * dw;
+                let cleared = profile.cleared[si][d.index()];
+                let avail = profile.difficulty_open(*sid, d);
+                let col = if cleared { kit::JADE } else if avail { kit::INK } else { Color::new(1.0, 1.0, 1.0, 0.3) };
+                if cleared {
+                    draw_poly(dx + 6.0, r.y + 175.0, 4, 5.0, 45.0, kit::JADE);
+                } else {
+                    draw_poly_lines(dx + 6.0, r.y + 175.0, 4, 5.0, 45.0, 1.5, col);
+                }
+                kit::text_fit(d.name(), dx + 16.0, r.y + 180.0, dw - 18.0, 14.0, col);
+                let best = profile.stage_best[si][d.index()];
+                if best > 0.0 {
+                    kit::text(&fmt_time(best), dx + 16.0, r.y + 197.0, 12.0, kit::DIM);
+                }
+            }
+            // Boss progress: mini / boss / final (bits ever defeated).
+            let bits = profile.stage_bosses[si];
+            let kinds: Vec<(EnemyKind, u8)> = [Some((def.mini, 1u8)), def.boss.map(|(b, _)| (b, 2u8)), Some((def.final_boss, 4u8))].into_iter().flatten().collect();
+            let mut bx = r.x + r.w - 14.0 - kinds.len() as f32 * 24.0;
+            for (k, bit) in kinds {
+                let tex = assets.enemy_tex(k);
+                let s = 20.0 / tex.width().max(tex.height());
+                let tint = if bits & bit != 0 { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.7) };
+                draw_texture_ex(tex, bx, r.y + 126.0, tint, DrawTextureParams { dest_size: Some(vec2(tex.width() * s, tex.height() * s)), ..Default::default() });
+                bx += 24.0;
+            }
+            // Relic preview.
+            if let Some(rel) = def.relic {
+                let owned = profile.relics.contains(&rel);
+                draw_texture_ex(assets.icon_named(rel.icon()), r.x + r.w - 34.0, r.y + 186.0, if owned { WHITE } else { Color::new(0.3, 0.3, 0.4, 0.9) }, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
+            }
+        }
+        if open && hover && is_mouse_button_pressed(MouseButton::Left) {
+            if profile.stage != *sid {
+                profile.stage = *sid;
+                if !profile.difficulty_open(*sid, profile.difficulty) {
+                    profile.difficulty = Difficulty::Normal;
+                }
+            }
+        }
+    }
+
+    // Selected world: difficulty picker, twist, reward.
+    let sid = profile.stage;
+    let def = sid.def();
+    let py = y0 + 2.0 * (ch + gap) + 4.0;
+    let pw = (w - 60.0).min(1180.0);
+    let px = (w - pw) / 2.0;
+    kit::panel_ex(px, py, pw, 720.0 - py - 12.0, PANEL, Color::new(1.0, 1.0, 1.0, 0.18));
+    let bw = 150.0;
+    for d in ALL_DIFFICULTIES {
+        let rr = Rect::new(px + 16.0 + d.index() as f32 * (bw + 10.0), py + 14.0, bw, 40.0);
+        let avail = profile.difficulty_open(sid, d);
+        let chosen = profile.difficulty == d;
+        let style = if chosen { kit::Style::Primary } else { kit::Style::Secondary };
+        if kit::button(rr, d.name(), avail, style) {
+            profile.difficulty = d;
+        }
+    }
+    let d = profile.difficulty;
+    let mods = format!(
+        "Enemies x{:.1}  ·  Damage x{:.1}  ·  Health x{:.1}  ·  Elites {}  ·  Boss phases +{}",
+        d.density(),
+        d.damage(),
+        d.hp(),
+        ["occasional", "frequent", "very frequent"][d.index()],
+        d.extra_phases()
+    );
+    let tx = px + 16.0 + 3.0 * (bw + 10.0) + 6.0;
+    let tw = px + pw - 210.0 - tx;
+    kit::text_fit(&mods, tx, py + 30.0, tw, 15.0, kit::INK);
+    let reward = match (d, def.relic) {
+        (Difficulty::Nightmare, Some(r)) => format!("First clear: +{} Sen and the relic {} ({})", d.first_clear_sen(), r.name(), r.describe()),
+        _ => format!("First clear: +{} Sen{}", d.first_clear_sen(), if d == Difficulty::Normal && sid != StageId::Shotengai { ", opens the next world" } else { "" }),
+    };
+    kit::text_fit(&reward, tx, py + 50.0, tw, 14.0, GOLD);
+    let twist = if def.mechanic == sim::campaign::Mechanic::None {
+        def.blurb.to_string()
+    } else {
+        format!("{}  ·  {}: {}", def.blurb, def.mechanic.name(), def.mechanic.describe())
+    };
+    let lines = kit::wrap(&twist, pw - 230.0, 15);
+    for (k, l) in lines.iter().take(2).enumerate() {
+        kit::text(l, px + 16.0, py + 80.0 + k as f32 * 19.0, 15.0, DIM);
+    }
+    let mut action = None;
+    if button(Rect::new(px + pw - 196.0, py + 14.0, 180.0, 48.0), "Choose hero", profile.stage_open(sid)) || is_key_pressed(KeyCode::Enter) {
+        action = Some(StageAction::Go);
+    }
+    if button(Rect::new(px + pw - 196.0, py + 70.0, 180.0, 36.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
+        action = Some(StageAction::Back);
+    }
+    action
 }
