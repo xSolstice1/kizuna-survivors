@@ -113,12 +113,19 @@ pub fn hud(world: &World, assets: &Assets) {
 
     // Loadout: weapon and passive slots (VS-style), under the hero card.
     let s = 34.0;
+    let slotted: Vec<_> = world.weapons.iter().filter(|w| !w.extra).collect();
     for k in 0..hero.weapon_slots {
         let x = 14.0 + k as f32 * (s + 6.0);
-        match world.weapons.get(k) {
+        match slotted.get(k) {
             Some(wp) => kit::icon_slot(x, 110.0, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened),
             None => kit::icon_slot(x, 110.0, s, None, 0, 0, false),
         }
+    }
+    // The Arsenal weapon sits apart: it takes no slot.
+    if let Some(wp) = world.weapons.iter().find(|w| w.extra) {
+        let x = 14.0 + hero.weapon_slots as f32 * (s + 6.0) + 8.0;
+        kit::rounded_outline(x - 3.0, 107.0, s + 6.0, s + 6.0, 8.0, 1.5, SKY);
+        kit::icon_slot(x, 110.0, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
     }
     let ps = 26.0;
     for k in 0..hero.passive_slots {
@@ -377,11 +384,12 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> 
     portrait(assets, world, lx + 44.0, top + 46.0, 28.0);
     kit::text(hero.name, lx + 84.0, top + 42.0, 24.0, INK);
     kit::text(&format!("{}  ·  Level {}", hero.archetype, world.player.level), lx + 84.0, top + 64.0, 15.0, DIM);
-    kit::panel_title(&format!("WEAPONS  {}/{}", world.weapons.len(), hero.weapon_slots), lx + 18.0, top + 104.0, 16.0, GOLD);
+    kit::panel_title(&format!("WEAPONS  {}/{}", world.weapons.iter().filter(|w| !w.extra).count(), hero.weapon_slots), lx + 18.0, top + 104.0, 16.0, GOLD);
     let mut y = top + 116.0;
     for wp in &world.weapons {
         kit::icon_slot(lx + 18.0, y, 40.0, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
         let (name, c) = if wp.awakened { (awakened_name(wp.kind).to_string(), GOLD) } else { (Upgrade::Weapon(wp.kind).name().to_string(), INK) };
+        let name = if wp.extra { format!("{name}  (Arsenal)") } else { name };
         kit::text_fit(&name, lx + 70.0, y + 18.0, lw - 90.0, 18.0, c);
         let (pk, need) = complement(wp.kind);
         if wp.awakened {
@@ -532,6 +540,18 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
         bx += s + 8.0;
     }
 
+    // Equipment found (shown from the run itself; banked into the bag at the end).
+    if !world.loot.is_empty() {
+        let s = 30.0;
+        let n = world.loot.len().min(16);
+        let mut gx = (w - (n as f32 * (s + 6.0) - 6.0)) / 2.0;
+        for it in world.loot.iter().take(n) {
+            crate::armory::item_cell(assets, it, gx, py + ph - 124.0, s, false, false);
+            gx += s + 6.0;
+        }
+        let more = if world.loot.len() > n { format!("  (+{} more)", world.loot.len() - n) } else { String::new() };
+        centered(&format!("{} gear found{more}", world.loot.len()), py + ph - 132.0, 14.0, DIM);
+    }
     // Rewards.
     if let Some(r) = report {
         let txt = format!("+{} Sen", r.sen);
@@ -550,6 +570,10 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
         }
         if let Some(rel) = r.relic {
             centered(&format!("RELIC EARNED: {} ({})", rel.name(), rel.describe()), y, 18.0, Color::new(0.75, 0.9, 1.0, 1.0));
+            y += 26.0;
+        }
+        if let Some(n) = r.ascension_opened {
+            centered(&format!("NIGHTMARE+{n} OPEN"), y, 18.0, Color::new(1.0, 0.5, 0.6, 1.0));
             y += 26.0;
         }
         if let Some(stg) = r.stage_unlocked {

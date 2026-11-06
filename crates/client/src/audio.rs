@@ -177,6 +177,7 @@ impl Audio {
                     _ => Sfx::GongDeep,
                 },
                 Event::Curtain => Sfx::Chime,
+                Event::GearDrop { rarity, .. } => if rarity >= sim::gear::Rarity::Legendary { Sfx::Awaken } else if rarity >= sim::gear::Rarity::Epic { Sfx::Chime } else { Sfx::Coin },
                 Event::PlayerHurt => Sfx::Hurt,
                 Event::LevelUp => Sfx::LevelUp,
                 Event::SpecialUsed { .. } => Sfx::Special,

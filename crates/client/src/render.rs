@@ -102,6 +102,7 @@ pub struct Assets {
     icons: Vec<(&'static str, Texture2D)>,
     /// Campaign enemies, indexed like `ALL_ENEMIES` (None for the prologue's own sprites).
     world_enemies: Vec<Option<Texture2D>>,
+    gear_icons: Vec<(&'static str, Texture2D)>,
 }
 
 impl Assets {
@@ -204,7 +205,30 @@ impl Assets {
             ("relic_w5", sprites::texture(include_str!("../../../art/src/icons/relic_w5.px"))),
             ],
             world_enemies: sim::content::ALL_ENEMIES.iter().map(|k| world_enemy_src(*k).map(sprites::texture)).collect(),
+            gear_icons: vec![
+            ("hat", sprites::texture(include_str!("../../../art/src/gear/hat.px"))),
+            ("top", sprites::texture(include_str!("../../../art/src/gear/top.px"))),
+            ("bottom", sprites::texture(include_str!("../../../art/src/gear/bottom.px"))),
+            ("gloves", sprites::texture(include_str!("../../../art/src/gear/gloves.px"))),
+            ("shoes", sprites::texture(include_str!("../../../art/src/gear/shoes.px"))),
+            ("necklace", sprites::texture(include_str!("../../../art/src/gear/necklace.px"))),
+            ("ring", sprites::texture(include_str!("../../../art/src/gear/ring.px"))),
+            ("earring", sprites::texture(include_str!("../../../art/src/gear/earring.px"))),
+            ("charm", sprites::texture(include_str!("../../../art/src/gear/charm.px"))),
+            ("omamori", sprites::texture(include_str!("../../../art/src/gear/omamori.px"))),
+            ("arsenal", sprites::texture(include_str!("../../../art/src/gear/arsenal.px"))),
+            ("dust", sprites::texture(include_str!("../../../art/src/gear/dust.px"))),
+            ("draw", sprites::texture(include_str!("../../../art/src/gear/draw.px"))),
+            ],
         }
+    }
+
+    pub fn gear_icon(&self, s: sim::gear::Slot) -> &Texture2D {
+        self.gear_icon_named(s.key())
+    }
+
+    pub fn gear_icon_named(&self, key: &str) -> &Texture2D {
+        &self.gear_icons.iter().find(|(n, _)| *n == key).expect("gear icon").1
     }
 
     /// Any enemy's sprite (prologue kinds use their named textures).
@@ -311,6 +335,7 @@ struct DamageNumber {
     pos: Vec2,
     amount: f32,
     age: f32,
+    crit: bool,
 }
 
 struct Particle {
@@ -373,6 +398,8 @@ pub struct Fx {
     pub accent: Color,
     /// Lightning flash, 0..1, decays.
     pub flash: f32,
+    /// Equipment drops: (pos, rarity, age).
+    gear_drops: Vec<(Vec2, sim::gear::Rarity, f32)>,
 }
 
 const MAX_NUMBERS: usize = 120;
@@ -400,6 +427,7 @@ impl Fx {
         self.devours.clear();
         self.trail.clear();
         self.pulses.clear();
+        self.gear_drops.clear();
         self.shake = 0.0;
         self.banner = None;
         self.leveled_once = false;
@@ -426,11 +454,11 @@ impl Fx {
     pub fn absorb(&mut self, events: &[Event]) {
         for ev in events {
             match *ev {
-                Event::Hit { pos, amount } if self.show_numbers => {
+                Event::Hit { pos, amount, crit } if self.show_numbers => {
                     if self.numbers.len() >= MAX_NUMBERS {
                         self.numbers.remove(0);
                     }
-                    self.numbers.push(DamageNumber { pos: vec2(pos.x, pos.y - 8.0), amount, age: 0.0 });
+                    self.numbers.push(DamageNumber { pos: vec2(pos.x, pos.y - 8.0), amount, age: 0.0, crit });
                 }
                 Event::Kill { pos, kind } => {
                     let (n, color) = match kind {
@@ -509,6 +537,12 @@ impl Fx {
                     self.shake = self.shake.max(if kind == 2 { 0.3 } else { 0.12 });
                 }
                 Event::Curtain => {}
+                Event::GearDrop { pos, rarity } => {
+                    self.gear_drops.push((vec2(pos.x, pos.y), rarity, 0.0));
+                    if rarity >= sim::gear::Rarity::Legendary {
+                        self.announce(format!("{} GEAR!", rarity.name().to_uppercase()));
+                    }
+                }
                 Event::Blink { pos } => {
                     for k in 0..10 {
                         if self.particles.len() >= MAX_PARTICLES {
@@ -652,6 +686,10 @@ impl Fx {
 
     pub fn update(&mut self, dt: f32) {
         self.flash = (self.flash - dt * 4.0).max(0.0);
+        for g in &mut self.gear_drops {
+            g.2 += dt;
+        }
+        self.gear_drops.retain(|g| g.2 < 2.2);
         for n in &mut self.numbers {
             n.age += dt;
             n.pos.y -= 28.0 * dt;
@@ -1575,6 +1613,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
 
     // Enemy fireballs: drawn above everything so they always read as danger.
     draw_hazards(world, time as f32);
+    for (pos, r, age) in &fx.gear_drops {
+        let c = crate::armory::rarity_color(*r);
+        let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
+        let h = 70.0 + 30.0 * r.index() as f32;
+        draw_rectangle(pos.x - 3.0, pos.y - h * a.sqrt(), 6.0, h * a.sqrt(), Color::new(c.r, c.g, c.b, 0.5 * a));
+        draw_circle(pos.x, pos.y, 10.0 + 6.0 * age, Color::new(c.r, c.g, c.b, 0.3 * a));
+    }
     for s in &world.shots {
         let r = sim::content::SHOT_RADIUS;
         let flick = 0.8 + 0.2 * (time as f32 * 20.0 + s.pos.x).sin();
@@ -1605,8 +1650,18 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let s = kit::to_ui(cam.world_to_screen(n.pos));
         let alpha = 1.0 - (n.age / 0.6).powi(2);
         let txt = format!("{:.0}", n.amount);
-        kit::text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, 18.0, Color::new(0.0, 0.0, 0.0, alpha));
-        kit::text(&txt, s.x - 5.0, s.y, 18.0, Color::new(1.0, 1.0, 1.0, alpha));
+        let (size, c) = if n.crit { (24.0, Color::new(1.0, 0.8, 0.25, alpha)) } else { (18.0, Color::new(1.0, 1.0, 1.0, alpha)) };
+        kit::text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, size, Color::new(0.0, 0.0, 0.0, alpha));
+        kit::text(&txt, s.x - 5.0, s.y, size, c);
+    }
+    for (pos, r, age) in &fx.gear_drops {
+        let sp = kit::to_ui(cam.world_to_screen(vec2(pos.x, pos.y - 30.0 - age * 14.0)));
+        let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
+        let c = crate::armory::rarity_color(*r);
+        let label = format!("{} gear", r.name());
+        let d = kit::measure(&label, 15);
+        kit::text(&label, sp.x - d.width / 2.0 + 1.0, sp.y + 1.0, 15.0, Color::new(0.0, 0.0, 0.0, a));
+        kit::text(&label, sp.x - d.width / 2.0, sp.y, 15.0, Color::new(c.r, c.g, c.b, a));
     }
     if let Some(s) = world.shrine {
         let sp = kit::to_ui(cam.world_to_screen(vec2(s.x, s.y)));

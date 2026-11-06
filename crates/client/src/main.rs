@@ -3,6 +3,7 @@ use sim::world::DT;
 use sim::meta::{Profile, RunReport};
 use sim::{Input, RunState, Stress, World, WorldConfig};
 
+mod armory;
 mod audio;
 mod chest_ui;
 mod kit;
@@ -32,6 +33,8 @@ enum Screen {
     /// Map select (world + difficulty), before character select.
     Stages,
     Characters,
+    Armory,
+    Draw,
     Shop,
     Collection,
     Stats,
@@ -59,7 +62,20 @@ fn read_input() -> Input {
 
 fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
     let seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
-    World::new(WorldConfig { seed, stress, hero: profile.selected, meta: profile.bonus(), stage: profile.stage, difficulty: profile.difficulty, ..Default::default() })
+    {
+    let ascension = if profile.difficulty == sim::campaign::Difficulty::Nightmare { profile.ascension.min(profile.ascension_open(profile.stage)) } else { 0 };
+    World::new(WorldConfig {
+        seed,
+        stress,
+        hero: profile.selected,
+        meta: profile.bonus(),
+        stage: profile.stage,
+        difficulty: profile.difficulty,
+        ascension,
+        gear: profile.loadout(profile.selected),
+        ..Default::default()
+    })
+    }
 }
 
 #[macroquad::main(window_conf)]
@@ -82,6 +98,8 @@ async fn main() {
     let mut special_queued = false;
 
     let mut collection = menu::CollectionState::default();
+    let mut armory_state = armory::ArmoryState::default();
+    let mut draw_state = armory::DrawState::default();
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
     let mut map_opened_now = false;
@@ -150,6 +168,11 @@ async fn main() {
             Screen::Menu => match menu::main_menu(&profile, &assets, now) {
                 Some(menu::MenuAction::Start) => screen = Screen::Stages,
                 Some(menu::MenuAction::Shop) => screen = Screen::Shop,
+                Some(menu::MenuAction::Armory) => {
+                    armory_state.hero = profile.selected.index();
+                    screen = Screen::Armory;
+                }
+                Some(menu::MenuAction::Draw) => screen = Screen::Draw,
                 Some(menu::MenuAction::Collection) => screen = Screen::Collection,
                 Some(menu::MenuAction::Stats) => screen = Screen::Stats,
                 Some(menu::MenuAction::Settings) => screen = Screen::Settings,
@@ -173,6 +196,26 @@ async fn main() {
                     save::store(&profile);
                 }
                 Some(menu::SettingsAction::Back) => screen = Screen::Menu,
+                None => {}
+            },
+            Screen::Armory => match armory::armory(&mut profile, &assets, &mut armory_state, now) {
+                Some(armory::ArmoryAction::Changed) => save::store(&profile),
+                Some(armory::ArmoryAction::Back) => {
+                    save::store(&profile);
+                    screen = Screen::Menu;
+                }
+                None => {}
+            },
+            Screen::Draw => match armory::shrine_draw(&mut profile, &assets, &mut draw_state, now) {
+                Some(armory::DrawAction::Drew(best)) => {
+                    audio.play(if best >= sim::gear::Rarity::Legendary { synth::Sfx::Awaken } else { synth::Sfx::Chime });
+                    save::store(&profile);
+                }
+                Some(armory::DrawAction::Changed) => save::store(&profile),
+                Some(armory::DrawAction::Back) => {
+                    save::store(&profile);
+                    screen = Screen::Menu;
+                }
                 None => {}
             },
             Screen::Stages => match menu::stage_select(&mut profile, &assets, &stage_art, now) {

@@ -11,11 +11,11 @@ use sim::meta::{collection_progress, enemy_found, unlock_text, PowerUp, Profile,
 use crate::render::Assets;
 
 const PANEL: Color = Color::new(0.06, 0.05, 0.10, 0.88);
-const ACCENT: Color = Color::new(1.0, 0.43, 0.63, 1.0);
+pub const ACCENT: Color = Color::new(1.0, 0.43, 0.63, 1.0);
 const GOLD: Color = Color::new(1.0, 0.85, 0.4, 1.0);
 const DIM: Color = Color::new(1.0, 1.0, 1.0, 0.55);
 
-fn centered(text: &str, y: f32, size: f32, color: Color) {
+pub fn centered(text: &str, y: f32, size: f32, color: Color) {
     let d = kit::measure(text, size as u16);
     kit::text(text, (screen_width() - d.width) / 2.0, y, size, color);
 }
@@ -42,7 +42,7 @@ fn sen_badge(assets: &Assets, sen: u32) {
     draw_texture_ex(&assets.coin, x - 26.0, 22.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
 }
 
-fn backdrop(time: f64) {
+pub fn backdrop(time: f64) {
     clear_background(Color::from_rgba(18, 14, 30, 255));
     let (w, h) = (screen_width(), screen_height());
     for k in 0..8 {
@@ -62,6 +62,8 @@ fn backdrop(time: f64) {
 
 pub enum MenuAction {
     Start,
+    Armory,
+    Draw,
     Shop,
     Collection,
     Stats,
@@ -75,27 +77,27 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     centered("Heroes of many stories. Five worlds. Defeat what rules each night before dawn.", h * 0.24 + 32.0, 20.0, DIM);
     sen_badge(assets, profile.sen);
 
-    let (bw, bh) = (320.0, 56.0);
+    let (bw, bh, step) = (320.0, 48.0, 56.0);
     let x = (w - bw) / 2.0;
+    let y0 = h * 0.36;
     let mut action = None;
-    if button(Rect::new(x, h * 0.42, bw, bh), "Start", true) || is_key_pressed(KeyCode::Enter) {
-        action = Some(MenuAction::Start);
-    }
-    if button(Rect::new(x, h * 0.42 + 68.0, bw, bh), "Shrine Shop", true) || is_key_pressed(KeyCode::S) {
-        action = Some(MenuAction::Shop);
-    }
-    if button(Rect::new(x, h * 0.42 + 136.0, bw, bh), "Collections", true) || is_key_pressed(KeyCode::C) {
-        action = Some(MenuAction::Collection);
-    }
-    if button(Rect::new(x, h * 0.42 + 204.0, bw, bh), "Stats", true) || is_key_pressed(KeyCode::T) {
-        action = Some(MenuAction::Stats);
-    }
-    if button(Rect::new(x, h * 0.42 + 272.0, bw, bh), "Settings", true) || is_key_pressed(KeyCode::O) {
-        action = Some(MenuAction::Settings);
+    let items: [(&str, MenuAction, KeyCode); 7] = [
+        ("Start", MenuAction::Start, KeyCode::Enter),
+        ("Armory", MenuAction::Armory, KeyCode::A),
+        ("Shrine Draw", MenuAction::Draw, KeyCode::D),
+        ("Shrine Shop", MenuAction::Shop, KeyCode::S),
+        ("Collections", MenuAction::Collection, KeyCode::C),
+        ("Stats", MenuAction::Stats, KeyCode::T),
+        ("Settings", MenuAction::Settings, KeyCode::O),
+    ];
+    for (i, (label, act, key)) in items.into_iter().enumerate() {
+        if button(Rect::new(x, y0 + i as f32 * step, bw, bh), label, true) || is_key_pressed(key) {
+            action = Some(act);
+        }
     }
     fullscreen_button(Rect::new(20.0, 18.0, 230.0, 40.0));
 
-    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.42 + 360.0, 18.0, Color::new(1.0, 1.0, 1.0, 0.55));
+    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", y0 + 7.0 * step + 16.0, 16.0, Color::new(1.0, 1.0, 1.0, 0.55));
     action
 }
 
@@ -879,14 +881,32 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
             profile.difficulty = d;
         }
     }
+    // Ascension (Nightmare+N) once Nightmare is cleared.
+    let open_asc = profile.ascension_open(sid);
+    if profile.difficulty == Difficulty::Nightmare && open_asc > 0 {
+        profile.ascension = profile.ascension.min(open_asc);
+        let ax = px + 16.0;
+        let ay = py + 62.0;
+        if kit::button(Rect::new(ax, ay, 30.0, 26.0), "-", profile.ascension > 0, kit::Style::Secondary) {
+            profile.ascension -= 1;
+        }
+        let label = if profile.ascension == 0 { "Nightmare".to_string() } else { format!("Nightmare+{}", profile.ascension) };
+        kit::text_fit_centered(&label, ax + 90.0, ay + 19.0, 110.0, 16.0, GOLD);
+        if kit::button(Rect::new(ax + 150.0, ay, 30.0, 26.0), "+", profile.ascension < open_asc, kit::Style::Secondary) {
+            profile.ascension += 1;
+        }
+        kit::text(&format!("Ascension open to +{open_asc}"), ax + 190.0, ay + 18.0, 13.0, DIM);
+    }
+    let asc = if profile.difficulty == Difficulty::Nightmare { profile.ascension } else { 0 };
     let d = profile.difficulty;
     let mods = format!(
-        "Enemies x{:.1}  ·  Damage x{:.1}  ·  Health x{:.1}  ·  Elites {}  ·  Boss phases +{}",
-        d.density(),
-        d.damage(),
-        d.hp(),
+        "Enemies x{:.1}  ·  Damage x{:.1}  ·  Health x{:.1}  ·  Elites {}  ·  Boss phases +{}  ·  Gear iLvl {}",
+        d.density() * (1.0 + 0.04 * asc as f32).min(1.6),
+        d.damage() * (1.0 + 0.12 * asc as f32),
+        d.hp() * (1.0 + 0.4 * asc as f32),
         ["occasional", "frequent", "very frequent"][d.index()],
-        d.extra_phases()
+        d.extra_phases(),
+        sim::gear::drop_ilvl(sid, d.index(), asc)
     );
     let tx = px + 16.0 + 3.0 * (bw + 10.0) + 6.0;
     let tw = px + pw - 210.0 - tx;
@@ -902,8 +922,9 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
         format!("{}  ·  {}: {}", def.blurb, def.mechanic.name(), def.mechanic.describe())
     };
     let lines = kit::wrap(&twist, pw - 230.0, 15);
+    let ty = if profile.difficulty == Difficulty::Nightmare && open_asc > 0 { py + 106.0 } else { py + 80.0 };
     for (k, l) in lines.iter().take(2).enumerate() {
-        kit::text(l, px + 16.0, py + 80.0 + k as f32 * 19.0, 15.0, DIM);
+        kit::text(l, px + 16.0, ty + k as f32 * 19.0, 15.0, DIM);
     }
     let mut action = None;
     if button(Rect::new(px + pw - 196.0, py + 14.0, 180.0, 48.0), "Choose hero", profile.stage_open(sid)) || is_key_pressed(KeyCode::Enter) {
