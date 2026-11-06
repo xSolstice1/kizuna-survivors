@@ -129,10 +129,8 @@ pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, t
         draw_texture_ex(&assets.hero(*hero)[0], r.x + (cw - 72.0) / 2.0, r.y + 18.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(72.0, 96.0)), ..Default::default() });
         let def = hero_def(*hero);
         let name = if open { def.name.split(' ').next().unwrap_or(def.name) } else { "???" };
-        let d = kit::measure(name, 24);
-        kit::text(name, r.x + (cw - d.width) / 2.0, r.y + 140.0, 24.0, if open { WHITE } else { DIM });
-        let d = kit::measure(def.archetype, 16);
-        kit::text(def.archetype, r.x + (cw - d.width) / 2.0, r.y + 162.0, 16.0, DIM);
+        kit::text_fit_centered(name, r.x + cw / 2.0, r.y + 140.0, cw - 12.0, 24.0, if open { WHITE } else { DIM });
+        kit::text_fit_centered(def.archetype, r.x + cw / 2.0, r.y + 162.0, cw - 10.0, 16.0, DIM);
         if hover && is_mouse_button_pressed(MouseButton::Left) {
             *cursor = i;
         }
@@ -148,30 +146,50 @@ pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, t
     let hero = ALL_HEROES[*cursor];
     let def = hero_def(hero);
     let open = profile.is_unlocked(hero);
-    let (px, py, pw, ph) = ((w - 640.0) / 2.0, y0 + ch + 24.0, 640.0, 200.0);
+    // The panel grows to fit its (wrapped) lines.
+    let pw = 760.0f32.min(w - 40.0);
+    let inner = pw - 40.0;
+    let innate = kit::wrap(&format!("Innate: {}", def.innate_text), inner, 20);
+    let px = (w - pw) / 2.0;
+    let py = y0 + ch + 20.0;
+    let special_text = if !def.finished {
+        "Placeholder: own sprite and special move coming later.".to_string()
+    } else {
+        let what = match def.special {
+            sim::content::SpecialKind::Barrier => "a purifying ring that erases fireballs",
+            sim::content::SpecialKind::NineTails => "8s transformation: nine tails, aura, golden orb volleys",
+            sim::content::SpecialKind::Hannya => "8s berserk: beams, crescent waves, shadow steps, finale blast",
+            sim::content::SpecialKind::Mukade => "8s predator form: tendril barrage, eruptions, regeneration",
+            sim::content::SpecialKind::Firmament => "8s domain: enemies suspended and crushed, ends in a giant void lance",
+            sim::content::SpecialKind::Divine => "8s invulnerable: ofuda storm, yin-yang crashes, seal rings, final purification",
+        };
+        format!("Special: {} ({what})", def.special_name)
+    };
+    let special = kit::wrap(&special_text, inner, 17);
+    let ph = if open { 120.0 + innate.len() as f32 * 24.0 + special.len() as f32 * 21.0 + 14.0 } else { 150.0 };
     kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
     if open {
-        kit::text(def.name, px + 20.0, py + 40.0, 32.0, WHITE);
-        kit::text(def.archetype, px + 20.0, py + 64.0, 18.0, ACCENT);
-        draw_texture_ex(assets.icon(Upgrade::Weapon(def.signature)), px + 20.0, py + 82.0, WHITE, DrawTextureParams { dest_size: Some(vec2(32.0, 32.0)), ..Default::default() });
-        kit::text(&format!("Starts with {}", Upgrade::Weapon(def.signature).name()), px + 62.0, py + 104.0, 22.0, WHITE);
-        kit::text(&format!("Innate: {}", def.innate_text), px + 20.0, py + 142.0, 22.0, Color::new(0.6, 1.0, 0.7, 1.0));
+        kit::text_fit(def.name, px + 20.0, py + 40.0, inner, 32.0, WHITE);
+        kit::text_fit(def.archetype, px + 20.0, py + 64.0, inner, 18.0, ACCENT);
+        draw_texture_ex(assets.icon(Upgrade::Weapon(def.signature)), px + 20.0, py + 78.0, WHITE, DrawTextureParams { dest_size: Some(vec2(28.0, 28.0)), ..Default::default() });
+        kit::text_fit(&format!("Starts with {}", Upgrade::Weapon(def.signature).name()), px + 58.0, py + 99.0, inner - 40.0, 20.0, WHITE);
+        let mut ly = py + 132.0;
+        for l in &innate {
+            kit::text(l, px + 20.0, ly, 20.0, Color::new(0.6, 1.0, 0.7, 1.0));
+            ly += 24.0;
+        }
         if !def.finished {
-            kit::text("Placeholder: own sprite and special move coming later.", px + 20.0, py + 178.0, 18.0, DIM);
+            kit::text(&special_text, px + 20.0, ly, 17.0, DIM);
         } else {
-            let what = match def.special {
-                sim::content::SpecialKind::Barrier => "a purifying ring that erases fireballs",
-                sim::content::SpecialKind::NineTails => "8s transformation: nine tails, aura, golden orb volleys",
-                sim::content::SpecialKind::Hannya => "8s berserk: beams, crescent waves, shadow steps, finale blast",
-                sim::content::SpecialKind::Mukade => "8s predator form: tendril barrage, eruptions, regeneration",
-                sim::content::SpecialKind::Firmament => "8s domain: enemies suspended and crushed, ends in a giant void lance",
-            };
-            kit::text(&format!("Special: {} ({what})", def.special_name), px + 20.0, py + 178.0, 18.0, Color::new(1.0, 0.8, 0.45, 1.0));
+            for l in &special {
+                kit::text(l, px + 20.0, ly + 4.0, 17.0, Color::new(1.0, 0.8, 0.45, 1.0));
+                ly += 21.0;
+            }
         }
     } else {
         kit::text("LOCKED", px + 20.0, py + 44.0, 32.0, DIM);
-        kit::text(&format!("{} ({})", def.archetype, "unlock to reveal"), px + 20.0, py + 72.0, 20.0, DIM);
-        kit::text(&format!("Unlock: {}", unlock_text(hero)), px + 20.0, py + 120.0, 24.0, GOLD);
+        kit::text_fit(&format!("{} (unlock to reveal)", def.archetype), px + 20.0, py + 72.0, inner, 20.0, DIM);
+        kit::text_fit(&format!("Unlock: {}", unlock_text(hero)), px + 20.0, py + 116.0, inner, 24.0, GOLD);
     }
 
     let mut action = None;
@@ -228,8 +246,7 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
         let hover = r.contains(mouse);
         kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.22, 0.16, 0.08, 0.97) } else { PANEL }, if sel { GOLD } else if hover { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         draw_texture_ex(powerup_icon(assets, *p), r.x + (cw - 40.0) / 2.0, r.y + 12.0, WHITE, DrawTextureParams { dest_size: Some(vec2(40.0, 40.0)), ..Default::default() });
-        let d = kit::measure(p.name(), 20);
-        kit::text(p.name(), r.x + (cw - d.width) / 2.0, r.y + 74.0, 20.0, WHITE);
+        kit::text_fit_centered(p.name(), r.x + cw / 2.0, r.y + 74.0, cw - 12.0, 20.0, WHITE);
         // Rank pips.
         let max = p.max_rank() as f32;
         let pip = 12.0;
@@ -254,9 +271,9 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
     let rows = n.div_ceil(cols) as f32;
     let (px, py, pw, ph) = ((w - 640.0) / 2.0, y0 + rows * (ch + gap) + 10.0, 640.0, 130.0);
     kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
-    kit::text(p.name(), px + 20.0, py + 38.0, 30.0, WHITE);
+    kit::text_fit(p.name(), px + 20.0, py + 38.0, pw - 180.0, 30.0, WHITE);
     kit::text(&format!("Rank {}/{}", profile.rank(p), p.max_rank()), px + pw - 140.0, py + 38.0, 22.0, DIM);
-    kit::text(p.describe(), px + 20.0, py + 72.0, 22.0, Color::new(0.9, 0.9, 0.95, 1.0));
+    kit::text_fit(p.describe(), px + 20.0, py + 72.0, pw - 40.0, 22.0, Color::new(0.9, 0.9, 0.95, 1.0));
     let maxed = profile.rank(p) >= p.max_rank();
     let price = if maxed { "Fully blessed".to_string() } else { format!("Price: {} Sen", profile.cost(p)) };
     kit::text(&price, px + 20.0, py + 108.0, 22.0, if maxed || profile.can_buy(p) { GOLD } else { Color::new(1.0, 0.5, 0.5, 1.0) });
@@ -452,8 +469,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         let n = (0..t.len()).filter(|k| entry(profile, assets, *t, *k).found).count();
         kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.24, 0.12, 0.22, 0.97) } else { PANEL }, if sel { ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         let label = format!("{} {}/{}", t.name(), n, t.len());
-        let d = kit::measure(&label, 16);
-        kit::text(&label, r.x + (tw - d.width) / 2.0, r.y + 24.0, 16.0, if sel { WHITE } else { DIM });
+        kit::text_fit_centered(&label, r.x + tw / 2.0, r.y + 24.0, tw - 12.0, 16.0, if sel { WHITE } else { DIM });
         if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
             st.tab = *t;
             st.cursor = 0;
@@ -505,7 +521,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     let (px, py, pw, ph) = ((w - 760.0) / 2.0, y0 + rows * (cw + gap) + 14.0, 760.0, 170.0);
     kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
     if e.found {
-        kit::text(&e.name, px + 20.0, py + 40.0, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
+        kit::text_fit(&e.name, px + 20.0, py + 40.0, pw - 40.0, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
         let mut y = py + 72.0;
         for line in &e.lines {
             for l in wrap(line, pw - 40.0, 20) {

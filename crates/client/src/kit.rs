@@ -95,6 +95,47 @@ pub fn measure(s: &str, size: u16) -> TextDimensions {
     with_font(size as f32, |font| measure_text(s, font, fs, sc))
 }
 
+/// Largest size up to `max` at which `s` fits in `width` (never below 9).
+pub fn fit(s: &str, width: f32, max: f32) -> f32 {
+    let w = measure(s, max as u16).width;
+    if w <= width {
+        max
+    } else {
+        (max * width / w).floor().max(9.0)
+    }
+}
+
+/// Text shrunk to fit `width`.
+pub fn text_fit(s: &str, x: f32, y: f32, width: f32, size: f32, color: Color) {
+    text(s, x, y, fit(s, width, size), color);
+}
+
+/// Text centred on `cx`, shrunk to fit `width`.
+pub fn text_fit_centered(s: &str, cx: f32, y: f32, width: f32, size: f32, color: Color) {
+    let sz = fit(s, width, size);
+    let d = measure(s, sz as u16);
+    text(s, cx - d.width / 2.0, y, sz, color);
+}
+
+/// Word-wraps `s` into lines no wider than `width` at `size`.
+pub fn wrap(s: &str, width: f32, size: u16) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    for word in s.split_whitespace() {
+        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+        if measure(&candidate, size).width > width && !line.is_empty() {
+            out.push(std::mem::take(&mut line));
+            line = word.to_string();
+        } else {
+            line = candidate;
+        }
+    }
+    if !line.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
 /// Text with a soft drop shadow (for titles over busy backgrounds).
 pub fn text_shadow(s: &str, x: f32, y: f32, size: f32, color: Color) {
     text(s, x + 2.0, y + 2.0, size, Color::new(0.0, 0.0, 0.0, 0.55 * color.a));
@@ -207,7 +248,7 @@ pub fn button(r: Rect, label: &str, enabled: bool, style: Style) -> bool {
         Color::new(1.0, 0.82, 0.42, 0.4)
     };
     rounded_outline(r.x, y, r.w, r.h, 10.0, if hover { 2.0 } else { 1.5 }, edge);
-    let size = (r.h * 0.42).clamp(16.0, 26.0);
+    let size = fit(label, r.w - 20.0, (r.h * 0.42).clamp(16.0, 26.0));
     let d = measure(label, size as u16);
     let c = if enabled { INK } else { Color::new(1.0, 1.0, 1.0, 0.3) };
     text(label, r.x + (r.w - d.width) / 2.0, y + r.h / 2.0 + d.offset_y / 2.0 - 1.0, size, c);
@@ -243,7 +284,7 @@ pub fn icon_slot(x: f32, y: f32, s: f32, icon: Option<&Texture2D>, level: u8, ma
 /// Small label/value chip, e.g. a stat in a row.
 pub fn chip(x: f32, y: f32, label: &str, value: &str, accent: Color) -> f32 {
     let lw = measure(label, 14).width;
-    let vw = measure(value, 20).width;
+    let vw = measure(value, 20).width.min(260.0);
     let w = lw + vw + 28.0;
     rounded(x, y, w, 30.0, 15.0, Color::new(0.06, 0.05, 0.11, 0.85));
     rounded_outline(x, y, w, 30.0, 15.0, 1.0, Color::new(accent.r, accent.g, accent.b, 0.5));

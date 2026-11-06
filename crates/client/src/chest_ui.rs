@@ -234,9 +234,9 @@ impl ChestAnim {
                 centered(&words[..mid].join(" "), cx, y + 124.0, size, WHITE);
                 centered(&words[mid..].join(" "), cx, y + 144.0, size, WHITE);
             } else {
-                centered(&title, cx, y + 132.0, size, WHITE);
+                kit::text_fit_centered(&title, cx, y + 132.0, card_w - 16.0, size, WHITE);
             }
-            centered(&sub, cx, y + 176.0, 20.0, if awaken { border } else { Color::new(0.8, 0.85, 1.0, 1.0) });
+            kit::text_fit_centered(&sub, cx, y + 176.0, card_w - 14.0, 20.0, if awaken { border } else { Color::new(0.8, 0.85, 1.0, 1.0) });
         }
 
         if self.finished() {

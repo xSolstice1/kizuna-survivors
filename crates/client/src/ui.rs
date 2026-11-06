@@ -96,6 +96,7 @@ pub fn hud(world: &World, assets: &Assets) {
             let c = match kind {
                 SpecialKind::Hannya | SpecialKind::Mukade => Color::new(0.9 * flick, 0.1, 0.15, 1.0),
                 SpecialKind::Firmament => Color::new(0.45, 0.8 * flick, 1.0, 1.0),
+                SpecialKind::Divine => Color::new(1.0, 0.75 * flick, 0.45, 1.0),
                 _ => Color::new(1.0, 0.6 * flick, 0.15, 1.0),
             };
             kit::bar(92.0, 62.0, 206.0, 10.0, f, c, Color::new(0.1, 0.08, 0.16, 0.95));
@@ -220,7 +221,7 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usi
         // Icon + name + tag chip.
         let max = u.max_level();
         kit::icon_slot(x + 16.0, y + 24.0, 60.0, Some(assets.icon(u)), lvl.saturating_sub(1), if u == Upgrade::Heal { 0 } else { max }, false);
-        kit::text(u.name(), x + 90.0, y + 50.0, 22.0, INK);
+        kit::text_fit(u.name(), x + 90.0, y + 50.0, cw - 140.0, 22.0, INK);
         let tw = kit::measure(&tag, 13).width + 16.0;
         kit::rounded(x + 90.0, y + 60.0, tw, 20.0, 10.0, Color::new(accent.r, accent.g, accent.b, 0.22));
         kit::text(&tag, x + 98.0, y + 75.0, 13.0, accent);
@@ -272,14 +273,14 @@ pub fn shrine(offer: &[ShrineEvent], assets: &Assets) -> Option<Option<usize>> {
         let y = y0 + if hover { -6.0 } else { 0.0 };
         kit::panel_ex(x, y, cw, ch, if hover { Color::new(0.20, 0.13, 0.08, 0.97) } else { kit::PANEL }, if hover { GOLD } else { kit::EDGE });
         kit::text(&format!("{}", i + 1), x + cw - 28.0, y + 34.0, 18.0, FAINT);
-        kit::text(ev.name(), x + 20.0, y + 44.0, 28.0, INK);
+        kit::text_fit(ev.name(), x + 20.0, y + 44.0, cw - 60.0, 28.0, INK);
         let (bless, price) = ev.text();
         kit::rounded(x + 16.0, y + 62.0, cw - 32.0, 58.0, 8.0, Color::new(0.1, 0.3, 0.18, 0.5));
         kit::text("BLESSING", x + 28.0, y + 82.0, 13.0, JADE);
-        kit::text(bless, x + 28.0, y + 106.0, 17.0, Color::new(0.7, 1.0, 0.8, 1.0));
+        kit::text_fit(bless, x + 28.0, y + 106.0, cw - 56.0, 17.0, Color::new(0.7, 1.0, 0.8, 1.0));
         kit::rounded(x + 16.0, y + 130.0, cw - 32.0, 58.0, 8.0, Color::new(0.35, 0.08, 0.1, 0.5));
         kit::text("PRICE", x + 28.0, y + 150.0, 13.0, VERMILION);
-        kit::text(price, x + 28.0, y + 174.0, 17.0, Color::new(1.0, 0.7, 0.7, 1.0));
+        kit::text_fit(price, x + 28.0, y + 174.0, cw - 56.0, 17.0, Color::new(1.0, 0.7, 0.7, 1.0));
         if hover && is_mouse_button_pressed(MouseButton::Left) {
             picked = Some(Some(i));
         }
@@ -370,7 +371,7 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> 
     for wp in &world.weapons {
         kit::icon_slot(lx + 18.0, y, 40.0, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
         let (name, c) = if wp.awakened { (awakened_name(wp.kind).to_string(), GOLD) } else { (Upgrade::Weapon(wp.kind).name().to_string(), INK) };
-        kit::text(&name, lx + 70.0, y + 18.0, 18.0, c);
+        kit::text_fit(&name, lx + 70.0, y + 18.0, lw - 90.0, 18.0, c);
         let (pk, need) = complement(wp.kind);
         if wp.awakened {
             kit::text(&format!("AWAKENED  ·  {}", sim::content::signature_name(wp.kind)), lx + 70.0, y + 38.0, 13.0, GOLD);
@@ -386,7 +387,7 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> 
                 if has { " (owned)" } else { "" },
                 if lvl_ok && has && world.time < AWAKEN_FROM { " · chest after 8:00" } else if lvl_ok && has { " · open a chest!" } else { "" }
             );
-            kit::text(&hint, lx + 92.0, y + 38.0, 13.0, if has && lvl_ok { JADE } else { FAINT });
+            kit::text_fit(&hint, lx + 92.0, y + 38.0, lw - 110.0, 13.0, if has && lvl_ok { JADE } else { FAINT });
         }
         y += 54.0;
     }
