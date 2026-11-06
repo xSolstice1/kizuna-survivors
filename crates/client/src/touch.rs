@@ -19,6 +19,9 @@ pub struct TouchControls {
     /// Pressed this frame.
     pub special: bool,
     pub pause: bool,
+    /// Touch ids already handled as a press. A quick tap can begin and end between two
+    /// frames, so macroquad only ever reports it as Ended; an unseen id counts as a press.
+    seen: Vec<u64>,
 }
 
 fn special_rect() -> Rect {
@@ -37,31 +40,29 @@ impl TouchControls {
         self.pause = false;
         for t in touches() {
             self.active = true;
-            let pos = kit::to_ui(t.position);
-            match t.phase {
-                TouchPhase::Started => {
-                    if !playing {
-                        continue;
-                    }
+            // touches() are in device pixels (unlike mouse_position, which is in CSS pixels).
+            let pos = kit::to_ui(t.position / screen_dpi_scale());
+            let ended = matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled);
+            if !self.seen.contains(&t.id) {
+                self.seen.push(t.id);
+                if playing {
                     if special_rect().contains(pos) {
                         self.special = true;
                     } else if pause_rect().contains(pos) {
                         self.pause = true;
-                    } else if self.stick.is_none() && pos.x < screen_width() * 0.6 {
+                    } else if !ended && self.stick.is_none() && pos.x < screen_width() * 0.6 {
                         self.stick = Some((t.id, pos, pos));
                     }
                 }
-                TouchPhase::Moved | TouchPhase::Stationary => {
-                    if let Some((id, o, _)) = self.stick {
-                        if id == t.id {
-                            self.stick = Some((id, o, pos));
-                        }
-                    }
+            } else if let Some((id, o, _)) = self.stick {
+                if id == t.id {
+                    self.stick = Some((id, o, pos));
                 }
-                TouchPhase::Ended | TouchPhase::Cancelled => {
-                    if self.stick.is_some_and(|(id, _, _)| id == t.id) {
-                        self.stick = None;
-                    }
+            }
+            if ended {
+                self.seen.retain(|&id| id != t.id);
+                if self.stick.is_some_and(|(id, _, _)| id == t.id) {
+                    self.stick = None;
                 }
             }
         }
