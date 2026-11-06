@@ -1583,17 +1583,14 @@ impl World {
             self.projectiles.push_kind(ProjKind::CrescentWave, 18.0, p, d * 360.0, 0.8, HANNYA_WAVE_DAMAGE * power, 255, 0.0);
             self.events.push(Event::Slash { pos: p, dir: d, radius: 46.0, full: false });
         }
-        // Shadow Step: blink beside an enemy; the afterimage left behind explodes.
+        // Shadow Step: a crimson afterimage dashes into the horde and explodes there.
+        // (The player stays put: teleporting the player itself was disorienting.)
         self.hannya_step -= DT;
         if self.hannya_step <= 0.0 {
             self.hannya_step = HANNYA_STEP_EVERY;
-            if let Some(j) = self.nearest_index(p, 260.0, &[]) {
-                let e = self.enemies.pos[j];
-                let to = stage::resolve(e + (e - p).normalize_or_zero() * 26.0, PLAYER_RADIUS);
-                self.afterimages.push((p, 0.35));
-                self.player.pos = to;
-                self.player.iframes = self.player.iframes.max(0.3);
-                self.events.push(Event::ShadowStep { from: p, to });
+            for t in self.random_targets(260.0, 2) {
+                self.afterimages.push((t, 0.35));
+                self.events.push(Event::ShadowStep { from: p, to: t });
             }
         }
         // Hannya's Wrath: charge, then a giant blast as the form ends.
@@ -3166,6 +3163,7 @@ mod tests {
         assert!(beams >= 30, "beams: {beams}");
         assert!(steps >= 2 && blasts >= 2, "shadow steps {steps}, afterimage blasts {blasts}");
         assert!(finale, "Hannya's Wrath should go off at the end");
+        assert!(w.player.pos.length() < 5.0, "the form must not teleport the player, ended at {:?}", w.player.pos);
         assert_eq!(w.form_kind(), None);
         assert!(w.kills >= 15, "should tear through the ring, killed {}", w.kills);
     }

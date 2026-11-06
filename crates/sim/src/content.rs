@@ -166,7 +166,7 @@ pub const HANNYA_BEAM_DAMAGE: f32 = 40.0;
 /// Crescent waves at the nearest enemy.
 pub const HANNYA_WAVE_EVERY: f32 = 0.45;
 pub const HANNYA_WAVE_DAMAGE: f32 = 26.0;
-/// Shadow Step: teleport next to an enemy, the afterimage left behind explodes.
+/// Shadow Step: two afterimages dash into the horde and explode.
 pub const HANNYA_STEP_EVERY: f32 = 1.8;
 pub const HANNYA_AFTERIMAGE_RADIUS: f32 = 64.0;
 pub const HANNYA_AFTERIMAGE_DAMAGE: f32 = 45.0;
