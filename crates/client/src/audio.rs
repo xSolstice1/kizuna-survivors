@@ -58,6 +58,7 @@ fn tuning(s: Sfx) -> (f32, f64) {
         Sfx::Yip => (0.3, 0.1),
         Sfx::Spin => (0.3, 0.2),
         Sfx::Volley => (0.45, 0.2),
+        Sfx::Poof => (0.4, 0.08),
         Sfx::Warble => (0.35, 0.12),
         Sfx::Hurt => (0.6, 0.12),
         Sfx::Click => (0.5, 0.03),
@@ -176,6 +177,8 @@ impl Audio {
                 Event::FoxAwakened { .. } => Sfx::FoxAwaken,
                 Event::FoxVolley => Sfx::Volley,
                 Event::FoxFaded => Sfx::FoxFade,
+                Event::CloneSummoned { .. } | Event::ClonePopped { .. } => Sfx::Poof,
+                Event::CloneStrike { .. } => Sfx::Whoosh,
             };
             self.play(s);
         }

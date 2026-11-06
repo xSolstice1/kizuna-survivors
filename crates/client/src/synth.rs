@@ -186,9 +186,10 @@ pub enum Sfx {
     Yip,
     Spin,
     FoxFade,
+    Poof,
 }
 
-pub const ALL_SFX: [Sfx; 39] = [
+pub const ALL_SFX: [Sfx; 40] = [
     Sfx::Hit,
     Sfx::Pop,
     Sfx::BigPop,
@@ -228,6 +229,7 @@ pub const ALL_SFX: [Sfx; 39] = [
     Sfx::Yip,
     Sfx::Spin,
     Sfx::FoxFade,
+    Sfx::Poof,
 ];
 
 /// Bell-like tone: inharmonic sine partials.
@@ -471,6 +473,12 @@ pub fn sfx(s: Sfx) -> Buf {
                 b.add(k as f32 * 0.07, Note::new(Noise, 1.0, 0.07, 0.25).lp(4500.0).env(0.02, 1.5));
             }
             b.add(0.0, Note::new(Sine, 700.0, 0.45, 0.08).vib(0.2, 14.0));
+        }
+        Sfx::Poof => {
+            // Smoke puff: soft noise burst with a dropping pitch.
+            b = Buf::new(0.3);
+            b.add(0.0, Note::new(Noise, 1.0, 0.28, 0.6).lp(1400.0).env(0.005, 2.2));
+            b.add(0.0, Note::new(Sine, 420.0, 0.18, 0.25).slide(140.0));
         }
         Sfx::FoxFade => {
             b = Buf::new(0.9);

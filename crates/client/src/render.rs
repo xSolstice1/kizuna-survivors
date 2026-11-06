@@ -76,6 +76,7 @@ impl Assets {
             ("foxfire_orb", sprites::texture(include_str!("../../../art/src/icons/foxfire_orb.px"))),
             ("familiars", sprites::texture(include_str!("../../../art/src/icons/familiars.px"))),
             ("gale_shuriken", sprites::texture(include_str!("../../../art/src/icons/gale_shuriken.px"))),
+            ("fox_mirage", sprites::texture(include_str!("../../../art/src/icons/fox_mirage.px"))),
             ("guard", sprites::texture(include_str!("../../../art/src/icons/guard.px"))),
             ("haste", sprites::texture(include_str!("../../../art/src/icons/haste.px"))),
             ("magnetism", sprites::texture(include_str!("../../../art/src/icons/magnetism.px"))),
@@ -117,6 +118,7 @@ impl Assets {
                 WeaponKind::FoxfireOrb => "foxfire_orb",
                 WeaponKind::Familiars => "familiars",
                 WeaponKind::GaleShuriken => "gale_shuriken",
+                WeaponKind::FoxMirage => "fox_mirage",
             },
             Upgrade::Passive(p) => match p {
                 PassiveKind::Might => "might",
@@ -178,6 +180,8 @@ pub struct Fx {
     impacts: Vec<(Vec2, f32, f32)>,
     /// Foxfire bursts and the transformation blast: (pos, radius, age, gold?).
     bursts: Vec<(Vec2, f32, f32, bool)>,
+    /// Smoke puffs from Fox Mirage clones appearing / popping: (pos, radius, age).
+    smokes: Vec<(Vec2, f32, f32)>,
     pub shake: f32,
     pub show_numbers: bool,
     /// Short line spoken by the hero, shown above her head.
@@ -205,6 +209,7 @@ impl Fx {
         self.slashes.clear();
         self.impacts.clear();
         self.bursts.clear();
+        self.smokes.clear();
         self.shake = 0.0;
         self.banner = None;
         self.leveled_once = false;
@@ -325,6 +330,8 @@ impl Fx {
                     self.shake = self.shake.max(0.5);
                 }
                 Event::FoxFaded => self.say("Phew... the foxfire's cooling."),
+                Event::CloneSummoned { pos } => self.smokes.push((vec2(pos.x, pos.y), 16.0, 0.0)),
+                Event::ClonePopped { pos, radius } => self.smokes.push((vec2(pos.x, pos.y), radius, 0.0)),
                 Event::Awakened(k) => {
                     self.announce(format!("AWAKENING: {}", sim::content::awakened_name(k)));
                     self.say(self.lines().awaken);
@@ -358,6 +365,8 @@ impl Fx {
         self.impacts.retain(|i| i.2 < 0.3);
         self.bursts.iter_mut().for_each(|b| b.2 += dt);
         self.bursts.retain(|b| b.2 < if b.3 { 0.7 } else { 0.35 });
+        self.smokes.iter_mut().for_each(|s| s.2 += dt);
+        self.smokes.retain(|s| s.2 < 0.5);
         self.shake = (self.shake - dt).max(0.0);
         for t in [&mut self.bark, &mut self.banner] {
             if let Some((_, left)) = t {
@@ -536,6 +545,32 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if fox {
         draw_fox_aura_and_tails(world, t);
     }
+    // Fox Mirage clones: translucent, blue-shifted copies of Riku (gold while he's transformed).
+    for c in &world.clones {
+        let f = if c.moving { 1 + ((time * 9.0 + c.pos.x as f64 * 0.1) as usize % 2) } else { 0 };
+        let ctex = if fox { &a.riku_fox[f] } else { &a.hero(world.cfg.hero)[f] };
+        let fade = (c.life / 0.4).min(1.0);
+        let flicker = 0.7 + 0.15 * (t * 13.0 + c.pos.y).sin();
+        let tint = Color::new(0.75, 0.85, 1.0, flicker * fade);
+        let (cx, cy) = ((c.pos.x - 12.0).round(), (c.pos.y - 26.0).round());
+        draw_ellipse(c.pos.x, c.pos.y + 5.0, 8.0, 2.5, 0.0, Color::new(0.0, 0.0, 0.0, 0.2 * fade));
+        // Afterimage trailing behind when moving.
+        if c.moving {
+            let back = c.facing * -5.0;
+            draw_texture_ex(ctex, cx + back.x, cy + back.y, Color::new(0.5, 0.65, 1.0, 0.25 * fade), DrawTextureParams { flip_x: c.facing.x < 0.0, ..Default::default() });
+        }
+        draw_texture_ex(ctex, cx, cy, tint, DrawTextureParams { flip_x: c.facing.x < 0.0, ..Default::default() });
+        if c.striking > 0.0 {
+            let base = c.facing.y.atan2(c.facing.x);
+            let k = c.striking / 0.15;
+            for s in 0..6 {
+                let a0 = base - 0.9 + s as f32 * 0.3;
+                let a1 = a0 + 0.3;
+                let r = 16.0;
+                draw_line(c.pos.x + a0.cos() * r, c.pos.y - 8.0 + a0.sin() * r, c.pos.x + a1.cos() * r, c.pos.y - 8.0 + a1.sin() * r, 3.0, Color::new(0.85, 0.95, 1.0, 0.9 * k));
+            }
+        }
+    }
     draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
     let tex = if fox { &a.riku_fox[frame] } else { &a.hero(world.cfg.hero)[frame] };
     let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
@@ -690,6 +725,15 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     DrawTextureParams { dest_size: Some(vec2(size, size)), rotation: t * 22.0, ..Default::default() },
                 );
             }
+        }
+    }
+    for (c, r, age) in &fx.smokes {
+        let k = age / 0.5;
+        for i in 0..7 {
+            let a = i as f32 * 0.9 + c.x * 0.05;
+            let d = r * 0.5 * k.sqrt();
+            let pr = r * (0.35 + 0.35 * k) * (0.8 + 0.2 * ((i * 37 % 10) as f32 / 10.0));
+            draw_circle(c.x + a.cos() * d, c.y - 6.0 + a.sin() * d * 0.7 - k * 6.0, pr, Color::new(0.85, 0.88, 0.95, 0.45 * (1.0 - k)));
         }
     }
     for (c, r, age, gold) in &fx.bursts {

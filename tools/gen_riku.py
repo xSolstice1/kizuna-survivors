@@ -168,6 +168,21 @@ def weapon_art():
     i.px(8, 2, "W"); i.px(14, 8, "W")
     i.save("gale_shuriken", "Gale Shuriken")
 
+    # Fox Mirage: a fox mask with two ghostly copies behind it.
+    i = Icon({"M": "#f4f0fa", "m": "#b8b0c8", "r": "#e0263c", "g": "#6a8ad8", "G": "#9ab8ff"})
+    for ox, col in ((-4, "g"), (-2, "G")):
+        i.circle(9 + ox, 9, 4.6, col)
+        i.poly([(5 + ox, 2), (8 + ox, 6), (5 + ox, 7)], col)
+        i.poly([(13 + ox, 2), (10 + ox, 6), (13 + ox, 7)], col)
+    i.circle(10, 9, 4.6, "M")
+    i.poly([(6, 2), (9, 6), (6, 7)], "M")
+    i.poly([(14, 2), (11, 6), (14, 7)], "M")
+    i.px(7, 4, "r"); i.px(13, 4, "r")
+    i.px(8, 9, "r"); i.px(12, 9, "r")
+    i.px(10, 11, "r")
+    i.rect(8, 13, 12, 13, "m")
+    i.save("fox_mirage", "Fox Mirage")
+
     # In-world sprites.
     c = Canvas(12, 10, {"O": "#ff9a2a", "o": "#d4560e", "W": "#fff2d0", "E": "#2a0a00", "Y": "#ffd36a"})
     c.rect(1, 2, 2, 4, "O"); c.rect(6, 2, 7, 4, "O")     # ears
