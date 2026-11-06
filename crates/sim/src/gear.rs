@@ -108,31 +108,33 @@ pub enum Rarity {
     Epic,
     Legendary,
     Mythic,
+    /// Hand-made artefacts: a fixed signature effect, 6 high-quality rolls, one worn at a time.
+    Exotic,
 }
 
-pub const ALL_RARITIES: [Rarity; 6] = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic];
+pub const ALL_RARITIES: [Rarity; 7] = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic, Rarity::Exotic];
 
 impl Rarity {
     pub fn index(self) -> usize {
         self as usize
     }
     pub fn name(self) -> &'static str {
-        ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic"][self.index()]
+        ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exotic"][self.index()]
     }
-    /// Rolled bonuses: Common 1 ... Mythic 6.
+    /// Rolled bonuses: Common 1 ... Mythic 6 (Exotic 6).
     pub fn affixes(self) -> usize {
-        self.index() + 1
+        (self.index() + 1).min(6)
     }
     fn mult(self) -> f32 {
-        [1.0, 1.06, 1.12, 1.2, 1.3, 1.45][self.index()]
+        [1.0, 1.06, 1.12, 1.2, 1.3, 1.45, 1.6][self.index()]
     }
     /// Spirit Dust from salvaging.
     pub fn dust(self) -> u32 {
-        [1, 3, 8, 20, 50, 140][self.index()]
+        [1, 3, 8, 20, 50, 140, 400][self.index()]
     }
-    /// Level of the Arsenal weapon it grants (Mythic is also Awakened).
+    /// Level of the library weapon a low-rarity Arsenal grants.
     pub fn arsenal_level(self) -> u8 {
-        [1, 2, 4, 6, 8, 8][self.index()]
+        [1, 2, 4, 6, 8, 8, 8][self.index()]
     }
 }
 
@@ -344,6 +346,244 @@ impl Unique {
     }
 }
 
+/// Attacks and summons only an Arsenal item can give (Legendary and up).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArsenalArt {
+    /// Thunder drums orbit you and strike the nearest Otherworlders.
+    RaijinDrums,
+    /// A procession of fox spirits sweeps across the field.
+    FoxProcession,
+    /// A tengu fan unleashes a giant wind crescent.
+    TenguFan,
+    /// A sky dragon coils around you, crushing what it touches.
+    DragonCoil,
+    /// Moons fall on the thickest crowds.
+    Moonfall,
+    /// A giant skeletal hand slams the densest spot.
+    SkeletonHand,
+    // Exotic-only.
+    /// Two great yin-yang orbs bounce around you, erasing bullets.
+    YinYangBreaker,
+    /// Shadow clones dash through everything in a star.
+    ShadowStar,
+    /// A sweeping cut that mows the field and its bullets.
+    GrassCutter,
+}
+
+pub const LEGENDARY_ARTS: [ArsenalArt; 6] = [ArsenalArt::RaijinDrums, ArsenalArt::FoxProcession, ArsenalArt::TenguFan, ArsenalArt::DragonCoil, ArsenalArt::Moonfall, ArsenalArt::SkeletonHand];
+pub const ALL_ARTS: [ArsenalArt; 9] = [
+    ArsenalArt::RaijinDrums,
+    ArsenalArt::FoxProcession,
+    ArsenalArt::TenguFan,
+    ArsenalArt::DragonCoil,
+    ArsenalArt::Moonfall,
+    ArsenalArt::SkeletonHand,
+    ArsenalArt::YinYangBreaker,
+    ArsenalArt::ShadowStar,
+    ArsenalArt::GrassCutter,
+];
+
+impl ArsenalArt {
+    pub fn name(self) -> &'static str {
+        match self {
+            ArsenalArt::RaijinDrums => "Raijin's Drum Circle",
+            ArsenalArt::FoxProcession => "Night Fox Procession",
+            ArsenalArt::TenguFan => "Tengu Gale Fan",
+            ArsenalArt::DragonCoil => "Sky Dragon Coil",
+            ArsenalArt::Moonfall => "Moonfall",
+            ArsenalArt::SkeletonHand => "Gashadokuro's Hand",
+            ArsenalArt::YinYangBreaker => "Unbroken Yin-Yang",
+            ArsenalArt::ShadowStar => "Thousand Shadow Star",
+            ArsenalArt::GrassCutter => "Grass-Cutter Sweep",
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            ArsenalArt::RaijinDrums => "raijin_drums",
+            ArsenalArt::FoxProcession => "fox_procession",
+            ArsenalArt::TenguFan => "tengu_fan",
+            ArsenalArt::DragonCoil => "dragon_coil",
+            ArsenalArt::Moonfall => "moonfall",
+            ArsenalArt::SkeletonHand => "skeleton_hand",
+            ArsenalArt::YinYangBreaker => "unbroken_yinyang",
+            ArsenalArt::ShadowStar => "clone_scroll",
+            ArsenalArt::GrassCutter => "kusanagi",
+        }
+    }
+    /// Description; `mythic` arts are stronger.
+    pub fn describe(self, mythic: bool) -> String {
+        let m = |a: &str, b: &str| if mythic { b.to_string() } else { a.to_string() };
+        match self {
+            ArsenalArt::RaijinDrums => format!("{} thunder drums orbit you; each strikes the nearest Otherworlder every 1.2s.", m("3", "5")),
+            ArsenalArt::FoxProcession => format!("Every 6s a procession of {} fox spirits sweeps across the field.", m("6", "10")),
+            ArsenalArt::TenguFan => format!("Every {}s a giant wind crescent blasts everything in front of you away.", m("3", "2")),
+            ArsenalArt::DragonCoil => format!("A sky dragon of {} coils circles you, crushing what it touches.", m("10", "16")),
+            ArsenalArt::Moonfall => format!("Every 7s, {} moons fall on the thickest crowds.", m("4", "7")),
+            ArsenalArt::SkeletonHand => format!("Every {}s a giant skeletal hand slams the densest spot.", m("6", "4")),
+            ArsenalArt::YinYangBreaker => "Two great yin-yang orbs bounce around you, crushing Otherworlders and erasing every bullet they touch.".into(),
+            ArsenalArt::ShadowStar => "Every 4s, eight shadow clones dash out in a star, cutting through everything in their path.".into(),
+            ArsenalArt::GrassCutter => "Every 4s, a sweeping cut mows down everything around you and cuts their bullets out of the air.".into(),
+        }
+    }
+}
+
+/// Exotic artefacts, one or two per world plus the Three Sacred Treasures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Exotic {
+    LanternHeart,
+    JeweledBranch,
+    UnbrokenYinYang,
+    NineSeal,
+    CloneScroll,
+    HollowMask,
+    WhiteHaori,
+    HungerOrgan,
+    ThousandCounter,
+    SovereignFinger,
+    ClosedHandVow,
+    Kusanagi,
+    YataMirror,
+    Yasakani,
+}
+
+pub const ALL_EXOTICS: [Exotic; 14] = [
+    Exotic::LanternHeart,
+    Exotic::JeweledBranch,
+    Exotic::UnbrokenYinYang,
+    Exotic::NineSeal,
+    Exotic::CloneScroll,
+    Exotic::HollowMask,
+    Exotic::WhiteHaori,
+    Exotic::HungerOrgan,
+    Exotic::ThousandCounter,
+    Exotic::SovereignFinger,
+    Exotic::ClosedHandVow,
+    Exotic::Kusanagi,
+    Exotic::YataMirror,
+    Exotic::Yasakani,
+];
+
+/// Fingers count from the whole bag, up to this many.
+pub const MAX_FINGERS: u32 = 10;
+/// Exotic Shards needed to forge an Exotic.
+pub const FORGE_COST: u32 = 100;
+
+impl Exotic {
+    pub fn index(self) -> usize {
+        ALL_EXOTICS.iter().position(|e| *e == self).unwrap()
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Exotic::LanternHeart => "Lantern Daimyo's Heart",
+            Exotic::JeweledBranch => "Branch of the Jeweled Moon",
+            Exotic::UnbrokenYinYang => "Unbroken Yin-Yang",
+            Exotic::NineSeal => "Nine-Seal Scroll",
+            Exotic::CloneScroll => "Forbidden Thousand-Clone Scroll",
+            Exotic::HollowMask => "Shard of the Hollow Mask",
+            Exotic::WhiteHaori => "Captain's White Haori",
+            Exotic::HungerOrgan => "Predator's Hunger Organ",
+            Exotic::ThousandCounter => "The Thousand Minus Seven",
+            Exotic::SovereignFinger => "Sovereign's Severed Finger",
+            Exotic::ClosedHandVow => "Vow of the Closed Hand",
+            Exotic::Kusanagi => "Kusanagi, the Grass-Cutter",
+            Exotic::YataMirror => "Yata no Kagami",
+            Exotic::Yasakani => "Yasakani no Magatama",
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            Exotic::LanternHeart => "lantern_heart",
+            Exotic::JeweledBranch => "jeweled_branch",
+            Exotic::UnbrokenYinYang => "unbroken_yinyang",
+            Exotic::NineSeal => "nine_seal",
+            Exotic::CloneScroll => "clone_scroll",
+            Exotic::HollowMask => "hollow_mask",
+            Exotic::WhiteHaori => "white_haori",
+            Exotic::HungerOrgan => "hunger_organ",
+            Exotic::ThousandCounter => "thousand_counter",
+            Exotic::SovereignFinger => "sovereign_finger",
+            Exotic::ClosedHandVow => "closed_hand_vow",
+            Exotic::Kusanagi => "kusanagi",
+            Exotic::YataMirror => "yata_mirror",
+            Exotic::Yasakani => "yasakani_jewel",
+        }
+    }
+    pub fn from_key(k: &str) -> Option<Exotic> {
+        ALL_EXOTICS.iter().copied().find(|e| e.key() == k)
+    }
+    pub fn slot(self) -> Slot {
+        match self {
+            Exotic::LanternHeart => Slot::Charm,
+            Exotic::JeweledBranch => Slot::Necklace,
+            Exotic::UnbrokenYinYang | Exotic::CloneScroll | Exotic::Kusanagi => Slot::Arsenal,
+            Exotic::NineSeal | Exotic::SovereignFinger => Slot::Omamori,
+            Exotic::HollowMask => Slot::Earring,
+            Exotic::WhiteHaori => Slot::Top,
+            Exotic::HungerOrgan => Slot::Bottom,
+            Exotic::ThousandCounter | Exotic::ClosedHandVow => Slot::Ring,
+            Exotic::YataMirror => Slot::Hat,
+            Exotic::Yasakani => Slot::Charm,
+        }
+    }
+    /// The world that drops it (and must be cleared on Nightmare to forge it).
+    pub fn home(self) -> StageId {
+        match self {
+            Exotic::LanternHeart => StageId::Shotengai,
+            Exotic::JeweledBranch | Exotic::UnbrokenYinYang | Exotic::YataMirror => StageId::ShrineValley,
+            Exotic::NineSeal | Exotic::CloneScroll | Exotic::Kusanagi => StageId::EmberLeaf,
+            Exotic::HollowMask | Exotic::WhiteHaori | Exotic::Yasakani => StageId::PaleCitadel,
+            Exotic::HungerOrgan | Exotic::ThousandCounter => StageId::Rainward,
+            Exotic::SovereignFinger | Exotic::ClosedHandVow => StageId::Shatterline,
+        }
+    }
+    /// The Three Sacred Treasures may be worn together (and alongside one other Exotic).
+    pub fn treasure(self) -> bool {
+        matches!(self, Exotic::Kusanagi | Exotic::YataMirror | Exotic::Yasakani)
+    }
+    pub fn art(self) -> Option<ArsenalArt> {
+        match self {
+            Exotic::UnbrokenYinYang => Some(ArsenalArt::YinYangBreaker),
+            Exotic::CloneScroll => Some(ArsenalArt::ShadowStar),
+            Exotic::Kusanagi => Some(ArsenalArt::GrassCutter),
+            _ => None,
+        }
+    }
+    pub fn describe(self) -> String {
+        match self {
+            Exotic::LanternHeart => "Every 10s a ring of lantern fire bursts from you. Every 50 kills relight it 1s sooner.".into(),
+            Exotic::JeweledBranch => "Enemy bullets grazing past you charge your special. Your special also casts Last Word: every bullet on screen is erased and a starburst devastates the area.".into(),
+            Exotic::UnbrokenYinYang => ArsenalArt::YinYangBreaker.describe(true),
+            Exotic::NineSeal => "Each special breaks one of nine seals: +10% damage per broken seal. With all nine broken, fox fire burns around you, but you take 30% more damage.".into(),
+            Exotic::CloneScroll => ArsenalArt::ShadowStar.describe(true),
+            Exotic::HollowMask => "Using your special puts on the mask for 6s: +80% damage. When it breaks, your health drops to half (if above).".into(),
+            Exotic::WhiteHaori => "While a boss is on the field, take 40% less damage. +30% boss damage.".into(),
+            Exotic::HungerOrgan => "Kills heal 0.4% of max health. If you go 3s without a kill, hunger drains your health.".into(),
+            Exotic::ThousandCounter => "Every 7th hit is a critical hit. Every 1,000 kills unleash a crimson blast across the screen.".into(),
+            Exotic::SovereignFinger => format!("Counts every Finger you own (up to {MAX_FINGERS}): +6% damage and +4% enemy health each. With 5 or more, your special also opens your own domain."),
+            Exotic::ClosedHandVow => "A binding vow: you can never heal, but deal +60% damage with +15% crit chance.".into(),
+            Exotic::Kusanagi => ArsenalArt::GrassCutter.describe(true),
+            Exotic::YataMirror => "25% of the bullets that would hit you are reflected at the nearest Otherworlder.".into(),
+            Exotic::Yasakani => "+1 revival and +20% special charge.".into(),
+        }
+    }
+}
+
+/// Bonus for wearing all Three Sacred Treasures.
+pub const REGALIA_TEXT: &str = "Imperial Regalia (all three Treasures): +1 revival, and every 30s every bullet on screen is cleansed.";
+
+/// An Exotic item with its fixed design and six high-quality rolls.
+pub fn roll_exotic(rng: &mut Rng, e: Exotic, ilvl: u16) -> Item {
+    let mut it = roll_item(rng, Some(e.slot()), Rarity::Exotic, ilvl, None);
+    it.unique = None;
+    it.arsenal = None;
+    it.art = e.art();
+    it.exotic = Some(e);
+    for a in &mut it.affixes {
+        a.quality = 0.7 + 0.3 * a.quality;
+    }
+    it
+}
+
 /// Bonuses for wearing pieces of a world's set.
 pub fn set_name(s: StageId) -> &'static str {
     match s {
@@ -413,7 +653,11 @@ pub struct Item {
     pub base: u8,
     pub affixes: Vec<Affix>,
     pub unique: Option<Unique>,
+    /// Low-rarity Arsenal: a library weapon.
     pub arsenal: Option<WeaponKind>,
+    /// Legendary+ Arsenal: an exclusive attack or summon.
+    pub art: Option<ArsenalArt>,
+    pub exotic: Option<Exotic>,
     pub locked: bool,
 }
 
@@ -440,13 +684,19 @@ impl Item {
         self.affixes.iter().map(|a| a.quality).sum::<f32>() / self.affixes.len() as f32
     }
     pub fn unique_strength(&self) -> f32 {
-        if self.rarity == Rarity::Mythic {
+        if self.rarity >= Rarity::Mythic {
             2.0
         } else {
             1.0
         }
     }
     pub fn name(&self) -> String {
+        if let Some(e) = self.exotic {
+            return if self.plus > 0 { format!("{} +{}", e.name(), self.plus) } else { e.name().to_string() };
+        }
+        if let Some(a) = self.art {
+            return if self.plus > 0 { format!("{} +{}", a.name(), self.plus) } else { a.name().to_string() };
+        }
         let base = match self.arsenal {
             Some(k) => crate::content::Upgrade::Weapon(k).name().to_string(),
             None => self.slot.bases()[self.base as usize % self.slot.bases().len()].to_string(),
@@ -491,7 +741,7 @@ impl Item {
     pub fn serialize(&self) -> String {
         let affixes: Vec<String> = self.affixes.iter().map(|a| format!("{}:{:.3}", a.stat.key(), a.quality)).collect();
         format!(
-            "{};{};{};{};{};{};{};{};{};{};{}",
+            "{};{};{};{};{};{};{};{};{};{};{};{};{}",
             self.id,
             self.slot.key(),
             self.rarity.index(),
@@ -502,7 +752,9 @@ impl Item {
             affixes.join(","),
             self.unique.map_or("-".to_string(), |u| u.key()),
             self.arsenal.map_or("-".to_string(), |w| format!("{w:?}").to_lowercase()),
-            self.locked as u8
+            self.locked as u8,
+            self.art.map_or("-", |a| a.key()),
+            self.exotic.map_or("-", |e| e.key()),
         )
     }
 
@@ -532,6 +784,8 @@ impl Item {
             unique: ALL_UNIQUES.iter().copied().find(|u| u.key() == f[8]),
             arsenal: crate::content::ALL_WEAPONS.iter().copied().find(|w| format!("{w:?}").to_lowercase() == f[9]),
             locked: f[10] == "1",
+            art: f.get(11).and_then(|k| ALL_ARTS.iter().copied().find(|a| a.key() == *k)),
+            exotic: f.get(12).and_then(|k| Exotic::from_key(k)),
         })
     }
 }
@@ -540,6 +794,7 @@ impl Item {
 pub fn roll_rarity(rng: &mut Rng, tier: f32, find: f32, min: Rarity) -> Rarity {
     let base = [55.0f32, 27.0, 12.0, 4.5, 1.3, 0.2];
     let mut w = [0.0f32; 6];
+    let min = min.min(Rarity::Mythic);
     for (r, b) in base.iter().enumerate() {
         let shift = (1.0 + 0.25 * tier).powi(r as i32);
         let find = if r >= 2 { 1.0 + find } else { 1.0 };
@@ -571,10 +826,17 @@ pub fn roll_item(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, ilvl: u16, s
         affixes: Vec::new(),
         unique: None,
         arsenal: None,
+        art: None,
+        exotic: None,
         locked: false,
     };
     if slot == Slot::Arsenal {
-        item.arsenal = Some(ARSENAL_WEAPONS[(rng.next_u32() as usize) % ARSENAL_WEAPONS.len()]);
+        // Legendary and Mythic Arsenals carry attacks found nowhere else.
+        if rarity >= Rarity::Legendary {
+            item.art = Some(LEGENDARY_ARTS[(rng.next_u32() as usize) % LEGENDARY_ARTS.len()]);
+        } else {
+            item.arsenal = Some(ARSENAL_WEAPONS[(rng.next_u32() as usize) % ARSENAL_WEAPONS.len()]);
+        }
     }
     let mut pool: Vec<Stat> = ALL_STATS.iter().copied().filter(|s| Some(*s) != slot.main_stat()).collect();
     for _ in 0..rarity.affixes() {
@@ -582,7 +844,7 @@ pub fn roll_item(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, ilvl: u16, s
         let stat = pool.swap_remove(i);
         item.affixes.push(Affix { stat, quality: rng.f32() });
     }
-    if rarity >= Rarity::Legendary {
+    if rarity >= Rarity::Legendary && slot != Slot::Arsenal {
         item.unique = Some(ALL_UNIQUES[(rng.next_u32() as usize) % ALL_UNIQUES.len()]);
     }
     item
@@ -606,7 +868,13 @@ pub const DRAW_PITY: u32 = 50;
 /// Shrine Draw odds (percent), in rarity order.
 pub const DRAW_ODDS: [f32; 6] = [40.0, 30.0, 18.0, 9.0, 2.7, 0.3];
 
+/// Shrine Draw chance of an Exotic (percent).
+pub const DRAW_EXOTIC: f32 = 0.02;
+
 pub fn draw_rarity(rng: &mut Rng, pity: u32) -> Rarity {
+    if rng.f32() * 100.0 < DRAW_EXOTIC {
+        return Rarity::Exotic;
+    }
     if pity + 1 >= DRAW_PITY {
         return if rng.f32() < 0.1 { Rarity::Mythic } else { Rarity::Legendary };
     }
@@ -630,6 +898,11 @@ pub struct Loadout {
     pub sets4: Vec<StageId>,
     /// The Arsenal weapon: (kind, level, awakened, damage power).
     pub arsenal: Option<(WeaponKind, u8, bool, f32)>,
+    /// An exclusive Arsenal attack: (art, damage power, mythic-strength).
+    pub art: Option<(ArsenalArt, f32, bool)>,
+    pub exotics: Vec<Exotic>,
+    /// Sovereign's Fingers owned (counts only with one worn).
+    pub fingers: u32,
 }
 
 impl Loadout {
@@ -652,9 +925,31 @@ impl Loadout {
                     None => sets.push((s, 1)),
                 }
             }
+            let power = ilvl_scale(it.ilvl) * (1.0 + 0.06 * it.plus as f32);
             if let Some(k) = it.arsenal {
-                l.arsenal = Some((k, it.rarity.arsenal_level(), it.rarity == Rarity::Mythic, ilvl_scale(it.ilvl) * (1.0 + 0.06 * it.plus as f32)));
+                l.arsenal = Some((k, it.rarity.arsenal_level(), it.rarity >= Rarity::Mythic, power));
             }
+            if let Some(a) = it.art {
+                l.art = Some((a, power * if it.rarity == Rarity::Exotic { 1.4 } else { 1.0 }, it.rarity >= Rarity::Mythic));
+            }
+            if let Some(e) = it.exotic {
+                l.exotics.push(e);
+                match e {
+                    Exotic::WhiteHaori => l.bonus.boss_damage += 0.30,
+                    Exotic::ClosedHandVow => {
+                        l.bonus.might += 0.60;
+                        l.bonus.crit_chance += 0.15;
+                    }
+                    Exotic::Yasakani => {
+                        l.bonus.revivals += 1;
+                        l.bonus.special_charge += 0.20;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if l.regalia() {
+            l.bonus.revivals += 1;
         }
         for (s, n) in sets {
             if n >= 2 {
@@ -673,6 +968,14 @@ impl Loadout {
         l
     }
 
+    pub fn has(&self, e: Exotic) -> bool {
+        self.exotics.contains(&e)
+    }
+    /// All Three Sacred Treasures worn.
+    pub fn regalia(&self) -> bool {
+        self.has(Exotic::Kusanagi) && self.has(Exotic::YataMirror) && self.has(Exotic::Yasakani)
+    }
+
     pub fn unique(&self, u: Unique) -> f32 {
         self.uniques.iter().filter(|(x, _)| *x == u).map(|(_, s)| *s).sum()
     }
@@ -688,12 +991,14 @@ mod tests {
     #[test]
     fn rarity_sets_the_number_of_bonuses_and_items_round_trip() {
         let mut rng = Rng::new(7);
-        for r in ALL_RARITIES {
+        for r in &ALL_RARITIES[..6] {
+            let r = *r;
             for _ in 0..50 {
                 let mut it = roll_item(&mut rng, None, r, 30, Some(StageId::EmberLeaf));
                 assert_eq!(it.affixes.len(), r.affixes());
-                assert_eq!(it.unique.is_some(), r >= Rarity::Legendary);
-                assert_eq!(it.arsenal.is_some(), it.slot == Slot::Arsenal);
+                assert_eq!(it.unique.is_some(), r >= Rarity::Legendary && it.slot != Slot::Arsenal);
+                assert_eq!(it.arsenal.is_some(), it.slot == Slot::Arsenal && r < Rarity::Legendary);
+                assert_eq!(it.art.is_some(), it.slot == Slot::Arsenal && r >= Rarity::Legendary);
                 let mut stats: Vec<Stat> = it.affixes.iter().map(|a| a.stat).collect();
                 stats.extend(it.slot.main_stat());
                 let n = stats.len();
@@ -708,7 +1013,16 @@ mod tests {
                 assert!((back.quality() - it.quality()).abs() < 0.01);
                 assert_eq!(back.unique, it.unique);
                 assert_eq!(back.arsenal, it.arsenal);
+                assert_eq!(back.art, it.art);
             }
+        }
+        for e in ALL_EXOTICS {
+            let it = roll_exotic(&mut rng, e, 50);
+            assert_eq!(it.slot, e.slot());
+            assert!(it.affixes.len() == 6 && it.affixes.iter().all(|a| a.quality >= 0.7));
+            let back = Item::parse(&it.serialize()).unwrap();
+            assert_eq!(back.exotic, Some(e));
+            assert_eq!(back.art, e.art());
         }
     }
 
@@ -731,6 +1045,7 @@ mod tests {
         assert!(hard > easy + 0.5, "{easy} vs {hard}");
         assert!(draw_rarity(&mut rng, DRAW_PITY - 1) >= Rarity::Legendary);
         assert!((DRAW_ODDS.iter().sum::<f32>() - 100.0).abs() < 0.01);
+        assert!((0..20_000).all(|_| roll_rarity(&mut rng, 30.0, 5.0, Rarity::Common) != Rarity::Exotic), "Exotics never roll as plain drops");
     }
 
     #[test]

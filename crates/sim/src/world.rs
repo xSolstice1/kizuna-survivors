@@ -2,7 +2,7 @@
 
 use crate::campaign::{Difficulty, Mechanic, StageDef, StageId};
 use crate::content::*;
-use crate::gear::{self, Item, Loadout, Rarity, Unique};
+use crate::gear::{self, ArsenalArt, Exotic, Item, Loadout, Rarity, Unique};
 use crate::grid::Grid;
 use crate::meta::Bonus;
 use crate::stage;
@@ -251,6 +251,21 @@ pub struct Shot {
     pub life: f32,
     /// Look: 0 fireball, otherwise the stage index (themed bullets).
     pub style: u8,
+}
+
+/// An exclusive Arsenal attack in play (summons drawn by the client).
+#[derive(Clone, Debug)]
+pub struct ArtState {
+    pub art: ArsenalArt,
+    pub power: f32,
+    pub mythic: bool,
+    timer: f32,
+    /// Rotation for drums and the dragon.
+    pub phase: f32,
+    /// Bouncing yin-yang orbs: (pos, vel).
+    pub orbs: Vec<(Vec2, Vec2)>,
+    /// Marching foxes: (pos, vel, life).
+    pub foxes: Vec<(Vec2, Vec2, f32)>,
 }
 
 /// A world hazard (see `Mechanic`) or a boss's telegraphed strike.
@@ -684,6 +699,15 @@ pub struct World {
     gear_kills: u32,
     /// Crits waiting to explode (Eclipse): (position, damage).
     eclipses: Vec<(Vec2, f32)>,
+    pub art: Option<ArtState>,
+    /// Exotic blasts waiting for a safe point: (centre, radius, base damage).
+    pending_exo_blasts: Vec<(Vec2, f32, f32)>,
+    /// Exotic state: lantern / fox-fire / regalia timers, hollow mask seconds left,
+    /// seconds since the last kill, hits counted (Thousand Minus Seven).
+    exo_timers: [f32; 3],
+    pub mask: f32,
+    since_kill: f32,
+    hit_count: u32,
     next_hazard: f32,
     pending_spawns: Vec<(EnemyKind, Vec2)>,
     /// A shrine waiting on the ground.
@@ -709,6 +733,7 @@ impl World {
         let rng = Rng::new(cfg.seed);
         let hero = hero_def(cfg.hero);
         let signature = hero.signature;
+        let art = cfg.gear.art.map(|(art, power, mythic)| ArtState { art, power, mythic, timer: 1.5, phase: 0.0, orbs: Vec::new(), foxes: Vec::new() });
         let mut bonus = hero.innate.plus(cfg.meta).plus(cfg.gear.bonus);
         let g = &cfg.gear;
         bonus.revivals += g.unique(Unique::Phoenix) as u8;
@@ -813,6 +838,12 @@ impl World {
             gear_timers: [4.0, 6.0, 6.0, 3.0, 0.0, 0.0],
             gear_kills: 0,
             eclipses: Vec::new(),
+            art,
+            exo_timers: [10.0, 2.0, 30.0],
+            mask: 0.0,
+            pending_exo_blasts: Vec::new(),
+            since_kill: 0.0,
+            hit_count: 0,
             next_hazard: 45.0,
             pending_spawns: Vec::new(),
             shrine: None,
@@ -863,9 +894,13 @@ impl World {
         self.move_projectiles_and_hit();
         if input.special {
             let before = self.player.form;
+            let used = self.specials_used;
             self.use_special();
             if before <= 0.0 && self.player.form > 0.0 {
                 self.player.form += 2.0 * self.cfg.gear.unique(Unique::Overflow);
+            }
+            if self.specials_used > used {
+                self.on_special_exotics();
             }
         }
         self.contact_damage();
@@ -901,7 +936,7 @@ impl World {
         let g = &self.cfg.gear;
         let fury = if self.player.hp < self.player.max_hp * 0.4 { 1.0 + 0.3 * g.unique(Unique::Berserker) } else { 1.0 };
         let lotus = 1.0 + 0.35 * g.unique(Unique::GlassLotus);
-        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake * fury * lotus
+        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake * fury * lotus * self.exotic_might()
     }
     fn haste(&self) -> f32 {
         let frenzy = match self.form_kind() {
@@ -1019,6 +1054,13 @@ impl World {
             self.events.push(Event::Warded);
             return;
         }
+        let mut raw = raw;
+        if self.cfg.gear.has(Exotic::WhiteHaori) && self.boss().is_some() {
+            raw *= 0.6;
+        }
+        if self.cfg.gear.has(Exotic::NineSeal) && self.specials_used >= 9 {
+            raw *= 1.3;
+        }
         let raw = match self.form_kind() {
             Some(SpecialKind::NineTails) => raw * FOX_DAMAGE_TAKEN,
             Some(SpecialKind::Hannya) => raw * HANNYA_DAMAGE_TAKEN,
@@ -1109,7 +1151,27 @@ impl World {
     }
 
     fn ascension_hp(&self) -> f32 {
-        1.0 + 0.4 * self.cfg.ascension as f32
+        let fingers = if self.cfg.gear.has(Exotic::SovereignFinger) { self.cfg.gear.fingers as f32 } else { 0.0 };
+        (1.0 + 0.4 * self.cfg.ascension as f32) * (1.0 + 0.04 * fingers)
+    }
+
+    /// Damage multiplier from Exotics (Nine Seals, the Hollow Mask, Fingers).
+    fn exotic_might(&self) -> f32 {
+        let g = &self.cfg.gear;
+        if g.exotics.is_empty() {
+            return 1.0;
+        }
+        let mut m = 1.0;
+        if g.has(Exotic::NineSeal) {
+            m *= 1.0 + 0.1 * self.specials_used.min(9) as f32;
+        }
+        if self.mask > 0.0 {
+            m *= 1.8;
+        }
+        if g.has(Exotic::SovereignFinger) {
+            m *= 1.0 + 0.06 * g.fingers as f32;
+        }
+        m
     }
 
     /// Enemy damage multiplier now (contact, bullets, hazards).
@@ -1468,6 +1530,7 @@ impl World {
         let p = self.player.pos;
         let mut hurt = 0.0f32;
         let mut fired: Vec<(Vec2, f32, u8, bool)> = Vec::new();
+        let mut own_domains: Vec<(Vec2, f32, f32)> = Vec::new();
         let g = &self.cfg.gear;
         let (tag_safe, bolt_safe, domain_safe) = (g.has_set(StageId::EmberLeaf), g.has_set(StageId::Rainward), g.has_set(StageId::Shatterline));
         for h in &mut self.hazards {
@@ -1502,8 +1565,10 @@ impl World {
                 HazardKind::Domain { damage } => {
                     h.tick -= DT;
                     if h.tick <= 0.0 {
-                        h.tick = 1.0;
-                        if inside && !domain_safe {
+                        h.tick = if h.friendly { 0.5 } else { 1.0 };
+                        if h.friendly {
+                            own_domains.push((h.pos, h.radius, damage));
+                        } else if inside && !domain_safe {
                             hurt = hurt.max(damage);
                         }
                     }
@@ -1513,6 +1578,14 @@ impl World {
         }
         self.hazards.retain(|h| h.warn > 0.0 || h.life > 0.0);
         let blast = 60.0 * self.enemy_hp_scale();
+        for (pos, radius, dmg) in own_domains {
+            self.query_circle(pos, radius);
+            for k in 0..self.scratch.len() {
+                let j = self.scratch[k] as usize;
+                let dir = self.enemies.pos[j] - pos;
+                self.hurt_enemy(j, dmg, dir);
+            }
+        }
         for (pos, radius, kind, friendly) in fired {
             self.events.push(Event::Hazard { pos, radius, kind });
             let blast = if friendly { blast * 2.0 } else { blast };
@@ -2720,7 +2793,11 @@ impl World {
         if self.enemies.kind[j].rank() >= Rank::Elite {
             amount *= 1.0 + self.bonus.boss_damage;
         }
-        let crit = self.bonus.crit_chance > 0.0 && self.rng.f32() < self.bonus.crit_chance;
+        let mut crit = self.bonus.crit_chance > 0.0 && self.rng.f32() < self.bonus.crit_chance;
+        if self.cfg.gear.has(Exotic::ThousandCounter) {
+            self.hit_count += 1;
+            crit |= self.hit_count % 7 == 0;
+        }
         if crit {
             amount *= 1.5 + self.bonus.crit_damage;
             let ecl = self.cfg.gear.unique(Unique::Eclipse);
@@ -2770,6 +2847,277 @@ impl World {
         self.loot.push(item);
     }
 
+    /// Damage scale for gear-driven attacks: item power, might, and a slow climb over the run.
+    fn gear_power(&self, item_power: f32) -> f32 {
+        item_power * self.might() * (1.0 + self.time / 450.0)
+    }
+
+    fn nova(&mut self, c: Vec2, r: f32, dmg: f32, style: u8) {
+        self.query_circle(c, r);
+        for k in 0..self.scratch.len() {
+            let j = self.scratch[k] as usize;
+            let dir = self.enemies.pos[j] - c;
+            self.hurt_enemy(j, dmg, dir);
+        }
+        self.events.push(Event::Burst { pos: c, radius: r, style });
+    }
+
+    /// Positions of drum / dragon summons (for the client too).
+    pub fn art_points(&self) -> Vec<Vec2> {
+        let Some(a) = &self.art else { return Vec::new() };
+        let p = self.player.pos;
+        match a.art {
+            ArsenalArt::RaijinDrums => {
+                let n = if a.mythic { 5 } else { 3 };
+                (0..n).map(|k| p + Vec2::from_angle(a.phase + k as f32 / n as f32 * std::f32::consts::TAU) * 74.0).collect()
+            }
+            ArsenalArt::DragonCoil => {
+                let n = if a.mythic { 16 } else { 10 };
+                (0..n).map(|k| p + Vec2::from_angle(a.phase * 1.3 - k as f32 * 0.24) * (112.0 + 10.0 * (a.phase * 2.0 + k as f32 * 0.5).sin())).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Exclusive Arsenal attacks.
+    fn update_art(&mut self) {
+        let Some(mut a) = self.art.take() else { return };
+        let p = self.player.pos;
+        let pw = self.gear_power(a.power);
+        let tau = std::f32::consts::TAU;
+        a.timer -= DT;
+        a.phase += DT * 1.6;
+        let fire = a.timer <= 0.0;
+        match a.art {
+            ArsenalArt::RaijinDrums => {
+                if fire {
+                    a.timer = 1.2;
+                    self.art = Some(a.clone());
+                    for d in self.art_points() {
+                        self.query_circle(d, 260.0);
+                        let best = self.scratch.iter().map(|j| *j as usize).min_by(|x, y| (self.enemies.pos[*x] - d).length_sq().partial_cmp(&(self.enemies.pos[*y] - d).length_sq()).unwrap());
+                        if let Some(j) = best {
+                            let to = self.enemies.pos[j];
+                            self.events.push(Event::Bolt { from: d, to });
+                            self.hurt_enemy(j, 30.0 * pw, to - d);
+                        }
+                    }
+                }
+            }
+            ArsenalArt::FoxProcession => {
+                if fire {
+                    a.timer = 6.0;
+                    let n = if a.mythic { 10 } else { 6 };
+                    let d = Vec2::from_angle(self.rng.range(0.0, tau));
+                    let side = Vec2::new(-d.y, d.x);
+                    for k in 0..n {
+                        let off = (k as f32 - (n as f32 - 1.0) / 2.0) * 30.0;
+                        a.foxes.push((p - d * (380.0 + (k % 2) as f32 * 40.0) + side * off, d * 430.0, 1.9));
+                    }
+                }
+                for f in &mut a.foxes {
+                    f.0 += f.1 * DT;
+                    f.2 -= DT;
+                }
+                a.foxes.retain(|f| f.2 > 0.0);
+                let foxes = a.foxes.clone();
+                for (fp, fv, _) in foxes {
+                    self.query_circle(fp, 18.0);
+                    for k in 0..self.scratch.len() {
+                        let j = self.scratch[k] as usize;
+                        self.hurt_enemy(j, 90.0 * pw * DT, fv);
+                    }
+                }
+            }
+            ArsenalArt::TenguFan => {
+                if fire {
+                    a.timer = if a.mythic { 2.0 } else { 3.0 };
+                    let dir = self.player.facing.normalize_or_zero();
+                    let r = 175.0 * self.area_mult();
+                    self.query_circle(p, r);
+                    for k in 0..self.scratch.len() {
+                        let j = self.scratch[k] as usize;
+                        let to = self.enemies.pos[j] - p;
+                        let n = to.normalize_or_zero();
+                        if n.x * dir.x + n.y * dir.y > 0.2 {
+                            self.hurt_enemy(j, 70.0 * pw, to * 4.0);
+                        }
+                    }
+                    self.events.push(Event::Slash { pos: p, dir, radius: r, full: false });
+                }
+            }
+            ArsenalArt::DragonCoil => {
+                self.art = Some(a.clone());
+                for c in self.art_points() {
+                    self.query_circle(c, 15.0);
+                    for k in 0..self.scratch.len() {
+                        let j = self.scratch[k] as usize;
+                        let dir = self.enemies.pos[j] - p;
+                        self.hurt_enemy(j, 75.0 * pw * DT, dir);
+                    }
+                }
+            }
+            ArsenalArt::Moonfall => {
+                if fire {
+                    a.timer = 7.0;
+                    let n = if a.mythic { 7 } else { 4 };
+                    for _ in 0..n {
+                        let e = &self.enemies;
+                        let q = if e.is_empty() { p + Vec2::from_angle(self.rng.range(0.0, tau)) * 120.0 } else { e.pos[(self.rng.next_u32() as usize) % e.len()] };
+                        let delay = 0.7 + self.rng.range(0.0, 0.5);
+                        self.blasts.push(Blast { pos: q, delay, max_delay: delay, radius: 70.0 * self.area_mult(), damage: 110.0 * pw, style: style::METEOR, burns: false });
+                    }
+                }
+            }
+            ArsenalArt::SkeletonHand => {
+                if fire {
+                    a.timer = if a.mythic { 4.0 } else { 6.0 };
+                    // The densest of a few sampled spots.
+                    let mut best = (p, 0usize);
+                    for _ in 0..12 {
+                        if self.enemies.is_empty() {
+                            break;
+                        }
+                        let q = self.enemies.pos[(self.rng.next_u32() as usize) % self.enemies.len()];
+                        self.query_circle(q, 90.0);
+                        if self.scratch.len() > best.1 {
+                            best = (q, self.scratch.len());
+                        }
+                    }
+                    self.blasts.push(Blast { pos: best.0, delay: 0.6, max_delay: 0.6, radius: 115.0 * self.area_mult(), damage: 220.0 * pw, style: style::QUAKE, burns: false });
+                }
+            }
+            ArsenalArt::YinYangBreaker => {
+                if a.orbs.is_empty() {
+                    for k in 0..2 {
+                        a.orbs.push((p + Vec2::new(if k == 0 { -60.0 } else { 60.0 }, 0.0), Vec2::from_angle(0.7 + k as f32 * 2.4) * 260.0));
+                    }
+                }
+                let box_r = 230.0;
+                for o in &mut a.orbs {
+                    o.0 += o.1 * DT;
+                    let rel = o.0 - p;
+                    if rel.x.abs() > box_r {
+                        o.1.x = -o.1.x.abs() * rel.x.signum();
+                    }
+                    if rel.y.abs() > box_r * 0.7 {
+                        o.1.y = -o.1.y.abs() * rel.y.signum();
+                    }
+                }
+                let orbs = a.orbs.clone();
+                for (op, ov) in orbs {
+                    self.query_circle(op, 26.0);
+                    for k in 0..self.scratch.len() {
+                        let j = self.scratch[k] as usize;
+                        self.hurt_enemy(j, 170.0 * pw * DT, ov);
+                    }
+                    self.shots.retain(|s| (s.pos - op).length_sq() > 32.0 * 32.0);
+                }
+            }
+            ArsenalArt::ShadowStar => {
+                if fire {
+                    a.timer = 4.0;
+                    for k in 0..8 {
+                        let to = p + Vec2::from_angle(k as f32 / 8.0 * tau + a.phase) * 280.0;
+                        self.hurt_along(p, to, 14.0, 90.0 * pw);
+                        self.events.push(Event::ShadowStep { from: p, to });
+                    }
+                }
+            }
+            ArsenalArt::GrassCutter => {
+                if fire {
+                    a.timer = 4.0;
+                    let r = 230.0 * self.area_mult();
+                    self.nova(p, r, 120.0 * pw, 1);
+                    self.shots.retain(|s| (s.pos - p).length_sq() > r * r);
+                    self.events.push(Event::Slash { pos: p, dir: self.player.facing, radius: r, full: true });
+                }
+            }
+        }
+        self.art = Some(a);
+    }
+
+    /// Exotic effects that tick.
+    fn update_exotics(&mut self) {
+        for (c, r, base) in std::mem::take(&mut self.pending_exo_blasts) {
+            let dmg = self.gear_power(1.0) * base;
+            self.nova(c, r, dmg, 2);
+        }
+        let g = &self.cfg.gear;
+        if g.exotics.is_empty() {
+            return;
+        }
+        let (lantern, seals, hunger, regalia) = (g.has(Exotic::LanternHeart), g.has(Exotic::NineSeal) && self.specials_used >= 9, g.has(Exotic::HungerOrgan), g.regalia());
+        let p = self.player.pos;
+        for t in self.exo_timers.iter_mut() {
+            *t -= DT;
+        }
+        if lantern && self.exo_timers[0] <= 0.0 {
+            self.exo_timers[0] = 10.0;
+            let d = 90.0 * self.gear_power(1.0);
+            self.nova(p, 170.0 * self.area_mult(), d, 2);
+        }
+        if seals && self.exo_timers[1] <= 0.0 {
+            self.exo_timers[1] = 2.0;
+            let d = 20.0 * self.gear_power(1.0);
+            self.nova(p, 90.0 * self.area_mult(), d, style::FOXFIRE);
+        }
+        if regalia && self.exo_timers[2] <= 0.0 {
+            self.exo_timers[2] = 30.0;
+            self.shots.clear();
+            self.events.push(Event::Burst { pos: p, radius: 300.0, style: style::PURIFY });
+        }
+        if self.mask > 0.0 {
+            self.mask -= DT;
+            if self.mask <= 0.0 {
+                self.player.hp = self.player.hp.min(self.player.max_hp * 0.5);
+            }
+        }
+        if hunger {
+            self.since_kill += DT;
+            if self.since_kill > 3.0 {
+                self.player.hp = (self.player.hp - 2.0 * DT).max(1.0);
+            }
+        }
+    }
+
+    /// Exotics that answer the special move.
+    fn on_special_exotics(&mut self) {
+        let g = &self.cfg.gear;
+        if g.exotics.is_empty() {
+            return;
+        }
+        let p = self.player.pos;
+        let (branch, mask, fingers) = (g.has(Exotic::JeweledBranch), g.has(Exotic::HollowMask), g.has(Exotic::SovereignFinger) && g.fingers >= 5);
+        if branch {
+            // Last Word.
+            self.shots.clear();
+            let d = 150.0 * self.gear_power(1.0);
+            self.nova(p, 320.0, d, style::PURIFY);
+        }
+        if mask {
+            self.mask = 6.0;
+        }
+        if fingers {
+            let d = 40.0 * self.gear_power(1.0);
+            self.hazards.push(Hazard { pos: p, radius: 220.0, warn: 0.0, life: 4.0, kind: HazardKind::Domain { damage: d }, tick: 0.0, friendly: true });
+            self.events.push(Event::DomainOpened { pos: p });
+        }
+    }
+
+    /// The Yata Mirror turns a bullet back on the nearest Otherworlder.
+    fn reflect_shot(&mut self) {
+        let p = self.player.pos;
+        let e = &self.enemies;
+        let best = (0..e.len()).filter(|&i| (e.pos[i] - p).length_sq() < 300.0 * 300.0).min_by(|&a, &b| (e.pos[a] - p).length_sq().partial_cmp(&(e.pos[b] - p).length_sq()).unwrap());
+        if let Some(j) = best {
+            let to = self.enemies.pos[j];
+            let d = 50.0 * self.gear_power(1.0);
+            self.events.push(Event::Bolt { from: p, to });
+            self.hurt_enemy(j, d, to - p);
+        }
+    }
+
     /// Unique effects and 4-piece set strikes. Reads the grid.
     fn update_gear(&mut self) {
         for (pos, dmg) in std::mem::take(&mut self.eclipses) {
@@ -2781,7 +3129,12 @@ impl World {
             }
             self.events.push(Event::Burst { pos, radius: 40.0, style: 1 });
         }
-        if self.cfg.stress.is_some() || (self.cfg.gear.uniques.is_empty() && self.cfg.gear.sets4.is_empty()) {
+        if self.cfg.stress.is_some() {
+            return;
+        }
+        self.update_art();
+        self.update_exotics();
+        if self.cfg.gear.uniques.is_empty() && self.cfg.gear.sets4.is_empty() {
             return;
         }
         for t in self.gear_timers.iter_mut() {
@@ -2861,6 +3214,30 @@ impl World {
                     self.drop_gear(pos, min);
                 }
                 self.gear_kills += 1;
+                self.since_kill = 0.0;
+                let g = &self.cfg.gear;
+                if g.has(Exotic::HungerOrgan) {
+                    self.player.hp = (self.player.hp + self.player.max_hp * 0.004).min(self.player.max_hp);
+                }
+                if g.has(Exotic::LanternHeart) && self.gear_kills % 50 == 0 {
+                    self.exo_timers[0] -= 1.0;
+                }
+                if g.has(Exotic::ThousandCounter) && self.gear_kills % 1000 == 0 {
+                    self.pending_exo_blasts.push((self.player.pos, 450.0, 400.0));
+                }
+                if kind.rank() == Rank::Final && self.cfg.difficulty == Difficulty::Nightmare {
+                    let chance = (0.0005 + 0.0001 * self.cfg.ascension as f32) * find;
+                    if self.rng.f32() < chance {
+                        let pool: Vec<Exotic> = gear::ALL_EXOTICS.iter().copied().filter(|e| e.home() == self.cfg.stage).collect();
+                        if !pool.is_empty() {
+                            let e = pool[(self.rng.next_u32() as usize) % pool.len()];
+                            let (st, d, a) = (self.cfg.stage, self.cfg.difficulty.index(), self.cfg.ascension);
+                            let it = gear::roll_exotic(&mut self.rng, e, gear::drop_ilvl(st, d, a));
+                            self.events.push(Event::GearDrop { pos, rarity: Rarity::Exotic });
+                            self.loot.push(it);
+                        }
+                    }
+                }
                 let vamp = self.cfg.gear.unique(Unique::Vampiric);
                 if vamp > 0.0 && self.gear_kills % 25 == 0 {
                     self.heal(self.player.max_hp * 0.01 * vamp);
@@ -3552,6 +3929,9 @@ impl World {
     }
 
     fn heal(&mut self, amount: f32) {
+        if self.cfg.gear.has(Exotic::ClosedHandVow) {
+            return;
+        }
         self.player.hp = (self.player.hp + amount * self.mods.healing).min(self.player.max_hp);
     }
 
@@ -3631,8 +4011,17 @@ impl World {
             }
             s.life > 0.0
         });
+        if self.cfg.gear.has(Exotic::JeweledBranch) && self.player.form <= 0.0 {
+            let g2 = 28.0 * 28.0;
+            let grazes = self.shots.iter().filter(|s| (s.pos - p).length_sq() < g2).count();
+            self.player.special = (self.player.special + grazes as f32 * 0.0006).min(1.0);
+        }
         if hit && self.cfg.gear.has_set(StageId::ShrineValley) && self.rng.f32() < 0.3 {
             hit = false;
+        }
+        if hit && self.cfg.gear.has(Exotic::YataMirror) && self.rng.f32() < 0.25 {
+            hit = false;
+            self.reflect_shot();
         }
         if hit && self.cfg.stress.is_none() && self.player.iframes <= 0.0 {
             if self.cfg.hero == HeroId::Ren {

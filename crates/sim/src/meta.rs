@@ -246,6 +246,8 @@ pub struct Profile {
     pub dust: u32,
     pub draw_pity: u32,
     pub next_item: u32,
+    /// Exotic Shards (100 forge an Exotic).
+    pub shards: u32,
     /// Settings (0..=1).
     pub music_volume: f32,
     pub sfx_volume: f32,
@@ -296,6 +298,7 @@ impl Default for Profile {
             dust: 0,
             draw_pity: 0,
             next_item: 1,
+            shards: 0,
             music_volume: 0.6,
             sfx_volume: 0.8,
         }
@@ -318,6 +321,7 @@ pub struct RunReport {
     pub gear: Vec<u32>,
     /// A new Ascension tier this clear opened.
     pub ascension_opened: Option<u32>,
+    pub shards: u32,
 }
 
 /// Bag size; drops beyond it are salvaged into Spirit Dust automatically.
@@ -409,11 +413,39 @@ impl Profile {
         if pos >= LOADOUT.len() || LOADOUT[pos] != it.slot {
             return false;
         }
+        let exo = it.exotic;
         if let Some((h, p)) = self.worn_by(id) {
             self.loadouts[h][p] = 0;
         }
+        // One Exotic at a time; the Three Sacred Treasures don't count toward the limit.
+        if let Some(e) = exo {
+            if !e.treasure() {
+                let hi = hero.index();
+                for p in 0..LOADOUT.len() {
+                    let other = self.loadouts[hi][p];
+                    if other != 0 && self.item(other).and_then(|x| x.exotic).is_some_and(|x| !x.treasure()) {
+                        self.loadouts[hi][p] = 0;
+                    }
+                }
+            }
+        }
         self.loadouts[hero.index()][pos] = id;
         true
+    }
+
+    /// Forges an Exotic from Shards (its world must be cleared on Nightmare).
+    pub fn can_forge(&self, e: gear::Exotic) -> bool {
+        self.shards >= gear::FORGE_COST && self.cleared[e.home().index()][2]
+    }
+
+    pub fn forge(&mut self, e: gear::Exotic, seed: u64) -> u32 {
+        if !self.can_forge(e) {
+            return 0;
+        }
+        self.shards -= gear::FORGE_COST;
+        let mut rng = Rng::new(seed);
+        let it = gear::roll_exotic(&mut rng, e, self.draw_ilvl());
+        self.add_item(it)
     }
 
     pub fn unequip(&mut self, hero: HeroId, pos: usize) {
@@ -431,7 +463,9 @@ impl Profile {
 
     pub fn loadout(&self, hero: HeroId) -> Loadout {
         let items: Vec<&Item> = self.loadouts[hero.index()].iter().filter_map(|id| if *id == 0 { None } else { self.item(*id) }).collect();
-        Loadout::from_items(&items)
+        let mut l = Loadout::from_items(&items);
+        l.fingers = (self.items.iter().filter(|i| i.exotic == Some(gear::Exotic::SovereignFinger)).count() as u32).min(gear::MAX_FINGERS);
+        l
     }
 
     /// Breaks an item into Spirit Dust (locked items are kept). Unequips it first.
@@ -504,7 +538,12 @@ impl Profile {
         for _ in 0..n {
             let r = gear::draw_rarity(&mut rng, self.draw_pity);
             self.draw_pity = if r >= Rarity::Legendary { 0 } else { self.draw_pity + 1 };
-            let it = gear::roll_item(&mut rng, None, r, ilvl, None);
+            let it = if r == Rarity::Exotic {
+                let e = gear::ALL_EXOTICS[(rng.next_u32() as usize) % gear::ALL_EXOTICS.len()];
+                gear::roll_exotic(&mut rng, e, ilvl)
+            } else {
+                gear::roll_item(&mut rng, None, r, ilvl, None)
+            };
             out.push(self.add_item(it));
         }
         out
@@ -563,6 +602,12 @@ impl Profile {
                 self.asc_open[si] = next;
                 report.ascension_opened = Some(next);
             }
+        }
+        // Exotic Shards for a Nightmare final boss.
+        if won && diff == Difficulty::Nightmare {
+            let n = 3 + w.cfg.ascension;
+            self.shards += n;
+            report.shards = n;
         }
         for it in &w.loot {
             let id = self.add_item(it.clone());
@@ -672,7 +717,7 @@ impl Profile {
         let relics: Vec<&str> = self.relics.iter().map(|r| r.key()).collect();
         s += &format!("relics={}\n", relics.join(","));
         let asc: Vec<String> = self.asc_open.iter().map(|a| a.to_string()).collect();
-        s += &format!("asc_open={}\nascension={}\ndust={}\ndraw_pity={}\nnext_item={}\n", asc.join(","), self.ascension, self.dust, self.draw_pity, self.next_item);
+        s += &format!("asc_open={}\nascension={}\ndust={}\ndraw_pity={}\nnext_item={}\nshards={}\n", asc.join(","), self.ascension, self.dust, self.draw_pity, self.next_item, self.shards);
         for it in &self.items {
             s += &format!("item={}\n", it.serialize());
         }
@@ -733,6 +778,7 @@ impl Profile {
                 }
                 "ascension" => p.ascension = v.parse().unwrap_or(0),
                 "dust" => p.dust = v.parse().unwrap_or(0),
+                "shards" => p.shards = v.parse().unwrap_or(0),
                 "draw_pity" => p.draw_pity = v.parse().unwrap_or(0),
                 "next_item" => p.next_item = v.parse().unwrap_or(1).max(1),
                 "item" => {
@@ -991,5 +1037,63 @@ mod gear_tests {
         let w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
         let extra = w.weapons.iter().find(|x| x.kind == WeaponKind::Familiars).unwrap();
         assert!(extra.extra && extra.awakened && extra.level == 8);
+    }
+}
+
+#[cfg(test)]
+mod exotic_tests {
+    use super::*;
+    use crate::gear::{roll_exotic, Exotic};
+    use crate::WorldConfig;
+
+    #[test]
+    fn one_exotic_at_a_time_but_treasures_stack_and_fingers_count() {
+        let mut p = Profile::default();
+        let mut rng = Rng::new(4);
+        let haori = p.add_item(roll_exotic(&mut rng, Exotic::WhiteHaori, 10));
+        let organ = p.add_item(roll_exotic(&mut rng, Exotic::HungerOrgan, 10));
+        let mirror = p.add_item(roll_exotic(&mut rng, Exotic::YataMirror, 10));
+        let jewel = p.add_item(roll_exotic(&mut rng, Exotic::Yasakani, 10));
+        let h = HeroId::Ren;
+        assert!(p.equip(h, p.slot_for(h, Slot::Top), haori));
+        assert!(p.equip(h, p.slot_for(h, Slot::Bottom), organ));
+        assert!(p.worn_by(haori).is_none(), "the second Exotic replaces the first");
+        assert!(p.equip(h, p.slot_for(h, Slot::Hat), mirror) && p.equip(h, p.slot_for(h, Slot::Charm), jewel));
+        assert!(p.worn_by(organ).is_some(), "Treasures don't push out the Exotic");
+        for _ in 0..3 {
+            p.add_item(roll_exotic(&mut rng, Exotic::SovereignFinger, 10));
+        }
+        let f = p.items.iter().find(|i| i.exotic == Some(Exotic::SovereignFinger)).unwrap().id;
+        p.equip(h, p.slot_for(h, Slot::Omamori), f);
+        assert_eq!(p.loadout(h).fingers, 3);
+        // Shards and forging.
+        p.shards = 100;
+        assert!(!p.can_forge(Exotic::Kusanagi), "needs Ember Leaf on Nightmare");
+        p.cleared[StageId::EmberLeaf.index()][2] = true;
+        assert!(p.forge(Exotic::Kusanagi, 1) != 0 && p.shards == 0);
+        let back = Profile::parse(&p.serialize());
+        assert_eq!(back.items.len(), p.items.len());
+        // Exotic arts and effects run without panicking.
+        let mut w = World::new(WorldConfig { gear: p.loadout(h), ..Default::default() });
+        for _ in 0..600 {
+            let i = w.bot_input();
+            w.step(i);
+        }
+    }
+
+    #[test]
+    fn legendary_arsenal_arts_run() {
+        let mut rng = Rng::new(8);
+        for art in gear::ALL_ARTS {
+            let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Legendary, 20, None);
+            it.art = Some(art);
+            let mut w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
+            w.time = 300.0;
+            for _ in 0..900 {
+                let i = w.bot_input();
+                w.step(i);
+            }
+            assert!(w.kills > 0, "{art:?} with the starting weapon still kills");
+        }
     }
 }
