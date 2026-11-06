@@ -81,7 +81,9 @@ pub fn title_rect() -> Rect {
 fn menu_card(r: Rect, label: &str, sub: &str, accent: Color, art: impl FnOnce(Rect, bool)) -> bool {
     let mouse: Vec2 = mouse_position().into();
     let hover = r.contains(mouse);
-    let lift = if hover { -6.0 } else { 0.0 };
+    let t = get_time() as f32;
+    // Idle float (each card on its own phase), and a lift on hover.
+    let lift = if hover { -10.0 } else { (t * 1.3 + r.x * 0.013).sin() * 3.0 };
     let r = Rect::new(r.x, r.y + lift, r.w, r.h);
     kit::rounded(r.x + 4.0, r.y + 8.0, r.w, r.h, 12.0, Color::new(0.0, 0.0, 0.0, 0.45));
     kit::rounded(r.x, r.y, r.w, r.h, 12.0, Color::new(0.05, 0.04, 0.09, 0.96));
@@ -94,6 +96,26 @@ fn menu_card(r: Rect, label: &str, sub: &str, accent: Color, art: impl FnOnce(Re
     }
     if !hover {
         draw_rectangle(art_r.x, art_r.y, art_r.w, art_r.h, Color::new(0.0, 0.0, 0.0, 0.22));
+    } else {
+        // A light sweep across the art.
+        let k = (t * 0.9).fract();
+        let bx = art_r.x - 60.0 + (art_r.w + 120.0) * k;
+        for (dw, a) in [(46.0, 0.05), (22.0, 0.08), (8.0, 0.12)] {
+            let x0 = (bx - dw / 2.0).max(art_r.x);
+            let x1 = (bx + dw / 2.0).min(art_r.x + art_r.w);
+            if x1 > x0 {
+                draw_rectangle(x0, art_r.y, x1 - x0, art_r.h, Color::new(1.0, 1.0, 1.0, a));
+            }
+        }
+        // Sparks rising along the frame.
+        for k in 0..14 {
+            let f = ((t * 0.6 + k as f32 * 0.37) % 1.0).abs();
+            let side = if k % 2 == 0 { r.x + 4.0 } else { r.x + r.w - 4.0 };
+            let x = side + ((k * 13) % 7) as f32 - 3.0 + (t * 3.0 + k as f32).sin() * 3.0;
+            let y = r.y + r.h - f * r.h;
+            draw_circle(x, y, 1.8, Color::new(accent.r, accent.g, accent.b, 0.9 * (1.0 - f)));
+        }
+        draw_rectangle(r.x, r.y + r.h - 3.0, r.w, 3.0, Color::new(accent.r, accent.g, accent.b, 0.8));
     }
     kit::text_fit_centered(label, r.x + r.w / 2.0, r.y + r.h - 38.0, r.w - 16.0, 24.0, if hover { WHITE } else { Color::new(0.92, 0.9, 0.98, 1.0) });
     kit::text_fit_centered(sub, r.x + r.w / 2.0, r.y + r.h - 16.0, r.w - 16.0, 13.0, Color::new(accent.r, accent.g, accent.b, 0.9));
@@ -117,18 +139,81 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         let y = h * (0.5 + k as f32 * 0.05);
         draw_rectangle(0.0, y, w, h * 0.05, Color::new(0.0, 0.0, 0.02, 0.05 * k as f32));
     }
-    for k in 0..28 {
-        let fx = (k as f32 * 0.618).fract();
-        let x = fx * w;
-        let y = h - ((t * (10.0 + k as f32 * 1.3) + k as f32 * 97.0) % (h + 60.0));
-        let c = crate::stage::accent(profile.stage);
-        draw_circle(x, y, 2.0 + (k % 3) as f32, Color::new(c.r, c.g, c.b, 0.22));
+    let acc = crate::stage::accent(profile.stage);
+    // A great moon with a slow halo.
+    let (mx, my) = (w * 0.62, 62.0);
+    for (r, a) in [(150.0, 0.03), (105.0, 0.05), (72.0, 0.08)] {
+        draw_circle(mx, my, r + (t * 0.8).sin() * 4.0, Color::new(1.0, 0.92, 0.8, a));
+    }
+    draw_circle(mx, my, 46.0, Color::new(1.0, 0.95, 0.85, 0.42));
+    // Crescent: a shadow bite and a few craters.
+    draw_circle(mx + 16.0, my - 8.0, 40.0, Color::new(0.06, 0.05, 0.12, 0.55));
+    draw_circle(mx - 18.0, my + 10.0, 6.0, Color::new(0.85, 0.8, 0.72, 0.35));
+    draw_circle(mx - 26.0, my - 12.0, 4.0, Color::new(0.85, 0.8, 0.72, 0.3));
+    // Light shafts from the moon.
+    for k in 0..5 {
+        let ang = 2.2 + k as f32 * 0.16 + (t * 0.15 + k as f32).sin() * 0.03;
+        let (dx, dy) = (ang.cos(), ang.sin());
+        let len = h * 1.4;
+        let side = vec2(-dy, dx) * (18.0 + k as f32 * 6.0);
+        let p0 = vec2(mx, my);
+        let p1 = p0 + vec2(dx, dy) * len;
+        draw_triangle(p0, p1 + side, p1 - side, Color::new(1.0, 0.95, 0.85, 0.018 + 0.01 * ((t * 0.7 + k as f32).sin() + 1.0)));
+    }
+    // Drifting mist bands.
+    for k in 0..4 {
+        let y = h * (0.55 + 0.11 * k as f32) + (t * 0.3 + k as f32).sin() * 10.0;
+        draw_rectangle(0.0, y, w, 40.0, Color::new(0.6, 0.6, 0.9, 0.02 + 0.01 * (t * 0.5 + k as f32 * 1.7).sin().abs()));
+    }
+    // Falling petals.
+    for k in 0..46 {
+        let seed = (k as f32 * 0.618).fract();
+        let speed = 22.0 + (k % 7) as f32 * 6.0;
+        let y = ((t * speed + k as f32 * 131.0) % (h + 40.0)) - 20.0;
+        let x = (seed * (w + 200.0) - 100.0 + y * 0.35 + (t * 0.9 + k as f32).sin() * 26.0) % (w + 100.0);
+        let rot = t * (1.5 + (k % 5) as f32 * 0.4) + k as f32;
+        let sz = 3.0 + (k % 3) as f32;
+        let a = vec2(rot.cos(), rot.sin()) * sz;
+        let b = vec2(-rot.sin(), rot.cos()) * sz * 0.55;
+        let c = vec2(x, y);
+        let col = Color::new(1.0, 0.62 + 0.1 * (k % 2) as f32, 0.78, 0.55);
+        draw_triangle(c + a, c + b, c - a, col);
+        draw_triangle(c + a, c - b, c - a, col);
+    }
+    // Fireflies in the world's accent colour.
+    for k in 0..22 {
+        let fx = (k as f32 * 0.381).fract();
+        let x = fx * w + (t * 0.4 + k as f32 * 2.0).sin() * 40.0;
+        let y = h - ((t * (8.0 + k as f32 * 1.1) + k as f32 * 97.0) % (h + 60.0));
+        let flick = 0.5 + 0.5 * (t * 3.0 + k as f32 * 1.7).sin();
+        draw_circle(x, y, 7.0, Color::new(acc.r, acc.g, acc.b, 0.06 * flick));
+        draw_circle(x, y, 2.2, Color::new(acc.r, acc.g, acc.b, 0.5 * flick + 0.2));
     }
 
-    // Logo.
+    // Logo: soft glow, gently bobbing letters and a light sweep.
     let tr = title_rect();
-    kit::text_shadow("KIZUNA SURVIVORS", tr.x + 6.0, tr.y + 46.0, 50.0, ACCENT);
-    kit::text("Heroes of many stories. Five worlds. One night each.", tr.x + 8.0, tr.y + 70.0, 15.0, DIM);
+    let title = "KIZUNA SURVIVORS";
+    let size = 50.0;
+    let sweep = ((t * 0.35) % 1.6) - 0.3;
+    let total = kit::measure(title, size as u16).width;
+    let mut x = tr.x + 6.0;
+    for (i, ch) in title.chars().enumerate() {
+        let st = ch.to_string();
+        let cw = kit::measure(&st, size as u16).width.max(if ch == ' ' { 14.0 } else { 0.0 });
+        let rel = (x - tr.x) / total;
+        let shine = (1.0 - ((rel - sweep).abs() * 8.0)).clamp(0.0, 1.0);
+        let bob = (t * 2.2 + i as f32 * 0.45).sin() * 2.0;
+        let y = tr.y + 46.0 + bob;
+        kit::text(&st, x + 3.0, y + 3.0, size, Color::new(0.0, 0.0, 0.0, 0.5));
+        for (o, a) in [(2.0, 0.12), (1.0, 0.18)] {
+            kit::text(&st, x - o, y, size, Color::new(ACCENT.r, ACCENT.g, ACCENT.b, a));
+            kit::text(&st, x + o, y, size, Color::new(ACCENT.r, ACCENT.g, ACCENT.b, a));
+        }
+        let c = Color::new(ACCENT.r + (1.0 - ACCENT.r) * shine, ACCENT.g + (1.0 - ACCENT.g) * shine, ACCENT.b + (1.0 - ACCENT.b) * shine, 1.0);
+        kit::text(&st, x, y, size, c);
+        x += cw;
+    }
+    kit::text("Heroes of many stories. Five worlds. One night each.", tr.x + 8.0, tr.y + 72.0, 15.0, DIM);
 
     // Currencies and small buttons, top-right.
     let sen = format!("{}", profile.sen);
@@ -153,9 +238,9 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     let n = 5.0;
     let gap = 18.0;
     let cw = ((w - 100.0 - gap * (n - 1.0)) / n).min(220.0);
-    let ch = 320.0;
+    let ch = (h - 220.0).clamp(320.0, 430.0);
     let x0 = (w - (n * cw + (n - 1.0) * gap)) / 2.0;
-    let cy = 138.0;
+    let cy = 140.0 + (h - 220.0 - ch) / 2.0 + 10.0;
     let card = |i: usize| Rect::new(x0 + i as f32 * (cw + gap), cy, cw, ch);
     let stage = profile.stage;
     let sdef = stage.def();
@@ -231,47 +316,6 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     }
     if is_key_pressed(KeyCode::Enter) {
         action = Some(MenuAction::Start);
-    }
-
-    // Campaign progress.
-    let py = cy + ch + 34.0;
-    centered("CAMPAIGN PROGRESS", py, 20.0, Color::new(1.0, 1.0, 1.0, 0.85));
-    let (lx, rx) = (x0 + 30.0, x0 + n * cw + (n - 1.0) * gap - 30.0);
-    let ty = py + 56.0;
-    let count = ALL_STAGES.len();
-    let at = |i: usize| lx + (rx - lx) * i as f32 / (count - 1) as f32;
-    draw_line(lx, ty, rx, ty, 4.0, Color::new(1.0, 1.0, 1.0, 0.18));
-    let reached = ALL_STAGES.iter().rposition(|s| profile.cleared[s.index()][0]).map_or(0, |i| i + 1).min(count - 1);
-    if reached > 0 {
-        draw_line(lx, ty, at(reached), ty, 4.0, ACCENT);
-    }
-    for (i, sid) in ALL_STAGES.iter().enumerate() {
-        let x = at(i);
-        let d = sid.def();
-        let open = profile.stage_open(*sid);
-        let cleared = profile.cleared[sid.index()];
-        let c = crate::stage::accent(*sid);
-        let label_c = if open { Color::new(1.0, 1.0, 1.0, 0.75) } else { Color::new(1.0, 1.0, 1.0, 0.3) };
-        kit::text_fit_centered(d.chapter.to_uppercase().as_str(), x, ty - 22.0, 150.0, 12.0, label_c);
-        if *sid == profile.stage {
-            draw_circle_lines(x, ty, 17.0 + (t * 4.0).sin().abs() * 2.0, 2.0, c);
-        }
-        draw_circle(x, ty, 12.0, if cleared[0] { c } else if open { Color::new(0.25, 0.22, 0.35, 1.0) } else { Color::new(0.12, 0.11, 0.16, 1.0) });
-        draw_circle_lines(x, ty, 12.0, 2.0, if open { Color::new(1.0, 1.0, 1.0, 0.7) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
-        // Hard / Nightmare clears as small diamonds.
-        for (k, done) in [cleared[1], cleared[2]].iter().enumerate() {
-            let dx = x - 7.0 + k as f32 * 14.0;
-            if *done {
-                draw_poly(dx, ty + 22.0, 4, 4.5, 45.0, if k == 0 { GOLD } else { Color::new(1.0, 0.35, 0.45, 1.0) });
-            } else {
-                draw_poly_lines(dx, ty + 22.0, 4, 4.5, 45.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.2));
-            }
-        }
-        kit::text_fit_centered(d.name, x, ty + 46.0, 170.0, 13.0, label_c);
-        let r = Rect::new(x - 40.0, ty - 30.0, 80.0, 60.0);
-        if open && r.contains(mouse_position().into()) && is_mouse_button_pressed(MouseButton::Left) {
-            action = Some(MenuAction::Start);
-        }
     }
 
     if dev && kit::button(Rect::new(20.0, h - 52.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
