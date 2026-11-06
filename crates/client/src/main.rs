@@ -5,6 +5,7 @@ use sim::{Input, RunState, Stress, World, WorldConfig};
 
 mod audio;
 mod chest_ui;
+mod kit;
 mod menu;
 mod render;
 mod save;
@@ -76,10 +77,13 @@ async fn main() {
 
     let mut collection = menu::CollectionState::default();
 
-    ui::prewarm_font();
-    next_frame().await;
+    kit::init();
     ui::loading();
     next_frame().await;
+    let t_boot = get_time();
+    ui::loading();
+    next_frame().await;
+    macroquad::logging::info!("fonts ready in {:.2}s", get_time() - t_boot);
     let t_audio = get_time();
     let mut audio = audio::Audio::load(profile.music_volume, profile.sfx_volume).await;
     macroquad::logging::info!("audio ready in {:.2}s", get_time() - t_audio);
@@ -194,14 +198,7 @@ async fn main() {
             let boss = world.boss().is_some_and(|b| b.2 == sim::content::EnemyKind::NightLord);
             audio.set_music(Some(if boss { synth::Track::Boss } else { synth::Track::Battle }));
         }
-        if over && (is_key_pressed(KeyCode::M) || is_key_pressed(KeyCode::Escape)) {
-            screen = Screen::Menu;
-            next_frame().await;
-            continue;
-        }
-        let restart = (is_key_pressed(KeyCode::R) && (screen == Screen::Paused || over))
-            || (over && is_mouse_button_pressed(MouseButton::Left))
-            || toggle_stress;
+        let restart = (is_key_pressed(KeyCode::R) && screen == Screen::Paused) || toggle_stress;
         if restart {
             world = new_world(stress, &profile);
             report = None;
@@ -298,7 +295,9 @@ async fn main() {
         render::draw_world(&world, &assets, &stage_art, &fx, &cam, now);
         set_default_camera();
         stage_art.draw_vignette();
-        ui::hud(&world, &assets);
+        if screen != Screen::Paused {
+            ui::hud(&world, &assets);
+        }
         ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
 
         if let (Some((text, left)), false) = (&fx.banner, world.paused()) {
@@ -316,7 +315,7 @@ async fn main() {
                 chest_anim = None;
             }
         } else if let Some(offer) = world.shrine_offer.clone() {
-            if let Some(choice) = ui::shrine(&offer) {
+            if let Some(choice) = ui::shrine(&offer, &assets) {
                 audio.play(if choice.is_some() { synth::Sfx::Chime } else { synth::Sfx::Click });
                 world.choose_shrine(choice);
             }
@@ -326,9 +325,48 @@ async fn main() {
                 world.choose(i);
             }
         } else if over {
-            ui::results(&world, world.state == RunState::Won, report.as_ref(), &fx.lines(), &assets);
+            match ui::results(&world, world.state == RunState::Won, report.as_ref(), &fx.lines(), &assets) {
+                Some(ui::ResultsAction::Retry) => {
+                    audio.play(synth::Sfx::Click);
+                    world = new_world(stress, &profile);
+                    report = None;
+                    jingle_played = false;
+                    fx.clear();
+                    screen = Screen::Playing;
+                }
+                Some(ui::ResultsAction::Menu) => {
+                    audio.play(synth::Sfx::Click);
+                    screen = Screen::Menu;
+                }
+                None => {}
+            }
         } else if screen == Screen::Paused {
-            ui::paused();
+            match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume) {
+                Some(ui::PauseAction::Resume) => {
+                    audio.play(synth::Sfx::Click);
+                    screen = Screen::Playing;
+                }
+                Some(ui::PauseAction::Restart) => {
+                    audio.play(synth::Sfx::Click);
+                    world = new_world(stress, &profile);
+                    report = None;
+                    jingle_played = false;
+                    fx.clear();
+                    screen = Screen::Playing;
+                }
+                Some(ui::PauseAction::GiveUp) => {
+                    audio.play(synth::Sfx::Click);
+                    world.state = RunState::Dead;
+                    screen = Screen::Playing;
+                }
+                Some(ui::PauseAction::Volume) => {
+                    audio.music_volume = profile.music_volume;
+                    audio.sfx_volume = profile.sfx_volume;
+                    audio.apply_music_volume();
+                    save::store(&profile);
+                }
+                None => {}
+            }
         }
 
         next_frame().await

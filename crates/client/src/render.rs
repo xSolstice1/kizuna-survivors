@@ -1,6 +1,8 @@
 //! Draws the world: ground, pickups, enemies, player, weapons, effects.
 
 use macroquad::prelude::*;
+
+use crate::kit;
 use sim::content::{EnemyKind, HeroId, PassiveKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES};
 use sim::world::{style, ProjKind};
 use sim::{Event, World};
@@ -110,6 +112,15 @@ impl Assets {
 
     pub fn hero(&self, h: HeroId) -> &[Texture2D; 3] {
         &self.heroes[ALL_HEROES.iter().position(|x| *x == h).unwrap()]
+    }
+
+    /// The hero's current look (transformed form if active), idle frame.
+    pub fn portrait(&self, h: HeroId, form: bool) -> &Texture2D {
+        match (h, form) {
+            (HeroId::Riku, true) => &self.riku_fox[0],
+            (HeroId::Shun, true) => &self.shun_hannya[0],
+            _ => &self.hero(h)[0],
+        }
     }
 
     pub fn icon_named(&self, key: &str) -> &Texture2D {
@@ -1055,8 +1066,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let s = cam.world_to_screen(n.pos);
         let alpha = 1.0 - (n.age / 0.6).powi(2);
         let txt = format!("{:.0}", n.amount);
-        draw_text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, 18.0, Color::new(0.0, 0.0, 0.0, alpha));
-        draw_text(&txt, s.x - 5.0, s.y, 18.0, Color::new(1.0, 1.0, 1.0, alpha));
+        kit::text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, 18.0, Color::new(0.0, 0.0, 0.0, alpha));
+        kit::text(&txt, s.x - 5.0, s.y, 18.0, Color::new(1.0, 1.0, 1.0, alpha));
     }
     if let Some(s) = world.shrine {
         let sp = cam.world_to_screen(vec2(s.x, s.y));
@@ -1076,10 +1087,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
     if let Some((line, left)) = &fx.bark {
         let s = cam.world_to_screen(vec2(p.x, p.y - 34.0));
-        let d = measure_text(line, None, 20, 1.0);
+        let d = kit::measure(line, 20);
         let alpha = left.min(0.4) / 0.4;
         draw_rectangle(s.x - d.width / 2.0 - 8.0, s.y - 20.0, d.width + 16.0, 28.0, Color::new(0.05, 0.03, 0.1, 0.8 * alpha));
-        draw_text(line, s.x - d.width / 2.0, s.y, 20.0, Color::new(1.0, 0.9, 0.95, alpha));
+        kit::text(line, s.x - d.width / 2.0, s.y, 20.0, Color::new(1.0, 0.9, 0.95, alpha));
     }
 }
 

@@ -1,6 +1,8 @@
 //! Out-of-run screens: main menu, character select and the Shrine Shop.
 
 use macroquad::prelude::*;
+
+use crate::kit;
 use sim::content::{awakened_name, awakened_text, complement, hero_def, EnemyKind, Upgrade, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
 use sim::meta::{collection_progress, enemy_found, unlock_text, PowerUp, Profile, ALL_POWERUPS};
 
@@ -12,34 +14,33 @@ const GOLD: Color = Color::new(1.0, 0.85, 0.4, 1.0);
 const DIM: Color = Color::new(1.0, 1.0, 1.0, 0.55);
 
 fn centered(text: &str, y: f32, size: f32, color: Color) {
-    let d = measure_text(text, None, size as u16, 1.0);
-    draw_text(text, (screen_width() - d.width) / 2.0, y, size, color);
+    let d = kit::measure(text, size as u16);
+    kit::text(text, (screen_width() - d.width) / 2.0, y, size, color);
 }
 
-/// Draws a button; returns true when clicked.
+/// Draws a button; returns true when clicked. Main actions get the vermilion style.
 fn button(r: Rect, label: &str, enabled: bool) -> bool {
-    let hover = enabled && r.contains(mouse_position().into());
-    let bg = if hover { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL };
-    draw_rectangle(r.x, r.y, r.w, r.h, bg);
-    let edge = if !enabled { Color::new(1.0, 1.0, 1.0, 0.12) } else if hover { ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.3) };
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, edge);
-    let size = 26.0;
-    let d = measure_text(label, None, size as u16, 1.0);
-    let c = if enabled { WHITE } else { Color::new(1.0, 1.0, 1.0, 0.3) };
-    draw_text(label, r.x + (r.w - d.width) / 2.0, r.y + r.h / 2.0 + 9.0, size, c);
-    hover && is_mouse_button_pressed(MouseButton::Left)
+    let primary = matches!(label, "Start" | "Begin the night" | "Buy");
+    kit::button(r, label, enabled, if primary { kit::Style::Primary } else { kit::Style::Secondary })
 }
 
 fn sen_badge(assets: &Assets, sen: u32) {
-    let txt = format!("{sen}");
-    let d = measure_text(&txt, None, 28, 1.0);
-    let x = screen_width() - d.width - 28.0;
-    draw_texture_ex(&assets.coin, x - 30.0, 18.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
-    draw_text(&txt, x, 38.0, 28.0, GOLD);
+    let v = format!("{sen}");
+    let w = kit::measure(&v, 20).width + kit::measure("SEN", 14).width + 28.0;
+    let x = screen_width() - w - 20.0;
+    kit::chip(x, 18.0, "SEN", &v, GOLD);
+    draw_texture_ex(&assets.coin, x - 26.0, 22.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
 }
 
 fn backdrop(time: f64) {
-    clear_background(Color::from_rgba(20, 16, 32, 255));
+    clear_background(Color::from_rgba(18, 14, 30, 255));
+    let (w, h) = (screen_width(), screen_height());
+    for k in 0..8 {
+        let y = h * (0.55 + k as f32 * 0.06);
+        draw_rectangle(0.0, y, w, h * 0.06, Color::new(0.35, 0.12, 0.25, 0.025 * k as f32));
+    }
+    draw_circle(w * 0.82, h * 0.2, 70.0, Color::new(1.0, 0.9, 0.7, 0.07));
+    draw_circle(w * 0.82, h * 0.2, 46.0, Color::new(1.0, 0.92, 0.75, 0.10));
     // Drifting lantern lights.
     for k in 0..24 {
         let fx = (k as f32 * 0.618).fract();
@@ -114,7 +115,9 @@ pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, t
 
     // Hero cards in a row.
     let n = ALL_HEROES.len();
-    let (cw, ch, gap) = (150.0, 190.0, 16.0);
+    let gap = 12.0;
+    let cw = ((w - 40.0 - gap * (n as f32 - 1.0)) / n as f32).min(150.0);
+    let ch = 190.0;
     let x0 = (w - (n as f32 * cw + (n as f32 - 1.0) * gap)) / 2.0;
     let y0 = 110.0;
     let mouse: Vec2 = mouse_position().into();
@@ -123,17 +126,16 @@ pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, t
         let open = profile.is_unlocked(*hero);
         let sel = *cursor == i;
         let hover = r.contains(mouse);
-        draw_rectangle(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL });
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if sel { ACCENT } else if hover { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL }, if sel { ACCENT } else if hover { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         let tint = if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) };
         let bob = if sel && open { ((time * 4.0).sin() * 2.0) as f32 } else { 0.0 };
         draw_texture_ex(&assets.hero(*hero)[0], r.x + (cw - 72.0) / 2.0, r.y + 18.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(72.0, 96.0)), ..Default::default() });
         let def = hero_def(*hero);
         let name = if open { def.name.split(' ').next().unwrap_or(def.name) } else { "???" };
-        let d = measure_text(name, None, 24, 1.0);
-        draw_text(name, r.x + (cw - d.width) / 2.0, r.y + 140.0, 24.0, if open { WHITE } else { DIM });
-        let d = measure_text(def.archetype, None, 16, 1.0);
-        draw_text(def.archetype, r.x + (cw - d.width) / 2.0, r.y + 162.0, 16.0, DIM);
+        let d = kit::measure(name, 24);
+        kit::text(name, r.x + (cw - d.width) / 2.0, r.y + 140.0, 24.0, if open { WHITE } else { DIM });
+        let d = kit::measure(def.archetype, 16);
+        kit::text(def.archetype, r.x + (cw - d.width) / 2.0, r.y + 162.0, 16.0, DIM);
         if hover && is_mouse_button_pressed(MouseButton::Left) {
             *cursor = i;
         }
@@ -150,28 +152,27 @@ pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, t
     let def = hero_def(hero);
     let open = profile.is_unlocked(hero);
     let (px, py, pw, ph) = ((w - 640.0) / 2.0, y0 + ch + 24.0, 640.0, 200.0);
-    draw_rectangle(px, py, pw, ph, PANEL);
-    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(1.0, 1.0, 1.0, 0.2));
+    kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
     if open {
-        draw_text(def.name, px + 20.0, py + 40.0, 32.0, WHITE);
-        draw_text(def.archetype, px + 20.0, py + 64.0, 18.0, ACCENT);
+        kit::text(def.name, px + 20.0, py + 40.0, 32.0, WHITE);
+        kit::text(def.archetype, px + 20.0, py + 64.0, 18.0, ACCENT);
         draw_texture_ex(assets.icon(Upgrade::Weapon(def.signature)), px + 20.0, py + 82.0, WHITE, DrawTextureParams { dest_size: Some(vec2(32.0, 32.0)), ..Default::default() });
-        draw_text(&format!("Starts with {}", Upgrade::Weapon(def.signature).name()), px + 62.0, py + 104.0, 22.0, WHITE);
-        draw_text(&format!("Innate: {}", def.innate_text), px + 20.0, py + 142.0, 22.0, Color::new(0.6, 1.0, 0.7, 1.0));
+        kit::text(&format!("Starts with {}", Upgrade::Weapon(def.signature).name()), px + 62.0, py + 104.0, 22.0, WHITE);
+        kit::text(&format!("Innate: {}", def.innate_text), px + 20.0, py + 142.0, 22.0, Color::new(0.6, 1.0, 0.7, 1.0));
         if !def.finished {
-            draw_text("Placeholder: own sprite and special move coming later.", px + 20.0, py + 178.0, 18.0, DIM);
+            kit::text("Placeholder: own sprite and special move coming later.", px + 20.0, py + 178.0, 18.0, DIM);
         } else {
             let what = match def.special {
                 sim::content::SpecialKind::Barrier => "a purifying ring that erases fireballs",
                 sim::content::SpecialKind::NineTails => "8s transformation: nine tails, aura, golden orb volleys",
                 sim::content::SpecialKind::Hannya => "8s berserk: beams, crescent waves, shadow steps, finale blast",
             };
-            draw_text(&format!("Special: {} ({what})", def.special_name), px + 20.0, py + 178.0, 18.0, Color::new(1.0, 0.8, 0.45, 1.0));
+            kit::text(&format!("Special: {} ({what})", def.special_name), px + 20.0, py + 178.0, 18.0, Color::new(1.0, 0.8, 0.45, 1.0));
         }
     } else {
-        draw_text("LOCKED", px + 20.0, py + 44.0, 32.0, DIM);
-        draw_text(&format!("{} ({})", def.archetype, "unlock to reveal"), px + 20.0, py + 72.0, 20.0, DIM);
-        draw_text(&format!("Unlock: {}", unlock_text(hero)), px + 20.0, py + 120.0, 24.0, GOLD);
+        kit::text("LOCKED", px + 20.0, py + 44.0, 32.0, DIM);
+        kit::text(&format!("{} ({})", def.archetype, "unlock to reveal"), px + 20.0, py + 72.0, 20.0, DIM);
+        kit::text(&format!("Unlock: {}", unlock_text(hero)), px + 20.0, py + 120.0, 24.0, GOLD);
     }
 
     let mut action = None;
@@ -226,11 +227,10 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
         let r = Rect::new(x0 + col as f32 * (cw + gap), y0 + row as f32 * (ch + gap), cw, ch);
         let sel = *cursor == i;
         let hover = r.contains(mouse);
-        draw_rectangle(r.x, r.y, r.w, r.h, if sel { Color::new(0.22, 0.16, 0.08, 0.97) } else { PANEL });
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if sel { GOLD } else if hover { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.22, 0.16, 0.08, 0.97) } else { PANEL }, if sel { GOLD } else if hover { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         draw_texture_ex(powerup_icon(assets, *p), r.x + (cw - 40.0) / 2.0, r.y + 12.0, WHITE, DrawTextureParams { dest_size: Some(vec2(40.0, 40.0)), ..Default::default() });
-        let d = measure_text(p.name(), None, 20, 1.0);
-        draw_text(p.name(), r.x + (cw - d.width) / 2.0, r.y + 74.0, 20.0, WHITE);
+        let d = kit::measure(p.name(), 20);
+        kit::text(p.name(), r.x + (cw - d.width) / 2.0, r.y + 74.0, 20.0, WHITE);
         // Rank pips.
         let max = p.max_rank() as f32;
         let pip = 12.0;
@@ -254,14 +254,13 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
     let p = ALL_POWERUPS[*cursor];
     let rows = n.div_ceil(cols) as f32;
     let (px, py, pw, ph) = ((w - 640.0) / 2.0, y0 + rows * (ch + gap) + 10.0, 640.0, 130.0);
-    draw_rectangle(px, py, pw, ph, PANEL);
-    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(1.0, 1.0, 1.0, 0.2));
-    draw_text(p.name(), px + 20.0, py + 38.0, 30.0, WHITE);
-    draw_text(&format!("Rank {}/{}", profile.rank(p), p.max_rank()), px + pw - 140.0, py + 38.0, 22.0, DIM);
-    draw_text(p.describe(), px + 20.0, py + 72.0, 22.0, Color::new(0.9, 0.9, 0.95, 1.0));
+    kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
+    kit::text(p.name(), px + 20.0, py + 38.0, 30.0, WHITE);
+    kit::text(&format!("Rank {}/{}", profile.rank(p), p.max_rank()), px + pw - 140.0, py + 38.0, 22.0, DIM);
+    kit::text(p.describe(), px + 20.0, py + 72.0, 22.0, Color::new(0.9, 0.9, 0.95, 1.0));
     let maxed = profile.rank(p) >= p.max_rank();
     let price = if maxed { "Fully blessed".to_string() } else { format!("Price: {} Sen", profile.cost(p)) };
-    draw_text(&price, px + 20.0, py + 108.0, 22.0, if maxed || profile.can_buy(p) { GOLD } else { Color::new(1.0, 0.5, 0.5, 1.0) });
+    kit::text(&price, px + 20.0, py + 108.0, 22.0, if maxed || profile.can_buy(p) { GOLD } else { Color::new(1.0, 0.5, 0.5, 1.0) });
 
     let mut action = None;
     let by = py + ph + 20.0;
@@ -452,11 +451,10 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         let r = Rect::new(tx0 + i as f32 * (tw + tg), 108.0, tw, th);
         let sel = st.tab == *t;
         let n = (0..t.len()).filter(|k| entry(profile, assets, *t, *k).found).count();
-        draw_rectangle(r.x, r.y, r.w, r.h, if sel { Color::new(0.24, 0.12, 0.22, 0.97) } else { PANEL });
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if sel { ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.24, 0.12, 0.22, 0.97) } else { PANEL }, if sel { ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         let label = format!("{} {}/{}", t.name(), n, t.len());
-        let d = measure_text(&label, None, 16, 1.0);
-        draw_text(&label, r.x + (tw - d.width) / 2.0, r.y + 24.0, 16.0, if sel { WHITE } else { DIM });
+        let d = kit::measure(&label, 16);
+        kit::text(&label, r.x + (tw - d.width) / 2.0, r.y + 24.0, 16.0, if sel { WHITE } else { DIM });
         if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
             st.tab = *t;
             st.cursor = 0;
@@ -479,8 +477,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         let e = entry(profile, assets, st.tab, i);
         let r = Rect::new(x0 + (i % cols) as f32 * (cw + gap), y0 + (i / cols) as f32 * (cw + gap), cw, cw);
         let sel = st.cursor == i;
-        draw_rectangle(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL });
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, if sel { ACCENT } else if r.contains(mouse) { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL }, if sel { ACCENT } else if r.contains(mouse) { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         // Fit the icon into the cell keeping its aspect ratio.
         let (iw, ih) = (e.icon.width(), e.icon.height());
         let k = (60.0 / iw.max(ih)).floor().max(1.0).min(4.0);
@@ -488,8 +485,8 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         let tint = if e.found { e.tint } else { Color::new(0.0, 0.0, 0.0, 0.85) };
         draw_texture_ex(e.icon, (r.x + (cw - dw) / 2.0).round(), (r.y + (cw - dh) / 2.0).round(), tint, DrawTextureParams { dest_size: Some(vec2(dw, dh)), ..Default::default() });
         if !e.found {
-            let d = measure_text("?", None, 30, 1.0);
-            draw_text("?", r.x + (cw - d.width) / 2.0, r.y + cw / 2.0 + 10.0, 30.0, DIM);
+            let d = kit::measure("?", 30);
+            kit::text("?", r.x + (cw - d.width) / 2.0, r.y + cw / 2.0 + 10.0, 30.0, DIM);
         }
         if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
             st.cursor = i;
@@ -507,22 +504,21 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     let rows = n.div_ceil(cols) as f32;
     let e = entry(profile, assets, st.tab, st.cursor);
     let (px, py, pw, ph) = ((w - 760.0) / 2.0, y0 + rows * (cw + gap) + 14.0, 760.0, 170.0);
-    draw_rectangle(px, py, pw, ph, PANEL);
-    draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(1.0, 1.0, 1.0, 0.2));
+    kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
     if e.found {
-        draw_text(&e.name, px + 20.0, py + 40.0, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
+        kit::text(&e.name, px + 20.0, py + 40.0, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
         let mut y = py + 72.0;
         for line in &e.lines {
             for l in wrap(line, pw - 40.0, 20) {
-                draw_text(&l, px + 20.0, y, 20.0, Color::new(0.9, 0.9, 0.95, 1.0));
+                kit::text(&l, px + 20.0, y, 20.0, Color::new(0.9, 0.9, 0.95, 1.0));
                 y += 24.0;
             }
         }
     } else {
-        draw_text("???", px + 20.0, py + 40.0, 30.0, DIM);
-        draw_text(hint(st.tab), px + 20.0, py + 74.0, 20.0, DIM);
+        kit::text("???", px + 20.0, py + 40.0, 30.0, DIM);
+        kit::text(hint(st.tab), px + 20.0, py + 74.0, 20.0, DIM);
         if st.tab == Tab::Heroes {
-            draw_text(&format!("Unlock: {}", unlock_text(ALL_HEROES[st.cursor])), px + 20.0, py + 104.0, 20.0, GOLD);
+            kit::text(&format!("Unlock: {}", unlock_text(ALL_HEROES[st.cursor])), px + 20.0, py + 104.0, 20.0, GOLD);
         }
     }
     button(Rect::new((w - 200.0) / 2.0, py + ph + 18.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape)
@@ -533,7 +529,7 @@ fn wrap(text: &str, width: f32, size: u16) -> Vec<String> {
     let mut line = String::new();
     for word in text.split_whitespace() {
         let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-        if measure_text(&candidate, None, size, 1.0).width > width && !line.is_empty() {
+        if kit::measure(&candidate, size).width > width && !line.is_empty() {
             out.push(std::mem::take(&mut line));
             line = word.to_string();
         } else {
@@ -558,7 +554,7 @@ pub enum SettingsAction {
 fn slider(label: &str, y: f32, v: &mut f32) -> bool {
     let w = screen_width();
     let x = w / 2.0 - 300.0;
-    draw_text(label, x, y + 30.0, 26.0, WHITE);
+    kit::text(label, x, y + 30.0, 26.0, WHITE);
     let before = *v;
     if button(Rect::new(x + 200.0, y, 48.0, 44.0), "-", true) {
         *v -= 0.1;
@@ -575,7 +571,7 @@ fn slider(label: &str, y: f32, v: &mut f32) -> bool {
     }
     *v = (*v * 20.0).round() / 20.0;
     *v = v.clamp(0.0, 1.0);
-    draw_text(&format!("{:.0}%", *v * 100.0), bx + bw + 72.0, y + 30.0, 24.0, DIM);
+    kit::text(&format!("{:.0}%", *v * 100.0), bx + bw + 72.0, y + 30.0, 24.0, DIM);
     (*v - before).abs() > 1e-6
 }
 

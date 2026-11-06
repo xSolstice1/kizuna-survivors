@@ -1,6 +1,8 @@
 //! Gacha-style chest opening: shake → burst (rarity reveal) → reward cards pop in one by one.
 
 use macroquad::prelude::*;
+
+use crate::kit;
 use sim::content::{awakened_name, chest_rarity, Upgrade};
 use sim::world::ChestItem;
 
@@ -48,8 +50,8 @@ fn ease_out_back(x: f32) -> f32 {
 }
 
 fn centered(text: &str, cx: f32, y: f32, size: f32, color: Color) {
-    let d = measure_text(text, None, size as u16, 1.0);
-    draw_text(text, cx - d.width / 2.0, y, size, color);
+    let d = kit::measure(text, size as u16);
+    kit::text(text, cx - d.width / 2.0, y, size, color);
 }
 
 impl ChestAnim {
@@ -224,9 +226,9 @@ impl ChestAnim {
             }
             draw_texture_ex(icon, cx - 32.0, y + 30.0, WHITE, DrawTextureParams { dest_size: Some(vec2(64.0, 64.0)), ..Default::default() });
             // Wrap long names onto two lines.
-            let size = if measure_text(&title, None, 22, 1.0).width > card_w - 16.0 { 18.0 } else { 22.0 };
+            let size = if kit::measure(&title, 22).width > card_w - 16.0 { 18.0 } else { 22.0 };
             let words: Vec<&str> = title.split_whitespace().collect();
-            if measure_text(&title, None, size as u16, 1.0).width > card_w - 16.0 && words.len() > 1 {
+            if kit::measure(&title, size as u16).width > card_w - 16.0 && words.len() > 1 {
                 let mid = words.len().div_ceil(2);
                 centered(&words[..mid].join(" "), cx, y + 124.0, size, WHITE);
                 centered(&words[mid..].join(" "), cx, y + 144.0, size, WHITE);
