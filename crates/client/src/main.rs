@@ -28,8 +28,6 @@ fn window_conf() -> Conf {
 
 #[derive(PartialEq)]
 enum Screen {
-    /// Click-to-start splash (browsers need a click before audio/focus).
-    Title,
     Menu,
     /// Map select (world + difficulty), before character select.
     Stages,
@@ -84,7 +82,7 @@ async fn main() {
     let assets = Assets::load();
     let stage_art = stage::StageArt::load();
     let mut fx = Fx::new();
-    let mut screen = Screen::Title;
+    let mut screen = Screen::Menu;
     let mut stress: Option<Stress> = None;
     let mut profile = save::load();
     let mut world = new_world(stress, &profile);
@@ -133,23 +131,22 @@ async fn main() {
         let now = get_time();
         audio.begin_frame();
         // UI click feedback on any out-of-run screen.
-        if !matches!(screen, Screen::Playing | Screen::Paused | Screen::Title) && (is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter)) {
+        if !matches!(screen, Screen::Playing | Screen::Paused) && (is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter)) {
             audio.play(synth::Sfx::Click);
         }
         match screen {
-            Screen::Title | Screen::Playing | Screen::Paused => {}
+            Screen::Playing | Screen::Paused => {}
             _ => audio.set_music(Some(synth::Track::Menu)),
         }
         // Hidden dev menu: the secret is watched on the main menu.
         if screen == Screen::Menu && !dev.open {
-            let (w, h) = (kit::screen_width(), kit::screen_height());
-            let title = Rect::new(w / 2.0 - 380.0, h * 0.24 - 64.0, 760.0, 76.0);
+            let title = menu::title_rect();
             let tapped = is_mouse_button_pressed(MouseButton::Left) && title.contains(kit::mouse_position().into());
             if dev.watch_secret(tapped, now) {
                 audio.play(synth::Sfx::Awaken);
             }
         }
-        let out_of_run = !matches!(screen, Screen::Title | Screen::Playing | Screen::Paused);
+        let out_of_run = !matches!(screen, Screen::Playing | Screen::Paused);
         if out_of_run && dev.open {
             menu::backdrop(now);
             if let Some(a) = dev.draw(false) {
@@ -163,13 +160,7 @@ async fn main() {
 
         // --- Out-of-run screens ---
         match screen {
-            Screen::Title => {
-                ui::title(now);
-                if is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) {
-                    screen = Screen::Menu;
-                }
-            }
-            Screen::Menu => match menu::main_menu(&profile, &assets, now, dev.unlocked) {
+            Screen::Menu => match menu::main_menu(&profile, &assets, &stage_art, now, dev.unlocked) {
                 Some(menu::MenuAction::Dev) => dev.open = true,
                 Some(menu::MenuAction::Start) => screen = Screen::Stages,
                 Some(menu::MenuAction::Shop) => screen = Screen::Shop,

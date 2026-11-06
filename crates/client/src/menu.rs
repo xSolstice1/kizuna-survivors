@@ -6,6 +6,7 @@ use crate::kit;
 use crate::kit::{mouse_position, screen_height, screen_width};
 use sim::content::{awakened_name, awakened_text, complement, hero_def, EnemyKind, Upgrade, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
 use sim::campaign::{Difficulty, StageId, ALL_DIFFICULTIES, ALL_RELICS, ALL_STAGES};
+use kit::SAKURA;
 use sim::meta::{collection_progress, enemy_found, unlock_text, PowerUp, Profile, ALL_POWERUPS};
 
 use crate::render::Assets;
@@ -71,37 +72,213 @@ pub enum MenuAction {
     Dev,
 }
 
-pub fn main_menu(profile: &Profile, assets: &Assets, time: f64, dev: bool) -> Option<MenuAction> {
-    backdrop(time);
-    let (w, h) = (screen_width(), screen_height());
-    centered("KIZUNA SURVIVORS", h * 0.24, 72.0, ACCENT);
-    centered("Heroes of many stories. Five worlds. Defeat what rules each night before dawn.", h * 0.24 + 32.0, 20.0, DIM);
-    sen_badge(assets, profile.sen);
+/// Where the logo sits (tapping it 7 times opens the dev menu).
+pub fn title_rect() -> Rect {
+    Rect::new(30.0, 26.0, 520.0, 66.0)
+}
 
-    let (bw, bh, step) = (320.0, 48.0, 56.0);
-    let x = (w - bw) / 2.0;
-    let y0 = h * 0.36;
+/// One illustrated card on the main menu.
+fn menu_card(r: Rect, label: &str, sub: &str, accent: Color, art: impl FnOnce(Rect, bool)) -> bool {
+    let mouse: Vec2 = mouse_position().into();
+    let hover = r.contains(mouse);
+    let lift = if hover { -6.0 } else { 0.0 };
+    let r = Rect::new(r.x, r.y + lift, r.w, r.h);
+    kit::rounded(r.x + 4.0, r.y + 8.0, r.w, r.h, 12.0, Color::new(0.0, 0.0, 0.0, 0.45));
+    kit::rounded(r.x, r.y, r.w, r.h, 12.0, Color::new(0.05, 0.04, 0.09, 0.96));
+    let art_r = Rect::new(r.x + 6.0, r.y + 6.0, r.w - 12.0, r.h - 76.0);
+    art(art_r, hover);
+    // Fade the art into the label band.
+    for k in 0..12 {
+        let t = k as f32 / 12.0;
+        draw_rectangle(art_r.x, art_r.y + art_r.h - 36.0 + t * 36.0, art_r.w, 3.0, Color::new(0.05, 0.04, 0.09, t * 0.9));
+    }
+    if !hover {
+        draw_rectangle(art_r.x, art_r.y, art_r.w, art_r.h, Color::new(0.0, 0.0, 0.0, 0.22));
+    }
+    kit::text_fit_centered(label, r.x + r.w / 2.0, r.y + r.h - 38.0, r.w - 16.0, 24.0, if hover { WHITE } else { Color::new(0.92, 0.9, 0.98, 1.0) });
+    kit::text_fit_centered(sub, r.x + r.w / 2.0, r.y + r.h - 16.0, r.w - 16.0, 13.0, Color::new(accent.r, accent.g, accent.b, 0.9));
+    kit::rounded_outline(r.x, r.y, r.w, r.h, 12.0, if hover { 2.5 } else { 1.5 }, if hover { accent } else { Color::new(1.0, 1.0, 1.0, 0.16) });
+    hover && is_mouse_button_pressed(MouseButton::Left)
+}
+
+fn tex_in(t: &Texture2D, cx: f32, bottom: f32, h: f32, tint: Color) {
+    let s = h / t.height();
+    draw_texture_ex(t, (cx - t.width() * s / 2.0).round(), (bottom - h).round(), tint, DrawTextureParams { dest_size: Some(vec2(t.width() * s, h)), ..Default::default() });
+}
+
+pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageArt, time: f64, dev: bool) -> Option<MenuAction> {
+    let (w, h) = (screen_width(), screen_height());
+    let t = time as f32;
+    // Backdrop: the chosen world's ground, slowly drifting, darkened.
+    let drift = (t * 6.0) % 96.0;
+    art.draw_patch(profile.stage, -drift, -drift * 0.5, w + 96.0, h + 96.0, 3.0);
+    draw_rectangle(0.0, 0.0, w, h, Color::new(0.03, 0.02, 0.07, 0.72));
+    for k in 0..10 {
+        let y = h * (0.5 + k as f32 * 0.05);
+        draw_rectangle(0.0, y, w, h * 0.05, Color::new(0.0, 0.0, 0.02, 0.05 * k as f32));
+    }
+    for k in 0..28 {
+        let fx = (k as f32 * 0.618).fract();
+        let x = fx * w;
+        let y = h - ((t * (10.0 + k as f32 * 1.3) + k as f32 * 97.0) % (h + 60.0));
+        let c = crate::stage::accent(profile.stage);
+        draw_circle(x, y, 2.0 + (k % 3) as f32, Color::new(c.r, c.g, c.b, 0.22));
+    }
+
+    // Logo.
+    let tr = title_rect();
+    kit::text_shadow("KIZUNA SURVIVORS", tr.x + 6.0, tr.y + 46.0, 50.0, ACCENT);
+    kit::text("Heroes of many stories. Five worlds. One night each.", tr.x + 8.0, tr.y + 70.0, 15.0, DIM);
+
+    // Currencies and small buttons, top-right.
+    let sen = format!("{}", profile.sen);
+    let sw = kit::measure(&sen, 20).width + kit::measure("SEN", 14).width + 28.0;
+    kit::chip(w - 24.0 - sw, 26.0, "SEN", &sen, GOLD);
+    draw_texture_ex(&assets.coin, w - 50.0 - sw, 30.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
+    let dust = format!("{}", profile.dust);
+    let dw = kit::measure(&dust, 20).width + kit::measure("DUST", 14).width + 28.0;
+    kit::chip(w - 70.0 - sw - dw, 26.0, "DUST", &dust, kit::SKY);
     let mut action = None;
-    let items: [(&str, MenuAction, KeyCode); 7] = [
-        ("Start", MenuAction::Start, KeyCode::Enter),
-        ("Armory", MenuAction::Armory, KeyCode::F13),
-        ("Shrine Draw", MenuAction::Draw, KeyCode::F14),
-        ("Shrine Shop", MenuAction::Shop, KeyCode::F15),
-        ("Collections", MenuAction::Collection, KeyCode::F16),
-        ("Stats", MenuAction::Stats, KeyCode::F17),
-        ("Settings", MenuAction::Settings, KeyCode::F18),
-    ];
-    for (i, (label, act, key)) in items.into_iter().enumerate() {
-        if button(Rect::new(x, y0 + i as f32 * step, bw, bh), label, true) || is_key_pressed(key) {
-            action = Some(act);
+    let (bw, bh) = (118.0, 34.0);
+    let bx = w - 24.0 - 3.0 * bw - 16.0;
+    if kit::button(Rect::new(bx, 68.0, bw, bh), "Stats", true, kit::Style::Secondary) {
+        action = Some(MenuAction::Stats);
+    }
+    if kit::button(Rect::new(bx + bw + 8.0, 68.0, bw, bh), "Settings", true, kit::Style::Secondary) {
+        action = Some(MenuAction::Settings);
+    }
+    fullscreen_button(Rect::new(bx + 2.0 * (bw + 8.0), 68.0, bw, bh));
+
+    // The cards.
+    let n = 5.0;
+    let gap = 18.0;
+    let cw = ((w - 100.0 - gap * (n - 1.0)) / n).min(220.0);
+    let ch = 320.0;
+    let x0 = (w - (n * cw + (n - 1.0) * gap)) / 2.0;
+    let cy = 138.0;
+    let card = |i: usize| Rect::new(x0 + i as f32 * (cw + gap), cy, cw, ch);
+    let stage = profile.stage;
+    let sdef = stage.def();
+    if menu_card(card(0), "START", &format!("{}  ·  {}", sdef.chapter, sdef.name), crate::stage::accent(stage), |r, hover| {
+        art.draw_patch(stage, r.x, r.y, r.w, r.h, 2.0);
+        let c = crate::stage::accent(stage);
+        draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.45, r.w * 0.42, Color::new(c.r, c.g, c.b, if hover { 0.22 } else { 0.14 }));
+        let bob = (t * 2.0).sin() * 3.0;
+        tex_in(assets.enemy_tex(sdef.final_boss), r.x + r.w / 2.0, r.y + r.h * 0.78 + bob, r.h * 0.62, WHITE);
+        tex_in(&assets.hero(profile.selected)[0], r.x + r.w * 0.24, r.y + r.h - 8.0, 64.0, WHITE);
+    }) {
+        action = Some(MenuAction::Start);
+    }
+    if menu_card(card(1), "ARMORY", &format!("{} items", profile.items.len()), kit::SKY, |r, _| {
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.08, 0.1, 0.18, 1.0));
+        draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.48, r.w * 0.36, Color::new(0.35, 0.6, 1.0, 0.12));
+        tex_in(&assets.hero(profile.selected)[0], r.x + r.w / 2.0, r.y + r.h * 0.8, r.h * 0.5, WHITE);
+        let slots = [sim::gear::Slot::Hat, sim::gear::Slot::Ring, sim::gear::Slot::Charm, sim::gear::Slot::Shoes, sim::gear::Slot::Arsenal, sim::gear::Slot::Omamori];
+        for (k, sl) in slots.iter().enumerate() {
+            let a = t * 0.4 + k as f32 / 6.0 * std::f32::consts::TAU;
+            let (ix, iy) = (r.x + r.w / 2.0 + a.cos() * r.w * 0.38 - 14.0, r.y + r.h * 0.45 + a.sin() * r.h * 0.3 - 14.0);
+            kit::rounded(ix - 3.0, iy - 3.0, 34.0, 34.0, 7.0, Color::new(0.05, 0.05, 0.12, 0.85));
+            draw_texture_ex(assets.gear_icon(*sl), ix, iy, WHITE, DrawTextureParams { dest_size: Some(vec2(28.0, 28.0)), ..Default::default() });
+        }
+    }) {
+        action = Some(MenuAction::Armory);
+    }
+    if menu_card(card(2), "SHRINE DRAW", "Test your fortune", GOLD, |r, hover| {
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.16, 0.06, 0.1, 1.0));
+        let glow = if hover { 0.3 } else { 0.18 };
+        draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.5, r.w * 0.45, Color::new(1.0, 0.75, 0.35, glow));
+        tex_in(&assets.shrine, r.x + r.w / 2.0, r.y + r.h * 0.82, r.h * 0.55, WHITE);
+        for k in 0..10 {
+            let a = t * 0.8 + k as f32 * 0.628;
+            let rr = r.w * (0.25 + 0.2 * ((k * 37 % 10) as f32 / 10.0));
+            let (sx, sy) = (r.x + r.w / 2.0 + a.cos() * rr, r.y + r.h * 0.42 + a.sin() * rr * 0.8);
+            draw_poly(sx, sy, 4, 2.5 + (t * 3.0 + k as f32).sin().abs() * 2.0, 45.0, Color::new(1.0, 0.9, 0.6, 0.8));
+        }
+        draw_texture_ex(assets.gear_icon_named("draw"), r.x + r.w - 52.0, r.y + 10.0, WHITE, DrawTextureParams { dest_size: Some(vec2(40.0, 40.0)), ..Default::default() });
+    }) {
+        action = Some(MenuAction::Draw);
+    }
+    if menu_card(card(3), "SHRINE SHOP", "Permanent blessings", kit::JADE, |r, _| {
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.06, 0.13, 0.1, 1.0));
+        draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.45, r.w * 0.4, Color::new(0.4, 1.0, 0.6, 0.1));
+        for (k, name) in ["might", "guard", "haste", "vitality", "magnetism", "recovery"].iter().enumerate() {
+            let (c, row) = (k % 2, k / 2);
+            let ix = r.x + r.w * (0.3 + 0.4 * c as f32) - 22.0;
+            let iy = r.y + 24.0 + row as f32 * (r.h * 0.25);
+            kit::rounded(ix - 4.0, iy - 4.0, 52.0, 52.0, 9.0, Color::new(0.02, 0.06, 0.04, 0.8));
+            draw_texture_ex(assets.icon_named(name), ix, iy, WHITE, DrawTextureParams { dest_size: Some(vec2(44.0, 44.0)), ..Default::default() });
+        }
+        for k in 0..3 {
+            let bob = (t * 3.0 + k as f32).sin() * 3.0;
+            draw_texture_ex(&assets.coin, r.x + r.w * 0.3 + k as f32 * 26.0, r.y + r.h - 70.0 + bob, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
+        }
+    }) {
+        action = Some(MenuAction::Shop);
+    }
+    let found = profile.enemy_kills.iter().filter(|k| **k > 0).count();
+    if menu_card(card(4), "COLLECTIONS", &format!("{found} Otherworlders met"), SAKURA, |r, _| {
+        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.12, 0.06, 0.16, 1.0));
+        let show = [EnemyKind::Wisp, EnemyKind::Kodama, EnemyKind::LeafShinobi, EnemyKind::LostSoul, EnemyKind::RainGhoul, EnemyKind::CursedSpawn, EnemyKind::Chochin, EnemyKind::LanternFairy, EnemyKind::CurseEye];
+        for (k, e) in show.iter().enumerate() {
+            let (c, row) = (k % 3, k / 3);
+            let cx = r.x + r.w * (0.2 + 0.3 * c as f32);
+            let by = r.y + 70.0 + row as f32 * (r.h * 0.26) + (t * 2.0 + k as f32).sin() * 2.0;
+            let tint = if enemy_found(profile, *e) { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.8) };
+            tex_in(assets.enemy_tex(*e), cx, by, 46.0, tint);
+        }
+    }) {
+        action = Some(MenuAction::Collection);
+    }
+    if is_key_pressed(KeyCode::Enter) {
+        action = Some(MenuAction::Start);
+    }
+
+    // Campaign progress.
+    let py = cy + ch + 34.0;
+    centered("CAMPAIGN PROGRESS", py, 20.0, Color::new(1.0, 1.0, 1.0, 0.85));
+    let (lx, rx) = (x0 + 30.0, x0 + n * cw + (n - 1.0) * gap - 30.0);
+    let ty = py + 56.0;
+    let count = ALL_STAGES.len();
+    let at = |i: usize| lx + (rx - lx) * i as f32 / (count - 1) as f32;
+    draw_line(lx, ty, rx, ty, 4.0, Color::new(1.0, 1.0, 1.0, 0.18));
+    let reached = ALL_STAGES.iter().rposition(|s| profile.cleared[s.index()][0]).map_or(0, |i| i + 1).min(count - 1);
+    if reached > 0 {
+        draw_line(lx, ty, at(reached), ty, 4.0, ACCENT);
+    }
+    for (i, sid) in ALL_STAGES.iter().enumerate() {
+        let x = at(i);
+        let d = sid.def();
+        let open = profile.stage_open(*sid);
+        let cleared = profile.cleared[sid.index()];
+        let c = crate::stage::accent(*sid);
+        let label_c = if open { Color::new(1.0, 1.0, 1.0, 0.75) } else { Color::new(1.0, 1.0, 1.0, 0.3) };
+        kit::text_fit_centered(d.chapter.to_uppercase().as_str(), x, ty - 22.0, 150.0, 12.0, label_c);
+        if *sid == profile.stage {
+            draw_circle_lines(x, ty, 17.0 + (t * 4.0).sin().abs() * 2.0, 2.0, c);
+        }
+        draw_circle(x, ty, 12.0, if cleared[0] { c } else if open { Color::new(0.25, 0.22, 0.35, 1.0) } else { Color::new(0.12, 0.11, 0.16, 1.0) });
+        draw_circle_lines(x, ty, 12.0, 2.0, if open { Color::new(1.0, 1.0, 1.0, 0.7) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        // Hard / Nightmare clears as small diamonds.
+        for (k, done) in [cleared[1], cleared[2]].iter().enumerate() {
+            let dx = x - 7.0 + k as f32 * 14.0;
+            if *done {
+                draw_poly(dx, ty + 22.0, 4, 4.5, 45.0, if k == 0 { GOLD } else { Color::new(1.0, 0.35, 0.45, 1.0) });
+            } else {
+                draw_poly_lines(dx, ty + 22.0, 4, 4.5, 45.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.2));
+            }
+        }
+        kit::text_fit_centered(d.name, x, ty + 46.0, 170.0, 13.0, label_c);
+        let r = Rect::new(x - 40.0, ty - 30.0, 80.0, 60.0);
+        if open && r.contains(mouse_position().into()) && is_mouse_button_pressed(MouseButton::Left) {
+            action = Some(MenuAction::Start);
         }
     }
-    fullscreen_button(Rect::new(20.0, 18.0, 230.0, 40.0));
-    if dev && kit::button(Rect::new(20.0, h - 58.0, 120.0, 40.0), "Dev", true, kit::Style::Danger) {
+
+    if dev && kit::button(Rect::new(20.0, h - 52.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
         action = Some(MenuAction::Dev);
     }
-
-    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", y0 + 7.0 * step + 16.0, 16.0, Color::new(1.0, 1.0, 1.0, 0.55));
+    let hint = "WASD / arrows to move   ·   Space: special   ·   Esc to pause";
+    kit::text_fit_centered(hint, w / 2.0, h - 14.0, w - 300.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
     action
 }
 

@@ -334,19 +334,6 @@ pub fn loading() {
     centered("Tuning the shamisen...", screen_height() * 0.5, 26.0, DIM);
 }
 
-pub fn title(time: f64) {
-    clear_background(Color::from_rgba(20, 16, 32, 255));
-    let (w, h) = (screen_width(), screen_height());
-    // A big soft moon behind the logo.
-    let t = time as f32;
-    draw_circle(w / 2.0, h * 0.36, 150.0, Color::new(1.0, 0.85, 0.6, 0.06));
-    draw_circle(w / 2.0, h * 0.36, 110.0, Color::new(1.0, 0.85, 0.6, 0.07));
-    centered("KIZUNA SURVIVORS", h * 0.40, 80.0, SAKURA);
-    centered("Heroes of many stories. One night. Defeat the Night Lord before dawn.", h * 0.40 + 36.0, 18.0, DIM);
-    let a = 0.55 + 0.45 * (t * 3.0).sin();
-    centered("Click or press Enter", h * 0.70, 26.0, Color::new(1.0, 1.0, 1.0, a));
-}
-
 // ───────────────────────── Pause menu ─────────────────────────
 
 pub enum PauseAction {
