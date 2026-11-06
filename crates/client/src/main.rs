@@ -211,7 +211,7 @@ async fn main() {
         }
         // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest,
         // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots), F7 shrine underfoot,
-        // F8 skip to the Night Lord, F9 fill the special meter.
+        // F8 skip to the Night Lord, F9 fill the special meter, F10 Awaken every owned weapon.
         if is_key_pressed(KeyCode::F2) {
             world.time = world.time.max(sim::content::MIDBOSS_AT - 3.0);
         }
@@ -229,6 +229,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::F7) {
             world.shrine = Some(world.player.pos);
+        }
+        if is_key_pressed(KeyCode::F10) {
+            world.debug_awaken_all();
         }
         if is_key_pressed(KeyCode::F9) {
             world.player.special = 1.0;

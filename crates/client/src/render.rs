@@ -2,7 +2,7 @@
 
 use macroquad::prelude::*;
 use sim::content::{EnemyKind, HeroId, PassiveKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES};
-use sim::world::ProjKind;
+use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
 use crate::sprites;
@@ -196,8 +196,10 @@ pub struct Fx {
     impacts: Vec<(Vec2, f32, f32)>,
     /// Bursts: (pos, radius, age, style). Style: 0 foxfire blue, 1 gold blast, 2 crimson, 3 finale.
     bursts: Vec<(Vec2, f32, f32, u8)>,
-    /// Rending Beams: (from, to, age).
-    beams: Vec<(Vec2, Vec2, f32)>,
+    /// Beams: (from, to, age, style).
+    beams: Vec<(Vec2, Vec2, f32, u8)>,
+    /// Signature flourishes under the player: age.
+    sig_rings: Vec<f32>,
     /// Iai Flash cuts: (from, to, age).
     iai: Vec<(Vec2, Vec2, f32)>,
     /// Lantern pulse rings: (pos, radius, age).
@@ -238,6 +240,7 @@ impl Fx {
         self.bursts.clear();
         self.smokes.clear();
         self.beams.clear();
+        self.sig_rings.clear();
         self.steps.clear();
         self.iai.clear();
         self.pulses.clear();
@@ -358,14 +361,23 @@ impl Fx {
                     self.impacts.push((vec2(pos.x, pos.y), radius, 0.0));
                     self.shake = self.shake.max(0.04);
                 }
-                Event::Burst { pos, radius } => self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, 0)),
+                Event::Burst { pos, radius, style } => {
+                    self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, style));
+                    match style {
+                        style::METEOR => self.shake = self.shake.max(0.3),
+                        style::QUAKE => self.shake = self.shake.max(0.2),
+                        style::SKYBOLT => self.shake = self.shake.max(0.06),
+                        _ => {}
+                    }
+                }
+                Event::Signature(_) => self.sig_rings.push(0.0),
                 Event::HannyaAwakened { pos } => {
                     self.bursts.push((vec2(pos.x, pos.y), sim::content::HANNYA_ONSET_RADIUS, 0.0, 2));
                     self.announce("HANNYA UNBOUND".into());
                     self.say(self.lines().special);
                     self.shake = self.shake.max(0.5);
                 }
-                Event::Beam { from, to } => self.beams.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
+                Event::Beam { from, to, style } => self.beams.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0, style)),
                 Event::Iai { from, to } => {
                     self.iai.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0));
                     self.shake = self.shake.max(0.05);
@@ -426,7 +438,9 @@ impl Fx {
         self.bursts.iter_mut().for_each(|b| b.2 += dt);
         self.bursts.retain(|b| b.2 < burst_life(b.3));
         self.beams.iter_mut().for_each(|b| b.2 += dt);
-        self.beams.retain(|b| b.2 < 0.3);
+        self.beams.retain(|b| b.2 < if b.3 == style::MOON { 0.45 } else { 0.3 });
+        self.sig_rings.iter_mut().for_each(|r| *r += dt);
+        self.sig_rings.retain(|r| *r < 0.5);
         self.iai.iter_mut().for_each(|b| b.2 += dt);
         self.iai.retain(|b| b.2 < 0.25);
         self.pulses.iter_mut().for_each(|b| b.2 += dt);
@@ -669,6 +683,20 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             }
         }
     }
+    let awakened = world.weapons.iter().filter(|w| w.awakened).count();
+    if awakened > 0 {
+        // A golden rune circle that grows richer with every Awakening.
+        let r = 16.0 + 3.0 * awakened as f32;
+        draw_circle_lines(p.x, p.y + 3.0, r, 1.5, Color::new(1.0, 0.85, 0.4, 0.55));
+        for k in 0..(6 + 2 * awakened) {
+            let a = t * 1.2 + k as f32 * std::f32::consts::TAU / (6 + 2 * awakened) as f32;
+            draw_rectangle(p.x + a.cos() * r - 1.0, p.y + 3.0 + a.sin() * r * 0.45 - 1.0, 2.0, 2.0, Color::new(1.0, 0.9, 0.5, 0.9));
+        }
+    }
+    for age in &fx.sig_rings {
+        let k = age / 0.5;
+        draw_circle_lines(p.x, p.y + 3.0, 20.0 + 60.0 * k, 3.0 * (1.0 - k) + 1.0, Color::new(1.0, 0.9, 0.5, 0.8 * (1.0 - k)));
+    }
     draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
     let tex = if fox {
         &a.riku_fox[frame]
@@ -849,6 +877,30 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     draw_line(q.x + a0.cos() * r, q.y + a0.sin() * r, q.x + a1.cos() * r, q.y + a1.sin() * r, thick * 0.5, inner);
                 }
             }
+            ProjKind::Seal => {
+                let back = v.normalize_or_zero() * -1.0;
+                for k in 1..5 {
+                    let c = q + back * (k as f32 * 4.0);
+                    draw_circle(c.x, c.y, 4.0 - k as f32 * 0.7, Color::new(1.0, 0.8, 0.3, 0.5 - k as f32 * 0.1));
+                }
+                draw_circle(q.x, q.y, 8.0, Color::new(1.0, 0.85, 0.35, 0.25));
+                draw_texture_ex(&a.talisman, q.x - 3.0, q.y - 5.0, Color::new(1.0, 0.85, 0.35, 1.0), DrawTextureParams { rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() });
+            }
+            ProjKind::Petal => {
+                let a = t * 10.0 + q.x * 0.1;
+                draw_circle(q.x, q.y, 5.0, Color::new(1.0, 0.6, 0.8, 0.25));
+                draw_ellipse(q.x, q.y, 3.5, 2.0, a.to_degrees(), Color::new(1.0, 0.72, 0.85, 1.0));
+                draw_ellipse(q.x, q.y, 1.5, 1.0, a.to_degrees(), Color::new(1.0, 0.95, 0.98, 1.0));
+            }
+            ProjKind::SpiritBolt => {
+                let back = v.normalize_or_zero() * -1.0;
+                for k in 1..4 {
+                    let c = q + back * (k as f32 * 4.0);
+                    draw_circle(c.x, c.y, 3.5 - k as f32 * 0.8, Color::new(0.6, 0.8, 1.0, 0.5 - k as f32 * 0.12));
+                }
+                draw_circle(q.x, q.y, 6.0, Color::new(0.55, 0.8, 1.0, 0.3));
+                draw_circle(q.x, q.y, 3.0, Color::new(0.9, 0.97, 1.0, 1.0));
+            }
             ProjKind::Shuriken => {
                 let size = pr.radius[i] * 2.2;
                 draw_circle(q.x, q.y, size * 0.55, Color::new(0.8, 0.9, 1.0, 0.12));
@@ -902,23 +954,71 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let k = age / 0.4;
         draw_circle_lines(c.x, c.y, r * (0.4 + 0.6 * k), 2.5, Color::new(0.6, 0.85, 1.0, 0.8 * (1.0 - k)));
     }
-    for (from, to, age) in &fx.beams {
+    for (from, to, age, st) in &fx.beams {
+        if *st == style::MOON {
+            let k = 1.0 - age / 0.45;
+            draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 26.0 * k, Color::new(0.45, 0.6, 1.0, 0.25 * k));
+            draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 13.0 * k, Color::new(0.75, 0.85, 1.0, 0.6 * k));
+            draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 4.0 * k, Color::new(1.0, 1.0, 0.95, k));
+            continue;
+        }
         let k = 1.0 - age / 0.3;
         draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 16.0 * k, Color::new(0.35, 0.0, 0.05, 0.55 * k));
         draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 9.0 * k, Color::new(0.9, 0.05, 0.15, 0.85 * k));
         draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0 * k, Color::new(1.0, 0.75, 0.75, k));
     }
+    draw_blasts(world, time as f32);
     for (c, r, age, style) in &fx.bursts {
         let k = age / burst_life(*style);
         let rr = r * (0.3 + 0.7 * k.sqrt());
         let fade = 1.0 - k;
-        let (fill, edge, width) = match style {
+        let (fill, edge, width) = match *style {
             1 => (Color::new(1.0, 0.7, 0.2, 0.35 * fade), Color::new(1.0, 0.9, 0.5, 0.9 * fade), 5.0),
+            style::SEAL => (Color::new(1.0, 0.85, 0.3, 0.3 * fade), Color::new(1.0, 0.95, 0.6, fade), 2.0),
+            style::METEOR => (Color::new(1.0, 0.45, 0.1, 0.5 * fade), Color::new(1.0, 0.85, 0.4, fade), 7.0),
+            style::FOX => (Color::new(1.0, 0.55, 0.15, 0.35 * fade), Color::new(1.0, 0.85, 0.4, fade), 2.5),
+            style::SKYBOLT => (Color::new(0.7, 0.85, 1.0, 0.4 * fade), Color::new(1.0, 1.0, 1.0, fade), 3.0),
+            style::COMET => (Color::new(0.3, 0.6, 1.0, 0.45 * fade), Color::new(0.85, 0.95, 1.0, fade), 4.0),
+            style::QUAKE => (Color::new(1.0, 0.6, 0.2, 0.25 * fade), Color::new(1.0, 0.85, 0.4, fade), 6.0),
             2 => (Color::new(0.6, 0.0, 0.1, 0.4 * fade), Color::new(1.0, 0.3, 0.3, 0.9 * fade), 3.0),
             3 => (Color::new(0.25, 0.0, 0.05, 0.55 * fade), Color::new(1.0, 0.15, 0.2, fade), 8.0),
             _ => (Color::new(0.3, 0.65, 1.0, 0.35 * fade), Color::new(0.8, 0.95, 1.0, 0.9 * fade), 2.0),
         };
         draw_circle(c.x, c.y, rr, fill);
+        match *style {
+            style::SEAL => {
+                // A spinning seal glyph: square inside the ring.
+                let a = k * 3.0;
+                let q = rr * 0.6;
+                for i in 0..4 {
+                    let (a0, a1) = (a + i as f32 * std::f32::consts::FRAC_PI_2, a + (i + 1) as f32 * std::f32::consts::FRAC_PI_2);
+                    draw_line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, Color::new(1.0, 0.3, 0.25, fade));
+                }
+            }
+            style::METEOR => {
+                draw_circle(c.x, c.y, rr * 0.55, Color::new(1.0, 0.95, 0.7, 0.7 * fade));
+                for i in 0..12 {
+                    let a = i as f32 * 0.52 + c.x;
+                    let d = rr * (0.4 + 0.8 * k);
+                    draw_rectangle(c.x + a.cos() * d, c.y + a.sin() * d * 0.7, 3.0, 3.0, Color::new(0.4, 0.2, 0.1, fade));
+                }
+            }
+            style::SKYBOLT => {
+                // The bolt column from the top of the sky.
+                let mut prev = vec2(c.x, c.y - 300.0);
+                for s in 1..=8 {
+                    let y = c.y - 300.0 + 300.0 * s as f32 / 8.0;
+                    let x = if s < 8 { c.x + ((s as f32 * 5.3 + c.y).sin()) * 10.0 } else { c.x };
+                    draw_line(prev.x, prev.y, x, y, 6.0 * fade, Color::new(0.6, 0.8, 1.0, 0.7 * fade));
+                    draw_line(prev.x, prev.y, x, y, 2.5 * fade, Color::new(1.0, 1.0, 1.0, fade));
+                    prev = vec2(x, y);
+                }
+            }
+            style::QUAKE => {
+                draw_circle_lines(c.x, c.y, rr * 0.6, 3.0, Color::new(1.0, 0.4, 0.3, 0.8 * fade));
+            }
+            _ => {}
+        }
         if *style == 3 {
             draw_circle(c.x, c.y, rr * 0.6, Color::new(0.05, 0.0, 0.02, 0.5 * fade));
             draw_circle_lines(c.x, c.y, rr * 0.8, 4.0, Color::new(0.9, 0.05, 0.1, 0.7 * fade));
@@ -1026,8 +1126,13 @@ fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
     }
 }
 
-fn burst_life(style: u8) -> f32 {
-    match style {
+fn burst_life(st: u8) -> f32 {
+    match st {
+        style::METEOR => 0.8,
+        style::SKYBOLT => 0.3,
+        style::COMET => 0.5,
+        style::QUAKE => 0.5,
+        style::SEAL => 0.3,
         1 => 0.7,
         2 => 0.4,
         3 => 1.0,
@@ -1104,5 +1209,42 @@ fn draw_reaper_wisps(p: sim::Vec2, t: f32, hannya: bool) {
             Color::new(0.75, 0.7, 1.0, 0.55)
         };
         draw_rectangle(x, y, 2.0, 2.0, c);
+    }
+}
+
+/// Telegraphs for delayed blasts: falling meteors and comets, sky-bolt warnings.
+fn draw_blasts(world: &World, t: f32) {
+    for b in &world.blasts {
+        let k = 1.0 - b.delay / b.max_delay; // 0 -> 1 as it lands
+        let c = b.pos;
+        match b.style {
+            style::METEOR | style::COMET => {
+                let meteor = b.style == style::METEOR;
+                let (ring, body, core) = if meteor {
+                    (Color::new(1.0, 0.3, 0.1, 0.35 + 0.4 * k), Color::new(1.0, 0.45, 0.1, 1.0), Color::new(1.0, 0.9, 0.5, 1.0))
+                } else {
+                    (Color::new(0.3, 0.6, 1.0, 0.3 + 0.4 * k), Color::new(0.3, 0.65, 1.0, 1.0), Color::new(0.9, 0.97, 1.0, 1.0))
+                };
+                draw_circle(c.x, c.y, b.radius * k, Color::new(ring.r, ring.g, ring.b, 0.12));
+                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.6 * k) + 4.0, 2.0, ring);
+                // The body falls in from the upper right with a fiery trail.
+                let size = if meteor { 18.0 } else { 9.0 };
+                let off = vec2(1.0, -1.6) * (1.0 - k) * 320.0;
+                let head = vec2(c.x, c.y) + off;
+                for i in 1..10 {
+                    let tp = head + vec2(1.0, -1.6).normalize() * (i as f32 * size * 0.7);
+                    let a = 0.7 * (1.0 - i as f32 / 10.0);
+                    draw_circle(tp.x, tp.y, size * (1.0 - i as f32 / 12.0), Color::new(body.r, body.g * 0.8, body.b, a * 0.6));
+                }
+                draw_circle(head.x, head.y, size * 1.4, Color::new(body.r, body.g, body.b, 0.3));
+                draw_circle(head.x, head.y, size, body);
+                draw_circle(head.x, head.y, size * 0.5, core);
+                let _ = t;
+            }
+            style::SKYBOLT => {
+                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k), 1.5, Color::new(0.8, 0.9, 1.0, 0.8));
+            }
+            _ => {}
+        }
     }
 }

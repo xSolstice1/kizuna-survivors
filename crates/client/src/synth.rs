@@ -195,9 +195,11 @@ pub enum Sfx {
     Chain,
     IaiSfx,
     Pulse,
+    Thunder,
+    Meteor,
 }
 
-pub const ALL_SFX: [Sfx; 48] = [
+pub const ALL_SFX: [Sfx; 50] = [
     Sfx::Hit,
     Sfx::Pop,
     Sfx::BigPop,
@@ -246,6 +248,8 @@ pub const ALL_SFX: [Sfx; 48] = [
     Sfx::Chain,
     Sfx::IaiSfx,
     Sfx::Pulse,
+    Sfx::Thunder,
+    Sfx::Meteor,
 ];
 
 /// Bell-like tone: inharmonic sine partials.
@@ -541,6 +545,19 @@ pub fn sfx(s: Sfx) -> Buf {
             b = Buf::new(0.4);
             b.add(0.0, Note::new(Sine, 660.0, 0.35, 0.2).env(0.005, 2.5));
             b.add(0.0, Note::new(Sine, 990.0, 0.25, 0.08).env(0.005, 3.0));
+        }
+        Sfx::Thunder => {
+            // A sharp crack and a rolling rumble.
+            b = Buf::new(0.9);
+            b.add(0.0, Note::new(Noise, 1.0, 0.08, 0.8).lp(9000.0).env(0.001, 2.0));
+            b.add(0.02, Note::new(Noise, 1.0, 0.85, 0.5).lp(500.0).env(0.01, 1.8));
+            b.add(0.0, Note::new(Square(0.5), 1800.0, 0.06, 0.15).slide(300.0));
+        }
+        Sfx::Meteor => {
+            b = Buf::new(1.5);
+            b.add(0.0, Note::new(Sine, 70.0, 1.2, 0.9).slide(28.0).env(0.001, 1.8));
+            b.add(0.0, Note::new(Noise, 1.0, 1.0, 0.7).lp(1600.0).env(0.001, 1.8));
+            b.add(0.0, Note::new(Noise, 1.0, 0.1, 0.5).lp(8000.0).env(0.001, 3.0));
         }
         Sfx::Poof => {
             // Smoke puff: soft noise burst with a dropping pitch.
