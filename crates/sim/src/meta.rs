@@ -162,14 +162,14 @@ impl PowerUp {
 pub fn unlock_text(h: HeroId) -> &'static str {
     match h {
         HeroId::Ren => "Available from the start.",
-        HeroId::Kaede => "Survive 10:00 in a single night.",
-        HeroId::Mika => "Defeat the Great Oni.",
-        HeroId::Haru => "Defeat 10,000 Otherworlders in total.",
-        HeroId::Nanami => "Reach level 50 in a single night.",
-        HeroId::Yuzu => "Defeat the Night Lord.",
-        HeroId::Riku => "Defeat 2,000 Otherworlders in a single night.",
-        HeroId::Shun => "Defeat the Great Oni twice (across any nights).",
-        HeroId::Toya => "Survive 12:00 in a single night.",
+        HeroId::Riku => "As Ren, defeat 2,000 Otherworlders in one night.",
+        HeroId::Shun => "As Riku, defeat the Great Oni.",
+        HeroId::Toya => "As Shun, survive 12:00.",
+        HeroId::Kaede => "As Ren, Awaken a weapon.",
+        HeroId::Mika => "As Riku, defeat the Night Lord.",
+        HeroId::Haru => "As Toya, open 10 chests in one night.",
+        HeroId::Nanami => "As Shun, take 3 shrine blessings in one night.",
+        HeroId::Yuzu => "As Toya, reach level 60.",
     }
 }
 
@@ -356,17 +356,21 @@ impl Profile {
         for ev in &w.shrines_taken {
             add(&mut self.shrines_found, *ev, &mut report.discovered);
         }
+        // Each hero is unlocked by a distinct feat performed as a specific hero, so the
+        // roster opens up as a chain. (Future stages can add stage-specific feats here.)
+        let as_hero = w.cfg.hero;
+        let awakened = w.weapons.iter().any(|x| x.awakened);
         for h in ALL_HEROES {
             let earned = match h {
                 HeroId::Ren => true,
-                HeroId::Kaede => w.time >= 600.0,
-                HeroId::Mika => w.great_oni_defeated,
-                HeroId::Haru => self.total_kills >= 10_000,
-                HeroId::Nanami => w.player.level >= 50,
-                HeroId::Yuzu => night_lord,
-                HeroId::Riku => w.kills >= 2_000,
-                HeroId::Shun => self.great_onis >= 2,
-                HeroId::Toya => w.time >= 720.0,
+                HeroId::Riku => as_hero == HeroId::Ren && w.kills >= 2_000,
+                HeroId::Shun => as_hero == HeroId::Riku && w.great_oni_defeated,
+                HeroId::Toya => as_hero == HeroId::Shun && w.time >= 720.0,
+                HeroId::Kaede => as_hero == HeroId::Ren && awakened,
+                HeroId::Mika => as_hero == HeroId::Riku && night_lord,
+                HeroId::Haru => as_hero == HeroId::Toya && w.chests_opened >= 10,
+                HeroId::Nanami => as_hero == HeroId::Shun && w.shrines_taken.len() >= 3,
+                HeroId::Yuzu => as_hero == HeroId::Toya && w.player.level >= 60,
             };
             if earned && !self.is_unlocked(h) {
                 self.unlocked.push(h);
@@ -549,14 +553,21 @@ mod tests {
     fn runs_unlock_heroes() {
         let mut p = Profile::default();
         let mut w = World::new(WorldConfig::default());
-        w.time = 601.0;
+        w.kills = 2_500;
         w.sen = 40;
         w.state = RunState::Dead;
         let r = p.record_run(&w);
-        assert_eq!(r.unlocked, vec![HeroId::Kaede]);
+        assert_eq!(r.unlocked, vec![HeroId::Riku], "2,000 kills as Ren unlocks Riku");
         assert!(p.weapons_found.contains(&WeaponKind::Ofuda));
-        assert!(r.discovered >= 2, "Kaede + Ofuda");
+        assert!(r.discovered >= 2, "Riku + Ofuda");
         assert_eq!(p.sen, 40);
         assert!(p.record_run(&w).unlocked.is_empty(), "only unlocks once");
+        // The same feat as another hero doesn't count for that unlock.
+        let mut w = World::new(WorldConfig { hero: HeroId::Riku, ..Default::default() });
+        w.time = 800.0;
+        w.state = RunState::Dead;
+        assert!(p.record_run(&w).unlocked.is_empty(), "surviving 12:00 as Riku unlocks nothing");
+        w.great_oni_defeated = true;
+        assert_eq!(p.record_run(&w).unlocked, vec![HeroId::Shun], "Great Oni as Riku unlocks Shun");
     }
 }
