@@ -3,6 +3,7 @@
 use macroquad::prelude::*;
 
 use crate::kit;
+use crate::kit::{screen_height, screen_width};
 use sim::content::{awakened_name, chest_rarity, Upgrade};
 use sim::world::ChestItem;
 

@@ -3,7 +3,7 @@
 
 use macroquad::prelude::*;
 
-use crate::render::SCALE;
+use crate::render::world_scale;
 use crate::sprites;
 
 use sim::stage::{chunk_props, hash, PropKind, CHUNK, PATH_EVERY, TILE};
@@ -62,7 +62,7 @@ impl StageArt {
 
     /// Ground tiles, props and their glows (everything under the characters).
     pub fn draw_ground(&self, cam: &Camera2D, time: f64) {
-        let (sw, sh) = (screen_width() / SCALE, screen_height() / SCALE);
+        let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
         let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
         let (tx0, ty0) = ((x0 / TILE).floor() as i32, (y0 / TILE).floor() as i32);
         for ty in ty0..=ty0 + (sh / TILE) as i32 + 1 {

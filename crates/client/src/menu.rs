@@ -3,6 +3,7 @@
 use macroquad::prelude::*;
 
 use crate::kit;
+use crate::kit::{mouse_position, screen_height, screen_width};
 use sim::content::{awakened_name, awakened_text, complement, hero_def, EnemyKind, Upgrade, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
 use sim::meta::{collection_progress, enemy_found, unlock_text, PowerUp, Profile, ALL_POWERUPS};
 

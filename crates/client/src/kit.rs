@@ -17,6 +17,42 @@ pub const PANEL: Color = Color::new(0.075, 0.06, 0.14, 0.93);
 pub const PANEL_HI: Color = Color::new(0.14, 0.10, 0.24, 0.97);
 pub const EDGE: Color = Color::new(1.0, 0.82, 0.42, 0.35);
 
+// ───────────────────────── Virtual resolution ─────────────────────────
+// All UI is laid out for a 1280x720 canvas. Smaller screens (phones) scale it down to fit;
+// UI modules import these instead of macroquad's, so their maths stays in virtual pixels.
+
+const UI_W: f32 = 1280.0;
+const UI_H: f32 = 720.0;
+
+pub fn ui_scale() -> f32 {
+    (macroquad::window::screen_width() / UI_W).min(macroquad::window::screen_height() / UI_H).min(1.0)
+}
+
+pub fn screen_width() -> f32 {
+    macroquad::window::screen_width() / ui_scale()
+}
+
+pub fn screen_height() -> f32 {
+    macroquad::window::screen_height() / ui_scale()
+}
+
+pub fn mouse_position() -> (f32, f32) {
+    let (x, y) = macroquad::input::mouse_position();
+    let s = ui_scale();
+    (x / s, y / s)
+}
+
+/// Physical screen position -> virtual UI position.
+pub fn to_ui(p: Vec2) -> Vec2 {
+    p / ui_scale()
+}
+
+/// Sets a camera so subsequent drawing uses virtual UI coordinates.
+pub fn begin_ui() {
+    let (w, h) = (screen_width(), screen_height());
+    set_camera(&Camera2D { target: vec2(w / 2.0, h / 2.0), zoom: vec2(2.0 / w, 2.0 / h), ..Default::default() });
+}
+
 thread_local! {
     static FONTS: RefCell<Option<(Font, Font)>> = const { RefCell::new(None) };
 }

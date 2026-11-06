@@ -7,7 +7,7 @@ use sim::content::{
 };
 use sim::World;
 
-use crate::kit::{self, Style, DIM, FAINT, GOLD, INK, JADE, SAKURA, SKY, VERMILION};
+use crate::kit::{self, mouse_position, screen_height, screen_width, Style, DIM, FAINT, GOLD, INK, JADE, SAKURA, SKY, VERMILION};
 use crate::render::Assets;
 
 fn fmt_time(t: f32) -> String {

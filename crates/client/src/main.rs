@@ -12,6 +12,7 @@ mod save;
 mod sprites;
 mod stage;
 mod synth;
+mod touch;
 mod ui;
 mod voice;
 
@@ -79,6 +80,7 @@ async fn main() {
     let mut collection = menu::CollectionState::default();
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
+    let mut touch = touch::TouchControls::default();
 
     kit::init();
     ui::loading();
@@ -95,6 +97,13 @@ async fn main() {
 
     loop {
         let dt = get_frame_time().min(0.1);
+        // UI draws in virtual 1280x720 pixels (scaled down on small screens).
+        kit::begin_ui();
+        let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
+        touch.update(in_run && !map_open);
+        if touch.pause && in_run {
+            screen = Screen::Paused;
+        }
         let now = get_time();
         audio.begin_frame();
         // UI click feedback on any out-of-run screen.
@@ -296,7 +305,8 @@ async fn main() {
         if screen == Screen::Playing && !world.paused() && !map_open {
             acc += dt;
             let mut input = read_input();
-            special_queued |= is_key_pressed(KeyCode::Space);
+            input.move_dir = input.move_dir + touch.dir();
+            special_queued |= is_key_pressed(KeyCode::Space) || touch.special;
             input.special = special_queued;
             let t0 = get_time();
             let mut steps = 0;
@@ -334,6 +344,7 @@ async fn main() {
         render::draw_world(&world, &assets, &stage_art, &fx, &cam, now);
         set_default_camera();
         stage_art.draw_vignette();
+        kit::begin_ui();
         if screen != Screen::Paused && !map_open {
             ui::hud(&world, &assets);
             if !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false) {
@@ -341,6 +352,10 @@ async fn main() {
             }
         }
         ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
+        if in_run && !map_open && screen == Screen::Playing {
+            let form = world.form_kind().map(|k| world.player.form / k.duration());
+            touch.draw(world.player.special, world.player.special >= 1.0, form);
+        }
 
         if let (Some((text, left)), false) = (&fx.banner, world.paused()) {
             ui::banner(text, *left);

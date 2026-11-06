@@ -10,8 +10,15 @@ use sim::{Event, World};
 use crate::sprites;
 use crate::voice;
 
-/// World pixels → screen pixels (integer for crisp pixel art).
-pub const SCALE: f32 = 2.0;
+/// World pixels → screen pixels (integer for crisp pixel art). Small screens (phones in
+/// landscape) zoom out to 1x so the horde stays visible.
+pub fn world_scale() -> f32 {
+    if screen_height() < 560.0 {
+        1.0
+    } else {
+        2.0
+    }
+}
 
 pub struct Assets {
     /// Per hero (in `ALL_HEROES` order): idle, walk A, walk B.
@@ -550,7 +557,7 @@ impl Fx {
 }
 
 pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
-    let (sw, sh) = (screen_width() / SCALE, screen_height() / SCALE);
+    let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
     let p = world.player.pos;
     let jitter = if fx.shake > 0.0 { vec2(rand::gen_range(-2.0, 2.0), rand::gen_range(-2.0, 2.0)) } else { Vec2::ZERO };
     // Positive y zoom: macroquad already flips y when drawing to the screen, so this gives
