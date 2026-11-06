@@ -147,6 +147,22 @@ async fn main() {
             save::store(&profile);
             audio.play(synth::Sfx::Buy);
         }
+        // Dev (remove before release): F9 in the Armory adds every Exotic and Arsenal art, Dust and Shards.
+        if screen == Screen::Armory && is_key_pressed(KeyCode::F9) {
+            let mut rng = sim::rng::Rng::new((get_time() * 1000.0) as u64);
+            for e in sim::gear::ALL_EXOTICS {
+                profile.add_item(sim::gear::roll_exotic(&mut rng, e, 40));
+            }
+            for a in sim::gear::LEGENDARY_ARTS {
+                let mut it = sim::gear::roll_item(&mut rng, Some(sim::gear::Slot::Arsenal), sim::gear::Rarity::Mythic, 40, None);
+                it.art = Some(a);
+                profile.add_item(it);
+            }
+            profile.dust += 5000;
+            profile.shards += 100;
+            save::store(&profile);
+            audio.play(synth::Sfx::Buy);
+        }
         // Dev (remove before release): F6 on the map select opens every world and difficulty.
         if screen == Screen::Stages && is_key_pressed(KeyCode::F6) {
             for row in profile.cleared.iter_mut() {

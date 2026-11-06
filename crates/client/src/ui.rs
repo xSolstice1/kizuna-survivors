@@ -122,10 +122,13 @@ pub fn hud(world: &World, assets: &Assets) {
         }
     }
     // The Arsenal weapon sits apart: it takes no slot.
+    let ax = 14.0 + hero.weapon_slots as f32 * (s + 6.0) + 8.0;
     if let Some(wp) = world.weapons.iter().find(|w| w.extra) {
-        let x = 14.0 + hero.weapon_slots as f32 * (s + 6.0) + 8.0;
-        kit::rounded_outline(x - 3.0, 107.0, s + 6.0, s + 6.0, 8.0, 1.5, SKY);
-        kit::icon_slot(x, 110.0, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
+        kit::rounded_outline(ax - 3.0, 107.0, s + 6.0, s + 6.0, 8.0, 1.5, SKY);
+        kit::icon_slot(ax, 110.0, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
+    } else if let Some(a) = &world.art {
+        kit::rounded_outline(ax - 3.0, 107.0, s + 6.0, s + 6.0, 8.0, 1.5, GOLD);
+        kit::icon_slot(ax, 110.0, s, Some(assets.gear_icon_named(a.art.key())), 0, 0, true);
     }
     let ps = 26.0;
     for k in 0..hero.passive_slots {
@@ -571,6 +574,10 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
         if let Some(rel) = r.relic {
             centered(&format!("RELIC EARNED: {} ({})", rel.name(), rel.describe()), y, 18.0, Color::new(0.75, 0.9, 1.0, 1.0));
             y += 26.0;
+        }
+        if r.shards > 0 {
+            centered(&format!("+{} Exotic Shards", r.shards), y, 17.0, crate::armory::rarity_color(sim::gear::Rarity::Exotic));
+            y += 24.0;
         }
         if let Some(n) = r.ascension_opened {
             centered(&format!("NIGHTMARE+{n} OPEN"), y, 18.0, Color::new(1.0, 0.5, 0.6, 1.0));

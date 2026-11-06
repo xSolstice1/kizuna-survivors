@@ -17,10 +17,22 @@ pub fn rarity_color(r: Rarity) -> Color {
         Rarity::Epic => Color::new(0.75, 0.45, 1.0, 1.0),
         Rarity::Legendary => Color::new(1.0, 0.65, 0.2, 1.0),
         Rarity::Mythic => Color::new(1.0, 0.3, 0.45, 1.0),
+        // Exotic shimmers through the spectrum.
+        Rarity::Exotic => {
+            let h = (get_time() as f32 * 0.35).fract();
+            let k = |o: f32| 0.6 + 0.4 * ((h + o) * std::f32::consts::TAU).sin();
+            Color::new(k(0.0), k(0.33), k(0.66), 1.0)
+        }
     }
 }
 
 fn item_icon<'a>(assets: &'a Assets, it: &Item) -> &'a Texture2D {
+    if let Some(e) = it.exotic {
+        return assets.gear_icon_named(e.key());
+    }
+    if let Some(a) = it.art {
+        return assets.gear_icon_named(a.key());
+    }
     match it.arsenal {
         Some(k) => assets.icon(Upgrade::Weapon(k)),
         None => assets.gear_icon(it.slot),
@@ -31,6 +43,13 @@ fn item_icon<'a>(assets: &'a Assets, it: &Item) -> &'a Texture2D {
 pub fn item_cell(assets: &Assets, it: &Item, x: f32, y: f32, s: f32, selected: bool, worn: bool) {
     let c = rarity_color(it.rarity);
     kit::rounded(x, y, s, s, 7.0, Color::new(c.r * 0.22, c.g * 0.22, c.b * 0.28, 0.95));
+    if it.rarity == Rarity::Exotic {
+        let t = get_time() as f32;
+        for k in 0..3 {
+            let a = t * 1.5 + k as f32 * 2.1;
+            draw_circle(x + s / 2.0 + a.cos() * s * 0.42, y + s / 2.0 + a.sin() * s * 0.42, 2.0, Color::new(1.0, 1.0, 1.0, 0.8));
+        }
+    }
     if it.rarity >= Rarity::Legendary {
         let pulse = 0.25 + 0.15 * (get_time() as f32 * 3.0 + x * 0.05).sin();
         kit::rounded(x + 2.0, y + 2.0, s - 4.0, s - 4.0, 6.0, Color::new(c.r, c.g, c.b, pulse * 0.35));
@@ -76,6 +95,31 @@ pub fn item_detail(profile: &Profile, assets: &Assets, it: &Item, hero: HeroId, 
     if let Some((st, v)) = it.main_value() {
         kit::text_fit(&st.format(v), x + 14.0, ly, line_w, 18.0, INK);
         ly += 8.0;
+    }
+    if let Some(e) = it.exotic {
+        kit::text("EXOTIC", x + 14.0, ly + 4.0, 14.0, c);
+        ly += 20.0;
+        let mut text = e.describe();
+        if e.treasure() {
+            text = format!("{text} Sacred Treasure: can be worn with another Exotic. {}", gear::REGALIA_TEXT);
+        }
+        for l in kit::wrap(&text, line_w, 14) {
+            kit::text(&l, x + 14.0, ly, 14.0, Color::new(1.0, 0.95, 0.85, 1.0));
+            ly += 17.0;
+        }
+        if e == gear::Exotic::SovereignFinger {
+            let n = profile.items.iter().filter(|i| i.exotic == Some(gear::Exotic::SovereignFinger)).count().min(gear::MAX_FINGERS as usize);
+            kit::text(&format!("Fingers owned: {n}/{}", gear::MAX_FINGERS), x + 14.0, ly, 14.0, GOLD);
+            ly += 17.0;
+        }
+    } else if let Some(a) = it.art {
+        kit::text("EXCLUSIVE ARSENAL", x + 14.0, ly + 4.0, 14.0, c);
+        ly += 20.0;
+        let t = format!("{} (no weapon slot). {}", a.name(), a.describe(it.rarity >= Rarity::Mythic));
+        for l in kit::wrap(&t, line_w, 14) {
+            kit::text(&l, x + 14.0, ly, 14.0, SKY);
+            ly += 17.0;
+        }
     }
     if let Some(k) = it.arsenal {
         let lvl = it.rarity.arsenal_level();
@@ -252,7 +296,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
         let (c, r) = (i % 3, i / 3);
         kit::text_fit(t, tx + 14.0 + c as f32 * colw, ty + 22.0 + r as f32 * 17.0, colw - 6.0, 13.0, INK);
     }
-    let extra: Vec<String> = l.uniques.iter().map(|(u, _)| u.name().to_string()).chain(l.sets4.iter().map(|s| format!("{} set", set_name(*s)))).collect();
+    let extra: Vec<String> = l.exotics.iter().map(|e| e.name().to_string()).chain(l.uniques.iter().map(|(u, _)| u.name().to_string())).chain(l.sets4.iter().map(|s| format!("{} set", set_name(*s)))).collect();
     if !extra.is_empty() {
         kit::text_fit(&extra.join("  ·  "), tx + 14.0, ty + th - 10.0, tw - 28.0, 13.0, GOLD);
     }
@@ -396,6 +440,7 @@ pub struct DrawState {
     pub results: Vec<u32>,
     pub at: f64,
     pub selected: Option<u32>,
+    pub forge: bool,
 }
 
 pub enum DrawAction {
@@ -419,9 +464,9 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
     kit::panel(ox, oy, ow, oh);
     kit::panel_title("ODDS", ox + 16.0, oy + 30.0, 16.0, GOLD);
     for (i, r) in gear::ALL_RARITIES.iter().enumerate() {
-        let y = oy + 60.0 + i as f32 * 30.0;
+        let y = oy + 56.0 + i as f32 * 27.0;
         kit::text(r.name(), ox + 20.0, y, 17.0, rarity_color(*r));
-        let p = format!("{}%", gear::DRAW_ODDS[i]);
+        let p = if *r == Rarity::Exotic { format!("{}%", gear::DRAW_EXOTIC) } else { format!("{}%", gear::DRAW_ODDS[i]) };
         let d = kit::measure(&p, 17);
         kit::text(&p, ox + ow - 20.0 - d.width, y, 17.0, INK);
     }
@@ -458,6 +503,13 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
         }
     }
 
+    // Exotic Forge.
+    let shards = format!("Exotic Shards: {} / {}", profile.shards, gear::FORGE_COST);
+    kit::text(&shards, ox, oy + oh + 148.0, 15.0, rarity_color(Rarity::Exotic));
+    if kit::button(Rect::new(ox + ow - 110.0, oy + oh + 132.0, 110.0, 26.0), if st.forge { "Close forge" } else { "Forge" }, true, Style::Secondary) {
+        st.forge = !st.forge;
+    }
+
     // Results with a staggered reveal.
     let (rx, ry) = (ox + ow + 20.0, 80.0);
     let rw = 470.0;
@@ -465,8 +517,32 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
     if st.results.is_empty() {
         kit::text("Offer Sen to the shrine and draw a fortune.", rx + 20.0, ry + 40.0, 16.0, DIM);
     }
+    if st.forge {
+        crate::kit::panel(rx, ry, rw, 520.0);
+        kit::text("EXOTIC FORGE", rx + 20.0, ry + 30.0, 18.0, rarity_color(Rarity::Exotic));
+        kit::text("Nightmare final bosses give Shards. Forge an Exotic from a world cleared on Nightmare.", rx + 20.0, ry + 50.0, 12.0, DIM);
+        for (k, e) in gear::ALL_EXOTICS.iter().enumerate() {
+            let (col, row) = (k % 2, k / 2);
+            let x = rx + 20.0 + col as f32 * 220.0;
+            let y = ry + 66.0 + row as f32 * 63.0;
+            let ok = profile.can_forge(*e);
+            draw_texture_ex(assets.gear_icon_named(e.key()), x, y + 4.0, if profile.cleared[e.home().index()][2] { WHITE } else { Color::new(0.2, 0.2, 0.25, 1.0) }, DrawTextureParams { dest_size: Some(vec2(36.0, 36.0)), ..Default::default() });
+            kit::text_fit(e.name(), x + 42.0, y + 16.0, 166.0, 13.0, INK);
+            kit::text_fit(e.home().def().name, x + 42.0, y + 31.0, 100.0, 11.0, FAINT);
+            if kit::button(Rect::new(x + 146.0, y + 22.0, 62.0, 24.0), "Forge", ok, Style::Primary) {
+                let id = profile.forge(*e, (get_time() * 1e6) as u64);
+                if id != 0 {
+                    st.results = vec![id];
+                    st.at = time;
+                    st.selected = Some(id);
+                    st.forge = false;
+                    action = Some(DrawAction::Drew(Rarity::Exotic));
+                }
+            }
+        }
+    }
     let cs = 80.0;
-    for (k, id) in st.results.iter().enumerate() {
+    for (k, id) in st.results.iter().enumerate().filter(|_| !st.forge) {
         let x = rx + 20.0 + (k % 5) as f32 * (cs + 10.0);
         let y = ry + 30.0 + (k / 5) as f32 * (cs + 60.0);
         let shown = time - st.at > k as f64 * 0.12;

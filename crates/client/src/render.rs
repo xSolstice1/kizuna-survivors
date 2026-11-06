@@ -206,6 +206,26 @@ impl Assets {
             ],
             world_enemies: sim::content::ALL_ENEMIES.iter().map(|k| world_enemy_src(*k).map(sprites::texture)).collect(),
             gear_icons: vec![
+            ("lantern_heart", sprites::texture(include_str!("../../../art/src/exotic/lantern_heart.px"))),
+            ("jeweled_branch", sprites::texture(include_str!("../../../art/src/exotic/jeweled_branch.px"))),
+            ("unbroken_yinyang", sprites::texture(include_str!("../../../art/src/exotic/unbroken_yinyang.px"))),
+            ("nine_seal", sprites::texture(include_str!("../../../art/src/exotic/nine_seal.px"))),
+            ("clone_scroll", sprites::texture(include_str!("../../../art/src/exotic/clone_scroll.px"))),
+            ("hollow_mask", sprites::texture(include_str!("../../../art/src/exotic/hollow_mask.px"))),
+            ("white_haori", sprites::texture(include_str!("../../../art/src/exotic/white_haori.px"))),
+            ("hunger_organ", sprites::texture(include_str!("../../../art/src/exotic/hunger_organ.px"))),
+            ("thousand_counter", sprites::texture(include_str!("../../../art/src/exotic/thousand_counter.px"))),
+            ("sovereign_finger", sprites::texture(include_str!("../../../art/src/exotic/sovereign_finger.px"))),
+            ("closed_hand_vow", sprites::texture(include_str!("../../../art/src/exotic/closed_hand_vow.px"))),
+            ("kusanagi", sprites::texture(include_str!("../../../art/src/exotic/kusanagi.px"))),
+            ("yata_mirror", sprites::texture(include_str!("../../../art/src/exotic/yata_mirror.px"))),
+            ("yasakani_jewel", sprites::texture(include_str!("../../../art/src/exotic/yasakani_jewel.px"))),
+            ("raijin_drums", sprites::texture(include_str!("../../../art/src/exotic/raijin_drums.px"))),
+            ("fox_procession", sprites::texture(include_str!("../../../art/src/exotic/fox_procession.px"))),
+            ("tengu_fan", sprites::texture(include_str!("../../../art/src/exotic/tengu_fan.px"))),
+            ("dragon_coil", sprites::texture(include_str!("../../../art/src/exotic/dragon_coil.px"))),
+            ("moonfall", sprites::texture(include_str!("../../../art/src/exotic/moonfall.px"))),
+            ("skeleton_hand", sprites::texture(include_str!("../../../art/src/exotic/skeleton_hand.px"))),
             ("hat", sprites::texture(include_str!("../../../art/src/gear/hat.px"))),
             ("top", sprites::texture(include_str!("../../../art/src/gear/top.px"))),
             ("bottom", sprites::texture(include_str!("../../../art/src/gear/bottom.px"))),
@@ -852,6 +872,63 @@ fn draw_hazards(world: &World, t: f32) {
                 }
             }
         }
+    }
+}
+
+/// Exclusive Arsenal summons: drums, dragon, foxes, yin-yang orbs; and the Hollow Mask aura.
+fn draw_art(world: &World, t: f32) {
+    use sim::gear::ArsenalArt;
+    let p = world.player.pos;
+    if world.mask > 0.0 {
+        let a = 0.25 + 0.1 * (t * 10.0).sin();
+        draw_circle(p.x, p.y - 8.0, 30.0, Color::new(0.9, 0.1, 0.15, a));
+        draw_circle_lines(p.x, p.y - 8.0, 34.0, 2.0, Color::new(1.0, 0.9, 0.9, 0.6));
+    }
+    let Some(a) = &world.art else { return };
+    match a.art {
+        ArsenalArt::RaijinDrums => {
+            for d in world.art_points() {
+                draw_circle(d.x, d.y, 16.0, Color::new(1.0, 0.85, 0.3, 0.18 + 0.08 * (t * 9.0).sin()));
+                draw_circle(d.x, d.y, 9.0, Color::new(0.55, 0.22, 0.12, 1.0));
+                draw_circle(d.x, d.y, 6.5, Color::new(0.95, 0.85, 0.6, 1.0));
+                draw_poly_lines(d.x, d.y, 3, 4.0, t * 120.0, 1.5, Color::new(0.85, 0.2, 0.1, 1.0));
+                draw_circle_lines(d.x, d.y, 9.0, 1.5, Color::new(1.0, 0.9, 0.4, 1.0));
+            }
+        }
+        ArsenalArt::DragonCoil => {
+            let pts = world.art_points();
+            for (k, c) in pts.iter().enumerate().rev() {
+                let r = if k == 0 { 13.0 } else { 10.0 - k as f32 * 0.25 };
+                draw_circle(c.x, c.y, r + 3.0, Color::new(0.2, 0.9, 0.6, 0.15));
+                draw_circle(c.x, c.y, r, if k % 2 == 0 { Color::new(0.15, 0.62, 0.42, 1.0) } else { Color::new(0.2, 0.75, 0.5, 1.0) });
+                draw_circle(c.x, c.y - r * 0.3, r * 0.35, Color::new(1.0, 0.85, 0.35, 0.9));
+            }
+            if let Some(h) = pts.first() {
+                draw_circle(h.x + 4.0, h.y - 3.0, 2.5, Color::new(1.0, 0.3, 0.2, 1.0));
+            }
+        }
+        ArsenalArt::FoxProcession => {
+            for (fp, fv, life) in &a.foxes {
+                let alpha = (life / 0.3).min(1.0);
+                let d = fv.normalize_or_zero();
+                for k in 1..5 {
+                    let q = *fp - d * (k as f32 * 7.0);
+                    draw_circle(q.x, q.y, 7.0 - k as f32, Color::new(0.4, 0.75, 1.0, 0.35 * alpha));
+                }
+                draw_circle(fp.x, fp.y, 8.0, Color::new(0.95, 0.97, 1.0, alpha));
+                draw_triangle(vec2(fp.x - 5.0, fp.y - 4.0), vec2(fp.x - 2.0, fp.y - 13.0), vec2(fp.x + 1.0, fp.y - 5.0), Color::new(0.95, 0.97, 1.0, alpha));
+                draw_triangle(vec2(fp.x + 5.0, fp.y - 4.0), vec2(fp.x + 2.0, fp.y - 13.0), vec2(fp.x - 1.0, fp.y - 5.0), Color::new(0.95, 0.97, 1.0, alpha));
+                draw_circle(fp.x + 3.0 * d.x, fp.y - 1.0, 1.5, Color::new(0.9, 0.2, 0.3, alpha));
+            }
+        }
+        ArsenalArt::YinYangBreaker => {
+            for (op, _) in &a.orbs {
+                draw_circle(op.x, op.y, 32.0, Color::new(1.0, 0.95, 0.8, 0.14));
+                draw_yinyang(vec2(op.x, op.y), 22.0, t * 4.0);
+                draw_circle_lines(op.x, op.y, 23.0, 2.0, Color::new(1.0, 0.82, 0.42, 1.0));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1613,6 +1690,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
 
     // Enemy fireballs: drawn above everything so they always read as danger.
     draw_hazards(world, time as f32);
+    draw_art(world, time as f32);
     for (pos, r, age) in &fx.gear_drops {
         let c = crate::armory::rarity_color(*r);
         let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
