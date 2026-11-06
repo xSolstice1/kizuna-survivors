@@ -150,6 +150,9 @@ pub const FOX_ORB_DAMAGE: f32 = 32.0;
 /// Damage taken while transformed is multiplied by this.
 pub const FOX_DAMAGE_TAKEN: f32 = 0.7;
 pub const FOX_MOVE_SPEED: f32 = 1.2;
+
+/// Enemies within this distance of a Fox Mirage clone chase it instead of the player.
+pub const DECOY_RADIUS: f32 = 110.0;
 /// Earliest time a chest may Awaken a weapon.
 pub const AWAKEN_FROM: f32 = 480.0;
 
@@ -179,9 +182,11 @@ pub enum WeaponKind {
     Familiars,
     /// A big spinning shuriken that flies out and comes back.
     GaleShuriken,
+    /// Illusory copies of Riku that fight, draw enemies and pop in damaging smoke.
+    FoxMirage,
 }
 
-pub const ALL_WEAPONS: [WeaponKind; 11] = [
+pub const ALL_WEAPONS: [WeaponKind; 12] = [
     WeaponKind::Ofuda,
     WeaponKind::MoonOrbs,
     WeaponKind::SakuraField,
@@ -193,6 +198,7 @@ pub const ALL_WEAPONS: [WeaponKind; 11] = [
     WeaponKind::FoxfireOrb,
     WeaponKind::Familiars,
     WeaponKind::GaleShuriken,
+    WeaponKind::FoxMirage,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -299,6 +305,15 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             duration: 1.4, // out-and-back time
             ..base
         },
+        WeaponKind::FoxMirage => WeaponStats {
+            damage: 9.0 + 2.5 * k, // per strike; the smoke pop deals 2x
+            cooldown: 6.5 - 0.3 * k,
+            amount: 1 + at(l, 3) + at(l, 5) + at(l, 7),
+            area: 1.0 + 0.08 * k, // pop radius
+            speed: 165.0,
+            pierce: 3 + at(l, 4) as u8 + at(l, 8) as u8, // hits a clone can take
+            duration: 4.0 + 0.3 * k,
+        },
     }
 }
 
@@ -343,6 +358,7 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
         WeaponKind::FoxfireOrb => (&[Fox], (P::Magnet, 1)),
         WeaponKind::Familiars => (&[Fox], (P::Recovery, 1)),
         WeaponKind::GaleShuriken => (&[Fox, Blade], (P::Haste, 1)),
+        WeaponKind::FoxMirage => (&[Fox], (P::Persistence, 1)),
     };
     WeaponDef { tags, complement }
 }
@@ -458,6 +474,7 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::FoxfireOrb => "Foxfire Comet",
         WeaponKind::Familiars => "Kitsune Procession",
         WeaponKind::GaleShuriken => "Tempest Wheel",
+        WeaponKind::FoxMirage => "Thousand-Fox Mirage",
     }
 }
 
@@ -475,6 +492,7 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::FoxfireOrb => "Charges twice as fast, +40% damage and +30% burst; each burst scatters three sparks.",
         WeaponKind::Familiars => "Twice the fox spirits; they never tire (+3 pierce, +25% damage).",
         WeaponKind::GaleShuriken => "Two extra shuriken, +30% size and +25% damage.",
+        WeaponKind::FoxMirage => "Twice the clones, +30% damage, and their smoke pops are 30% wider.",
     }
 }
 
@@ -526,6 +544,11 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
             s.amount += 2;
             s.area *= 1.3;
             s.damage *= 1.25;
+        }
+        WeaponKind::FoxMirage => {
+            s.amount *= 2;
+            s.damage *= 1.3;
+            s.area *= 1.3;
         }
     }
     s
@@ -593,6 +616,7 @@ impl Upgrade {
             Upgrade::Weapon(WeaponKind::FoxfireOrb) => "Foxfire Orb",
             Upgrade::Weapon(WeaponKind::Familiars) => "Kitsune Familiars",
             Upgrade::Weapon(WeaponKind::GaleShuriken) => "Gale Shuriken",
+            Upgrade::Weapon(WeaponKind::FoxMirage) => "Fox Mirage",
             Upgrade::Passive(PassiveKind::Might) => "Might",
             Upgrade::Passive(PassiveKind::Haste) => "Haste",
             Upgrade::Passive(PassiveKind::Expanse) => "Expanse",
@@ -629,6 +653,7 @@ impl Upgrade {
                 WeaponKind::FoxfireOrb => "Gathers foxfire in your hand, then hurls it to burst on the nearest enemy.",
                 WeaponKind::Familiars => "Fox spirits dart out and bite through nearby enemies.",
                 WeaponKind::GaleShuriken => "A huge shuriken spins out and returns to you, cutting both ways.",
+                WeaponKind::FoxMirage => "Conjures illusory copies of you. They fight, draw enemies away, and burst into smoke.",
             }
             .into(),
             Upgrade::Weapon(k) => {
@@ -647,6 +672,7 @@ impl Upgrade {
                         WeaponKind::FoxfireOrb => "orb",
                         WeaponKind::Familiars => "spirit",
                         WeaponKind::GaleShuriken => "shuriken",
+                        WeaponKind::FoxMirage => "clone",
                         WeaponKind::SakuraField => "",
                     };
                     parts.push(format!("+{} {unit}", b.amount - a.amount));

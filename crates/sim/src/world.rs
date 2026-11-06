@@ -100,6 +100,30 @@ pub enum Event {
     FoxFaded,
     /// Ninefold Foxfire fired a ring of golden orbs.
     FoxVolley,
+    /// A Fox Mirage clone appeared / struck / burst into smoke.
+    CloneSummoned { pos: Vec2 },
+    CloneStrike { pos: Vec2 },
+    ClonePopped { pos: Vec2, radius: f32 },
+}
+
+/// A Fox Mirage clone: fights near the player, draws enemies, pops in damaging smoke.
+#[derive(Clone, Copy, Debug)]
+pub struct MirageClone {
+    pub pos: Vec2,
+    pub facing: Vec2,
+    pub moving: bool,
+    pub life: f32,
+    /// Hits it can still take.
+    pub hits: u8,
+    iframes: f32,
+    strike_cd: f32,
+    /// Seconds left of the current strike pose (for drawing).
+    pub striking: f32,
+    damage: f32,
+    pop_radius: f32,
+    speed: f32,
+    /// Formation slot around the player while idle.
+    slot: f32,
 }
 
 /// Enemy fireball.
@@ -379,6 +403,7 @@ pub struct World {
     pub sen: u32,
     /// Sen coins on the ground: (position, value).
     pub coins: Vec<(Vec2, u32)>,
+    pub clones: Vec<MirageClone>,
     pub great_oni_defeated: bool,
     /// Kills per enemy kind, indexed like `ALL_ENEMIES`.
     pub kills_by_kind: [u32; ALL_ENEMIES.len()],
@@ -453,6 +478,7 @@ impl World {
             revivals_left: bonus.revivals,
             sen: 0,
             coins: Vec::new(),
+            clones: Vec::new(),
             great_oni_defeated: false,
             kills_by_kind: [0; ALL_ENEMIES.len()],
             shrines_taken: Vec::new(),
@@ -493,6 +519,7 @@ impl World {
         self.move_enemies();
         self.update_weapons();
         self.update_fox();
+        self.update_clones();
         self.update_effects();
         self.move_projectiles_and_hit();
         if input.special {
@@ -780,6 +807,8 @@ impl World {
     fn move_enemies(&mut self) {
         let player = self.player.pos;
         let time = self.time;
+        // Fox Mirage decoys: nearby enemies chase a clone instead of the player.
+        let decoys: Vec<Vec2> = self.clones.iter().map(|c| c.pos).collect();
         let e = &mut self.enemies;
         // Pass 1: desired velocity = seek player + separation from grid neighbours.
         for i in 0..e.pos.len() {
@@ -790,7 +819,18 @@ impl World {
                 // Hopping gait.
                 speed *= 0.45 + 0.75 * ((time * 7.0 + e.id[i] as f32 * 0.7).sin().abs());
             }
-            let to_player = player - p;
+            let mut to_player = player - p;
+            if !decoys.is_empty() && !e.kind[i].is_boss() {
+                let mut best = to_player.length_sq();
+                for d in &decoys {
+                    let v = *d - p;
+                    let d2 = v.length_sq();
+                    if d2 < DECOY_RADIUS * DECOY_RADIUS && d2 < best {
+                        best = d2;
+                        to_player = v;
+                    }
+                }
+            }
             match e.kind[i] {
                 EnemyKind::Chochin => {
                     // Hold a firing range, strafing; spit a fireball every ~2.5s.
@@ -976,6 +1016,67 @@ impl World {
                 let a = a0 + k as f32 * std::f32::consts::TAU / 3.0;
                 self.projectiles.push_kind(ProjKind::Spark, 5.0, c, Vec2::from_angle(a) * 240.0, 0.6, dmg * 0.4, 3, 5.0);
             }
+        }
+    }
+
+    fn update_clones(&mut self) {
+        let mut i = 0;
+        while i < self.clones.len() {
+            let mut c = self.clones[i];
+            c.life -= DT;
+            c.iframes = (c.iframes - DT).max(0.0);
+            c.strike_cd -= DT;
+            c.striking = (c.striking - DT).max(0.0);
+            // Take hits from enemies touching it.
+            if c.iframes <= 0.0 {
+                let touched = self.nearest_index(c.pos, 8.0 + MAX_ENEMY_RADIUS, &[]).is_some_and(|j| {
+                    (self.enemies.pos[j] - c.pos).length() <= 8.0 + self.enemies.radius[j]
+                });
+                if touched {
+                    c.hits = c.hits.saturating_sub(1);
+                    c.iframes = 0.4;
+                }
+            }
+            if c.life <= 0.0 || c.hits == 0 {
+                // Burst into smoke that hurts everything around it.
+                self.query_circle(c.pos, c.pop_radius);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    let dir = self.enemies.pos[j] - c.pos;
+                    self.hurt_enemy(j, c.damage * 2.0, dir);
+                }
+                self.events.push(Event::ClonePopped { pos: c.pos, radius: c.pop_radius });
+                self.clones.swap_remove(i);
+                continue;
+            }
+            // Chase the nearest enemy near the player; otherwise hold a slot beside the player.
+            let target = self.nearest_index(c.pos, 170.0, &[]).map(|j| self.enemies.pos[j]);
+            let leash = (c.pos - self.player.pos).length() > 220.0;
+            let goal = match target {
+                Some(t) if !leash => t,
+                _ => self.player.pos + Vec2::from_angle(c.slot + self.time * 0.5) * 34.0,
+            };
+            let to = goal - c.pos;
+            let dist = to.length();
+            c.moving = dist > 12.0;
+            if c.moving {
+                c.facing = to.normalize_or_zero();
+                c.pos += c.facing * (c.speed.min(dist / DT) * DT);
+            }
+            c.pos = stage::resolve_local(c.pos, 6.0);
+            if target.is_some() && !leash && dist < 22.0 && c.strike_cd <= 0.0 {
+                c.strike_cd = 0.45;
+                c.striking = 0.15;
+                let hit = c.pos + c.facing * 10.0;
+                self.query_circle(hit, 20.0);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    self.hurt_enemy(j, c.damage, c.facing);
+                }
+                self.events.push(Event::CloneStrike { pos: hit });
+            }
+            self.clones[i] = c;
+            i += 1;
         }
     }
 
@@ -1220,7 +1321,8 @@ impl World {
                 | WeaponKind::FlamePool
                 | WeaponKind::FoxfireOrb
                 | WeaponKind::Familiars
-                | WeaponKind::GaleShuriken => {
+                | WeaponKind::GaleShuriken
+                | WeaponKind::FoxMirage => {
                     let timer = w.timer - DT;
                     if timer <= 0.0 {
                         self.weapons[wi].timer = s.cooldown * haste;
@@ -1369,6 +1471,29 @@ impl World {
                 for n in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU) + n as f32;
                     self.projectiles.push_kind(ProjKind::Familiar, 6.0, p, Vec2::from_angle(a) * s.speed, life, dmg, s.pierce, 6.0);
+                }
+            }
+            WeaponKind::FoxMirage => {
+                self.events.push(Event::Fired(WeaponKind::FoxMirage));
+                let n = s.amount;
+                for k in 0..n {
+                    let slot = k as f32 / n as f32 * std::f32::consts::TAU;
+                    let pos = stage::resolve(p + Vec2::from_angle(slot) * 18.0, 6.0);
+                    self.clones.push(MirageClone {
+                        pos,
+                        facing: self.player.facing,
+                        moving: false,
+                        life: s.duration * self.persistence(),
+                        hits: s.pierce,
+                        iframes: 0.5,
+                        strike_cd: 0.3,
+                        striking: 0.0,
+                        damage: dmg,
+                        pop_radius: 40.0 * area,
+                        speed: s.speed,
+                        slot,
+                    });
+                    self.events.push(Event::CloneSummoned { pos });
                 }
             }
             WeaponKind::GaleShuriken => {
@@ -2397,6 +2522,30 @@ mod tests {
         assert!(volleys >= 6, "golden orb volleys: {volleys}");
         assert!(w.kills >= 20, "the tails and orbs should flatten a ring of Oni, killed {}", w.kills);
         assert!(w.move_speed() < speed, "speed boost ends with the form");
+    }
+
+    #[test]
+    fn fox_mirage_clones_decoy_strike_and_pop() {
+        let mut w = World::new(WorldConfig { hero: HeroId::Riku, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.weapons = vec![OwnedWeapon { kind: WeaponKind::FoxMirage, level: 1, awakened: false, timer: 0.0, phase: 0.0 }];
+        w.step(Input::default());
+        assert_eq!(w.clones.len(), 1, "one clone at level 1");
+        // Decoy: an enemy to the right of the player, a clone just above the enemy.
+        // The enemy should head up toward the clone rather than left toward the player.
+        w.spawn_enemy(EnemyKind::Kasa, Vec2::new(200.0, 0.0));
+        w.enemies.hp[0] = 1e6;
+        w.clones[0].pos = Vec2::new(200.0, 70.0);
+        w.step(Input::default());
+        let e = w.enemies.pos[0];
+        assert!(e.y > 0.3 && e.x > 199.0, "enemy should chase the clone, at {e:?}");
+        let (mut strikes, mut popped) = (0, false);
+        for _ in 0..60 * 8 {
+            w.step(Input::default());
+            strikes += w.events.iter().filter(|e| matches!(e, Event::CloneStrike { .. })).count();
+            popped |= w.events.iter().any(|e| matches!(e, Event::ClonePopped { .. }));
+        }
+        assert!(strikes > 3, "clone should keep striking, got {strikes}");
+        assert!(popped, "clone should pop when its time or hits run out");
     }
 
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
