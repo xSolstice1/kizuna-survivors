@@ -2,6 +2,7 @@
 
 use crate::campaign::{Difficulty, Mechanic, StageDef, StageId};
 use crate::content::*;
+use crate::gear::{self, Item, Loadout, Rarity, Unique};
 use crate::grid::Grid;
 use crate::meta::Bonus;
 use crate::stage;
@@ -43,11 +44,15 @@ pub struct WorldConfig {
     pub meta: Bonus,
     pub stage: StageId,
     pub difficulty: Difficulty,
+    /// Nightmare+N (0 = plain difficulty).
+    pub ascension: u32,
+    /// The hero's equipped gear.
+    pub gear: Loadout,
 }
 
 impl Default for WorldConfig {
     fn default() -> Self {
-        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default(), stage: StageId::Shotengai, difficulty: Difficulty::Normal }
+        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default(), stage: StageId::Shotengai, difficulty: Difficulty::Normal, ascension: 0, gear: Loadout::default() }
     }
 }
 
@@ -69,7 +74,9 @@ pub enum RunState {
 /// Things that happened this tick, for rendering/audio. Cleared every step.
 #[derive(Clone, Copy, Debug)]
 pub enum Event {
-    Hit { pos: Vec2, amount: f32 },
+    Hit { pos: Vec2, amount: f32, crit: bool },
+    /// Equipment dropped (auto-collected).
+    GearDrop { pos: Vec2, rarity: Rarity },
     Kill { pos: Vec2, kind: EnemyKind },
     PlayerHurt,
     LevelUp,
@@ -257,6 +264,8 @@ pub struct Hazard {
     pub life: f32,
     pub kind: HazardKind,
     tick: f32,
+    /// Set bonuses' own strikes: never hurt the player.
+    pub friendly: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -576,6 +585,10 @@ pub struct OwnedWeapon {
     timer: f32,
     /// Orbit angle (MoonOrbs) / last pulse age (SakuraField), exposed for rendering.
     pub phase: f32,
+    /// Granted by the Arsenal slot: takes no weapon slot and never levels in the run.
+    pub extra: bool,
+    /// Damage multiplier (Arsenal item level).
+    pub power: f32,
 }
 
 pub struct World {
@@ -664,6 +677,13 @@ pub struct World {
     elite_wave_done: bool,
     /// World hazards and boss strikes on the field.
     pub hazards: Vec<Hazard>,
+    /// Equipment found this run (banked when it ends).
+    pub loot: Vec<Item>,
+    /// Gear effect timers: thunderclap, starburst, set tag, set lightning, aegis, second wind.
+    gear_timers: [f32; 6],
+    gear_kills: u32,
+    /// Crits waiting to explode (Eclipse): (position, damage).
+    eclipses: Vec<(Vec2, f32)>,
     next_hazard: f32,
     pending_spawns: Vec<(EnemyKind, Vec2)>,
     /// A shrine waiting on the ground.
@@ -689,8 +709,28 @@ impl World {
         let rng = Rng::new(cfg.seed);
         let hero = hero_def(cfg.hero);
         let signature = hero.signature;
-        let bonus = hero.innate.plus(cfg.meta);
-        let max_hp = 100.0 * (1.0 + bonus.max_hp);
+        let mut bonus = hero.innate.plus(cfg.meta).plus(cfg.gear.bonus);
+        let g = &cfg.gear;
+        bonus.revivals += g.unique(Unique::Phoenix) as u8;
+        bonus.greed += 0.5 * g.unique(Unique::Fortune);
+        bonus.gear_find += 0.3 * g.unique(Unique::Fortune);
+        // Endless gear can stack stats without bound; keep the run playable.
+        bonus.cooldown = bonus.cooldown.min(0.6);
+        bonus.move_speed = bonus.move_speed.min(1.0);
+        bonus.crit_chance = bonus.crit_chance.min(1.0);
+        let glass = if g.unique(Unique::GlassLotus) > 0.0 { 0.8 } else { 1.0 };
+        let max_hp = 100.0 * (1.0 + bonus.max_hp) * glass;
+        let mut weapons = vec![OwnedWeapon { kind: signature, level: 1, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
+        if let Some((kind, level, awakened, power)) = g.arsenal {
+            match weapons.iter_mut().find(|w| w.kind == kind) {
+                // Same as the signature: the Arsenal raises it instead.
+                Some(w) => {
+                    w.level = w.level.max(level);
+                    w.awakened |= awakened;
+                }
+                None => weapons.push(OwnedWeapon { kind, level, awakened, timer: 0.0, phase: 0.0, extra: true, power }),
+            }
+        }
         let cell = 28.0;
         let dim = ((cfg.recycle_radius * 2.2) / cell).ceil() as usize;
         World {
@@ -707,7 +747,7 @@ impl World {
                 special: 0.0,
                 form: 0.0,
             },
-            weapons: vec![OwnedWeapon { kind: signature, level: 1, awakened: false, timer: 0.0, phase: 0.0 }],
+            weapons,
             passives: Vec::new(),
             enemies: Enemies::default(),
             projectiles: Projectiles::default(),
@@ -769,6 +809,10 @@ impl World {
             second_boss_spawned: false,
             elite_wave_done: false,
             hazards: Vec::new(),
+            loot: Vec::new(),
+            gear_timers: [4.0, 6.0, 6.0, 3.0, 0.0, 0.0],
+            gear_kills: 0,
+            eclipses: Vec::new(),
             next_hazard: 45.0,
             pending_spawns: Vec::new(),
             shrine: None,
@@ -818,11 +862,16 @@ impl World {
         self.update_effects();
         self.move_projectiles_and_hit();
         if input.special {
+            let before = self.player.form;
             self.use_special();
+            if before <= 0.0 && self.player.form > 0.0 {
+                self.player.form += 2.0 * self.cfg.gear.unique(Unique::Overflow);
+            }
         }
         self.contact_damage();
         self.update_shots();
         self.update_hazards();
+        self.update_gear();
         self.update_pickups();
         // Everything that reads the grid must run before this: removal reorders
         // the enemy arrays and invalidates the grid's indices.
@@ -849,7 +898,10 @@ impl World {
     }
     fn might(&self) -> f32 {
         let sake = if self.damage_buff > 0.0 { DAMAGE_BUFF } else { 1.0 } * if self.form_kind() == Some(SpecialKind::Firmament) { DOMAIN_MIGHT } else { 1.0 };
-        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake
+        let g = &self.cfg.gear;
+        let fury = if self.player.hp < self.player.max_hp * 0.4 { 1.0 + 0.3 * g.unique(Unique::Berserker) } else { 1.0 };
+        let lotus = 1.0 + 0.35 * g.unique(Unique::GlassLotus);
+        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake * fury * lotus
     }
     fn haste(&self) -> f32 {
         let frenzy = match self.form_kind() {
@@ -896,6 +948,7 @@ impl World {
             s.amount += self.passive_level(PassiveKind::Abundance) as u32;
         }
         s.duration *= self.persistence();
+        s.damage *= w.power;
         s
     }
 
@@ -952,6 +1005,13 @@ impl World {
         if self.form_kind() == Some(SpecialKind::Divine) {
             return;
         }
+        let aegis = self.cfg.gear.unique(Unique::Aegis);
+        if aegis > 0.0 && self.gear_timers[4] <= 0.0 {
+            self.gear_timers[4] = 14.0 / aegis;
+            self.player.iframes = 0.5;
+            self.events.push(Event::Warded);
+            return;
+        }
         // Kuon's ward: a hit is simply not allowed to land.
         if self.cfg.hero == HeroId::Kuon && self.ward_cd <= 0.0 {
             self.ward_cd = WARD_RECHARGE;
@@ -969,6 +1029,12 @@ impl World {
         self.player.hp = (self.player.hp - dmg).max(0.0);
         self.player.iframes = IFRAMES;
         self.events.push(Event::PlayerHurt);
+        let wind = self.cfg.gear.unique(Unique::SecondWind);
+        if wind > 0.0 && self.player.hp > 0.0 && self.player.hp < self.player.max_hp * 0.3 && self.gear_timers[5] <= 0.0 {
+            self.gear_timers[5] = 60.0 / wind;
+            self.player.iframes = 3.0;
+            self.events.push(Event::Warded);
+        }
         if self.player.hp <= 0.0 {
             if self.revivals_left > 0 {
                 self.revivals_left -= 1;
@@ -1039,12 +1105,16 @@ impl World {
     fn enemy_hp_scale(&self) -> f32 {
         let st = self.stage();
         let late = 1.0 + st.late_hp * (self.time / st.final_at).min(1.2).powi(2);
-        hp_scale(st.pace(self.time)) * late * st.tier * self.cfg.difficulty.hp()
+        hp_scale(st.pace(self.time)) * late * st.tier * self.cfg.difficulty.hp() * self.ascension_hp()
+    }
+
+    fn ascension_hp(&self) -> f32 {
+        1.0 + 0.4 * self.cfg.ascension as f32
     }
 
     /// Enemy damage multiplier now (contact, bullets, hazards).
     pub fn enemy_damage_scale(&self) -> f32 {
-        damage_scale(self.stage().pace(self.time)) * self.cfg.difficulty.damage()
+        damage_scale(self.stage().pace(self.time)) * self.cfg.difficulty.damage() * (1.0 + 0.12 * self.cfg.ascension as f32)
     }
 
     fn spawn_enemy(&mut self, kind: EnemyKind, pos: Vec2) {
@@ -1053,7 +1123,7 @@ impl World {
         }
         let d = enemy_def(kind);
         let hp = if kind.is_boss() {
-            d.hp * self.stage().tier * self.cfg.difficulty.hp() * self.mods.enemy_hp
+            d.hp * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
         } else {
             d.hp * self.enemy_hp_scale() * self.mods.enemy_hp
         };
@@ -1101,7 +1171,7 @@ impl World {
     fn director(&mut self) {
         let st = self.stage();
         let pace = st.pace(self.time);
-        let density = self.cfg.difficulty.density() * if st.in_crisis(self.time) { 1.35 } else { 1.0 };
+        let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * if st.in_crisis(self.time) { 1.35 } else { 1.0 };
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
             None if self.night_lord_spawned => 0,
@@ -1306,7 +1376,7 @@ impl World {
                     let n = (n as f32 * more) as usize;
                     for k in 0..n {
                         let off = if k == 0 { Vec2::ZERO } else { Vec2::from_angle(self.rng.range(0.0, tau)) * self.rng.range(40.0, 170.0) };
-                        self.hazards.push(Hazard { pos: player + off, radius: 34.0, warn: 1.1 + k as f32 * 0.06, life: 0.0, kind: HazardKind::Blast { damage: 14.0 * dmg }, tick: 0.0 });
+                        self.hazards.push(Hazard { pos: player + off, radius: 34.0, warn: 1.1 + k as f32 * 0.06, life: 0.0, kind: HazardKind::Blast { damage: 14.0 * dmg }, tick: 0.0, friendly: false });
                     }
                 }
                 Move::Summon { n } => {
@@ -1360,29 +1430,32 @@ impl World {
                 let n = 2 + diff as usize + crisis as usize;
                 for k in 0..n {
                     let off = Vec2::from_angle(self.rng.range(0.0, tau)) * if k == 0 { self.rng.range(0.0, 30.0) } else { self.rng.range(50.0, 170.0) };
-                    self.hazards.push(Hazard { pos: p + off, radius: 44.0, warn: 1.3, life: 0.0, kind: HazardKind::Blast { damage: 12.0 * dmg }, tick: 0.0 });
+                    self.hazards.push(Hazard { pos: p + off, radius: 44.0, warn: 1.3, life: 0.0, kind: HazardKind::Blast { damage: 12.0 * dmg }, tick: 0.0, friendly: false });
                 }
             }
             Mechanic::Pressure => {
                 self.next_hazard = gap(15.0, 8.0);
                 let pos = p + Vec2::from_angle(self.rng.range(0.0, tau)) * 280.0;
-                self.hazards.push(Hazard { pos, radius: 85.0, warn: 1.0, life: 22.0, kind: HazardKind::Pressure, tick: 0.0 });
+                self.hazards.push(Hazard { pos, radius: 85.0, warn: 1.0, life: 22.0, kind: HazardKind::Pressure, tick: 0.0, friendly: false });
             }
             Mechanic::Downpour => {
                 self.next_hazard = gap(6.0, 3.0);
                 let lead = if self.player.moving { self.player.facing * 30.0 } else { Vec2::ZERO };
-                self.hazards.push(Hazard { pos: p + lead, radius: 36.0, warn: 1.2, life: 0.0, kind: HazardKind::Lightning { damage: 16.0 * dmg }, tick: 0.0 });
+                self.hazards.push(Hazard { pos: p + lead, radius: 36.0, warn: 1.2, life: 0.0, kind: HazardKind::Lightning { damage: 16.0 * dmg }, tick: 0.0, friendly: false });
             }
             Mechanic::Domains => {
                 self.next_hazard = gap(100.0, 55.0);
                 let pos = p + Vec2::from_angle(self.rng.range(0.0, tau)) * self.rng.range(0.0, 80.0);
-                self.hazards.push(Hazard { pos, radius: 210.0, warn: 3.0, life: 14.0, kind: HazardKind::Domain { damage: 6.0 * dmg }, tick: 1.0 });
+                self.hazards.push(Hazard { pos, radius: 210.0, warn: 3.0, life: 14.0, kind: HazardKind::Domain { damage: 6.0 * dmg }, tick: 1.0, friendly: false });
             }
         }
     }
 
     /// True while the player stands in live spirit pressure.
     fn under_pressure(&self) -> bool {
+        if self.cfg.gear.has_set(StageId::PaleCitadel) {
+            return false;
+        }
         let p = self.player.pos;
         self.hazards.iter().any(|h| h.kind == HazardKind::Pressure && h.warn <= 0.0 && (h.pos - p).length_sq() < h.radius * h.radius)
     }
@@ -1394,7 +1467,9 @@ impl World {
         }
         let p = self.player.pos;
         let mut hurt = 0.0f32;
-        let mut fired: Vec<(Vec2, f32, u8)> = Vec::new();
+        let mut fired: Vec<(Vec2, f32, u8, bool)> = Vec::new();
+        let g = &self.cfg.gear;
+        let (tag_safe, bolt_safe, domain_safe) = (g.has_set(StageId::EmberLeaf), g.has_set(StageId::Rainward), g.has_set(StageId::Shatterline));
         for h in &mut self.hazards {
             let inside = (h.pos - p).length_sq() <= (h.radius + PLAYER_RADIUS).powi(2);
             if h.warn > 0.0 {
@@ -1402,13 +1477,15 @@ impl World {
                 if h.warn <= 0.0 {
                     match h.kind {
                         HazardKind::Blast { damage } | HazardKind::Lightning { damage } => {
-                            if inside {
+                            let bolt = matches!(h.kind, HazardKind::Lightning { .. });
+                            let safe = h.friendly || if bolt { bolt_safe } else { tag_safe };
+                            if inside && !safe {
                                 hurt = hurt.max(damage);
                             }
-                            fired.push((h.pos, h.radius, matches!(h.kind, HazardKind::Lightning { .. }) as u8));
+                            fired.push((h.pos, h.radius, bolt as u8, h.friendly));
                             h.life = -1.0;
                         }
-                        HazardKind::Domain { .. } => fired.push((h.pos, h.radius, 2)),
+                        HazardKind::Domain { .. } => fired.push((h.pos, h.radius, 2, false)),
                         HazardKind::Pressure => {}
                     }
                 }
@@ -1426,7 +1503,7 @@ impl World {
                     h.tick -= DT;
                     if h.tick <= 0.0 {
                         h.tick = 1.0;
-                        if inside {
+                        if inside && !domain_safe {
                             hurt = hurt.max(damage);
                         }
                     }
@@ -1436,8 +1513,9 @@ impl World {
         }
         self.hazards.retain(|h| h.warn > 0.0 || h.life > 0.0);
         let blast = 60.0 * self.enemy_hp_scale();
-        for (pos, radius, kind) in fired {
+        for (pos, radius, kind, friendly) in fired {
             self.events.push(Event::Hazard { pos, radius, kind });
+            let blast = if friendly { blast * 2.0 } else { blast };
             if kind < 2 {
                 // Tags and lightning don't take sides.
                 self.query_circle(pos, radius);
@@ -2638,11 +2716,23 @@ impl World {
     }
 
     fn hurt_enemy(&mut self, j: usize, amount: f32, dir: Vec2) {
+        let mut amount = amount;
+        if self.enemies.kind[j].rank() >= Rank::Elite {
+            amount *= 1.0 + self.bonus.boss_damage;
+        }
+        let crit = self.bonus.crit_chance > 0.0 && self.rng.f32() < self.bonus.crit_chance;
+        if crit {
+            amount *= 1.5 + self.bonus.crit_damage;
+            let ecl = self.cfg.gear.unique(Unique::Eclipse);
+            if ecl > 0.0 && self.eclipses.len() < 64 {
+                self.eclipses.push((self.enemies.pos[j], amount * 0.4 * ecl));
+            }
+        }
         let e = &mut self.enemies;
         e.hp[j] -= amount;
         e.flash[j] = 5;
         e.push[j] += dir.normalize_or_zero() * (150.0 * e.knock[j]);
-        self.events.push(Event::Hit { pos: e.pos[j], amount });
+        self.events.push(Event::Hit { pos: e.pos[j], amount, crit });
     }
 
     /// Indices of enemies whose body overlaps a circle, into `self.scratch`.
@@ -2671,6 +2761,76 @@ impl World {
         best.map(|(_, e)| e)
     }
 
+    /// Rolls a piece of equipment for this stage, difficulty and Ascension.
+    fn drop_gear(&mut self, pos: Vec2, min: Rarity) {
+        let (st, d, a) = (self.cfg.stage, self.cfg.difficulty.index(), self.cfg.ascension);
+        let r = gear::roll_rarity(&mut self.rng, gear::drop_tier(st, d, a), self.bonus.gear_find, min);
+        let item = gear::roll_item(&mut self.rng, None, r, gear::drop_ilvl(st, d, a), Some(st));
+        self.events.push(Event::GearDrop { pos, rarity: r });
+        self.loot.push(item);
+    }
+
+    /// Unique effects and 4-piece set strikes. Reads the grid.
+    fn update_gear(&mut self) {
+        for (pos, dmg) in std::mem::take(&mut self.eclipses) {
+            self.query_circle(pos, 40.0);
+            for k in 0..self.scratch.len() {
+                let j = self.scratch[k] as usize;
+                let dir = self.enemies.pos[j] - pos;
+                self.hurt_enemy(j, dmg, dir);
+            }
+            self.events.push(Event::Burst { pos, radius: 40.0, style: 1 });
+        }
+        if self.cfg.stress.is_some() || (self.cfg.gear.uniques.is_empty() && self.cfg.gear.sets4.is_empty()) {
+            return;
+        }
+        for t in self.gear_timers.iter_mut() {
+            *t -= DT;
+        }
+        let p = self.player.pos;
+        let power = self.might() * (1.0 + self.time / 600.0);
+        let tc = self.cfg.gear.unique(Unique::Thunderclap);
+        if tc > 0.0 && self.gear_timers[0] <= 0.0 {
+            self.gear_timers[0] = 4.0;
+            self.query_circle(p, 320.0);
+            let mut near: Vec<usize> = self.scratch.iter().map(|j| *j as usize).collect();
+            near.sort_by(|a, b| (self.enemies.pos[*a] - p).length_sq().partial_cmp(&(self.enemies.pos[*b] - p).length_sq()).unwrap());
+            for &j in near.iter().take((3.0 * tc) as usize) {
+                let to = self.enemies.pos[j];
+                self.events.push(Event::Bolt { from: p, to });
+                self.hurt_enemy(j, 45.0 * power, to - p);
+            }
+        }
+        let sb = self.cfg.gear.unique(Unique::Starburst);
+        if sb > 0.0 && self.gear_timers[1] <= 0.0 {
+            self.gear_timers[1] = 6.0 / sb;
+            let r = 120.0 * self.area_mult();
+            self.query_circle(p, r);
+            for k in 0..self.scratch.len() {
+                let j = self.scratch[k] as usize;
+                let dir = self.enemies.pos[j] - p;
+                self.hurt_enemy(j, 35.0 * power, dir);
+            }
+            self.events.push(Event::Burst { pos: p, radius: r, style: 1 });
+        }
+        let pick = |w: &World, r: f32| -> Option<Vec2> {
+            let e = &w.enemies;
+            (0..e.len()).filter(|&i| (e.pos[i] - p).length_sq() < r * r).min_by(|&a, &b| (e.pos[a] - p).length_sq().partial_cmp(&(e.pos[b] - p).length_sq()).unwrap()).map(|i| e.pos[i])
+        };
+        if self.cfg.gear.has_set(StageId::EmberLeaf) && self.gear_timers[2] <= 0.0 {
+            self.gear_timers[2] = 6.0;
+            if let Some(q) = pick(self, 260.0) {
+                self.hazards.push(Hazard { pos: q, radius: 56.0, warn: 0.6, life: 0.0, kind: HazardKind::Blast { damage: 0.0 }, tick: 0.0, friendly: true });
+            }
+        }
+        if self.cfg.gear.has_set(StageId::Rainward) && self.gear_timers[3] <= 0.0 {
+            self.gear_timers[3] = 3.0;
+            if let Some(q) = pick(self, 250.0) {
+                self.hazards.push(Hazard { pos: q, radius: 40.0, warn: 0.35, life: 0.0, kind: HazardKind::Lightning { damage: 0.0 }, tick: 0.0, friendly: true });
+            }
+        }
+    }
+
     fn remove_dead_enemies(&mut self) {
         self.dead.clear();
         self.dead.extend((0..self.enemies.len()).filter(|&i| self.enemies.hp[i] <= 0.0));
@@ -2684,10 +2844,31 @@ impl World {
                 self.chests.push((pos, tier));
             }
             if self.player.form <= 0.0 {
-                self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
+                self.player.special = (self.player.special + self.mods.special_rate * (1.0 + self.bonus.special_charge) / SPECIAL_KILLS).min(1.0);
             }
             self.events.push(Event::Kill { pos, kind });
             self.kills_by_kind[kind.index()] += 1;
+            if self.cfg.stress.is_none() {
+                let find = 1.0 + self.bonus.gear_find;
+                let (n, min) = match kind.rank() {
+                    Rank::Fodder => ((self.rng.f32() < 0.0004 * find) as usize, Rarity::Common),
+                    Rank::Elite => ((self.rng.f32() < 0.06 * find) as usize, Rarity::Common),
+                    Rank::Mini => (1, Rarity::Rare),
+                    Rank::Boss => (1 + (self.rng.f32() < 0.5) as usize, Rarity::Rare),
+                    Rank::Final => (2, Rarity::Epic),
+                };
+                for _ in 0..n {
+                    self.drop_gear(pos, min);
+                }
+                self.gear_kills += 1;
+                let vamp = self.cfg.gear.unique(Unique::Vampiric);
+                if vamp > 0.0 && self.gear_kills % 25 == 0 {
+                    self.heal(self.player.max_hp * 0.01 * vamp);
+                }
+                if self.cfg.gear.has_set(StageId::PaleCitadel) && self.rng.f32() < 0.02 {
+                    self.heal(2.0);
+                }
+            }
             if self.cfg.stress.is_none() {
                 let coin = match coin_drop(kind) {
                     0 if self.rng.f32() < 0.004 => 1,
@@ -2698,7 +2879,7 @@ impl World {
                     self.coins.push((pos, coin));
                 }
             }
-            if kind.rank() == Rank::Elite && self.cfg.stress.is_none() && self.rng.f32() < ONI_PICKUP_CHANCE && self.pickups.len() < MAX_PICKUPS {
+            if kind.rank() == Rank::Elite && self.cfg.stress.is_none() && self.rng.f32() < ONI_PICKUP_CHANCE * (1.0 + self.bonus.luck) && self.pickups.len() < MAX_PICKUPS {
                 let k = PickupKind::roll(self.rng.f32());
                 self.pickups.push((pos, k));
                 self.events.push(Event::PickupSpawned { pos, kind: k });
@@ -3450,6 +3631,9 @@ impl World {
             }
             s.life > 0.0
         });
+        if hit && self.cfg.gear.has_set(StageId::ShrineValley) && self.rng.f32() < 0.3 {
+            hit = false;
+        }
         if hit && self.cfg.stress.is_none() && self.player.iframes <= 0.0 {
             if self.cfg.hero == HeroId::Ren {
                 // Barrier: blocks a fireball outright when charged; otherwise softens it.
@@ -3483,7 +3667,7 @@ impl World {
             .iter()
             .filter(|w| {
                 let (p, need) = complement(w.kind);
-                !w.awakened && w.level >= MAX_LEVEL && self.passive_level(p) >= need
+                !w.awakened && !w.extra && w.level >= MAX_LEVEL && self.passive_level(p) >= need
             })
             .map(|w| w.kind)
             .collect()
@@ -3493,7 +3677,14 @@ impl World {
     /// an Awakening first if one is eligible, then levels for owned items.
     pub fn open_chest(&mut self, min_rewards: u8) {
         self.chests_opened += 1;
-        let tier = chest_roll(self.rng.f32()).max(min_rewards);
+        // Luck pushes the roll toward the rarer reward counts.
+        let roll = 1.0 - (1.0 - self.rng.f32()) / (1.0 + self.bonus.luck);
+        let extra = self.cfg.gear.unique(Unique::TreasureSense) as u8;
+        let tier = chest_roll(roll).max(min_rewards) + extra;
+        if self.cfg.stress.is_none() && self.rng.f32() < 0.05 * (1.0 + self.bonus.gear_find) {
+            let p = self.player.pos;
+            self.drop_gear(p, Rarity::Common);
+        }
         let sen = 10 * tier as u32 + self.rng.range(0.0, 10.0) as u32;
         self.gain_sen(sen);
         let mut items = Vec::new();
@@ -3506,7 +3697,7 @@ impl World {
         }
         while items.len() < tier as usize {
             let mut pool: Vec<Upgrade> = Vec::new();
-            pool.extend(self.weapons.iter().filter(|w| w.level < MAX_LEVEL).map(|w| Upgrade::Weapon(w.kind)));
+            pool.extend(self.weapons.iter().filter(|w| w.level < MAX_LEVEL && !w.extra).map(|w| Upgrade::Weapon(w.kind)));
             pool.extend(self.passives.iter().filter(|(k, l)| *l < passive_max(*k)).map(|(k, _)| Upgrade::Passive(*k)));
             if pool.is_empty() {
                 self.heal(30.0);
@@ -3600,7 +3791,7 @@ impl World {
             }
             ShrineEvent::Patience => {
                 m.enemy_hp *= 1.15;
-                let open: Vec<usize> = (0..self.weapons.len()).filter(|&i| self.weapons[i].level < MAX_LEVEL).collect();
+                let open: Vec<usize> = (0..self.weapons.len()).filter(|&i| self.weapons[i].level < MAX_LEVEL && !self.weapons[i].extra).collect();
                 if !open.is_empty() {
                     let i = open[(self.rng.next_u32() as usize) % open.len()];
                     self.weapons[i].level = (self.weapons[i].level + 2).min(MAX_LEVEL);
@@ -3640,12 +3831,12 @@ impl World {
     fn make_offer(&mut self) {
         let mut pool: Vec<Upgrade> = Vec::new();
         for w in &self.weapons {
-            if w.level < MAX_LEVEL {
+            if w.level < MAX_LEVEL && !w.extra {
                 pool.push(Upgrade::Weapon(w.kind));
             }
         }
         let hero = hero_def(self.cfg.hero);
-        if self.weapons.len() < hero.weapon_slots {
+        if self.weapons.iter().filter(|w| !w.extra).count() < hero.weapon_slots {
             pool.extend(hero.weapon_pool().into_iter().filter(|k| self.weapon_level(*k) == 0).map(Upgrade::Weapon));
         }
         for (k, l) in &self.passives {
@@ -3694,7 +3885,7 @@ impl World {
         match u {
             Upgrade::Weapon(k) => match self.weapons.iter_mut().find(|w| w.kind == k) {
                 Some(w) => w.level += 1,
-                None => self.weapons.push(OwnedWeapon { kind: k, level: 1, awakened: false, timer: 0.0, phase: 0.0 }),
+                None => self.weapons.push(OwnedWeapon { kind: k, level: 1, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }),
             },
             Upgrade::Passive(k) => {
                 match self.passives.iter_mut().find(|(pk, _)| *pk == k) {
@@ -3716,7 +3907,7 @@ impl World {
         for k in hero.weapon_pool().into_iter().take(hero.weapon_slots) {
             match self.weapons.iter_mut().find(|w| w.kind == k) {
                 Some(w) => w.level = MAX_LEVEL,
-                None => self.weapons.push(OwnedWeapon { kind: k, level: MAX_LEVEL, awakened: false, timer: 0.0, phase: 0.0 }),
+                None => self.weapons.push(OwnedWeapon { kind: k, level: MAX_LEVEL, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }),
             }
             let (c, need) = complement(k);
             match self.passives.iter_mut().find(|(pk, _)| *pk == c) {
@@ -3738,7 +3929,7 @@ impl World {
     pub fn debug_all_weapons(&mut self) {
         for k in ALL_WEAPONS {
             if self.weapon_level(k) == 0 {
-                self.weapons.push(OwnedWeapon { kind: k, level: 5, awakened: false, timer: 0.0, phase: 0.0 });
+                self.weapons.push(OwnedWeapon { kind: k, level: 5, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 });
             }
         }
     }
@@ -3906,7 +4097,7 @@ mod tests {
     fn damage_dealt_by(kind: WeaponKind) -> f32 {
         let mut w = World::new(WorldConfig { seed: 3, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
         // Library check: test every weapon even if no current hero can roll it.
-        w.weapons = vec![OwnedWeapon { kind, level: 4, awakened: false, timer: 0.0, phase: 0.0 }];
+        w.weapons = vec![OwnedWeapon { kind, level: 4, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
         for k in 0..40 {
             let a = k as f32 / 40.0 * std::f32::consts::TAU;
             let r = 30.0 + (k % 4) as f32 * 25.0;
@@ -3973,7 +4164,7 @@ mod tests {
             }
         }
         // With every slot filled, no new weapon may be offered.
-        w.weapons = pool.iter().take(ren.weapon_slots).map(|&k| OwnedWeapon { kind: k, level: 2, awakened: false, timer: 0.0, phase: 0.0 }).collect();
+        w.weapons = pool.iter().take(ren.weapon_slots).map(|&k| OwnedWeapon { kind: k, level: 2, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }).collect();
         for _ in 0..300 {
             w.make_offer();
             for u in w.offer.take().unwrap() {
@@ -4230,7 +4421,7 @@ mod tests {
     #[test]
     fn fox_mirage_clones_decoy_strike_and_pop() {
         let mut w = World::new(WorldConfig { hero: HeroId::Riku, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
-        w.weapons = vec![OwnedWeapon { kind: WeaponKind::FoxMirage, level: 1, awakened: false, timer: 0.0, phase: 0.0 }];
+        w.weapons = vec![OwnedWeapon { kind: WeaponKind::FoxMirage, level: 1, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
         w.step(Input::default());
         assert_eq!(w.clones.len(), 1, "one clone at level 1");
         // Decoy: an enemy to the right of the player, a clone just above the enemy.
@@ -4445,7 +4636,7 @@ mod tests {
     fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {
         let mut w = World::new(WorldConfig { seed: 5, hero, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
         w.time = AWAKEN_FROM + 1.0;
-        w.weapons = vec![OwnedWeapon { kind, level: MAX_LEVEL, awakened, timer: 0.0, phase: 0.0 }];
+        w.weapons = vec![OwnedWeapon { kind, level: MAX_LEVEL, awakened, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
         for k in 0..60 {
             let a = k as f32 / 60.0 * std::f32::consts::TAU;
             w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * (40.0 + (k % 5) as f32 * 45.0));

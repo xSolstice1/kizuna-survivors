@@ -4,6 +4,7 @@ pub mod bot;
 pub mod campaign;
 pub mod content;
 pub mod enemies;
+pub mod gear;
 pub mod grid;
 pub mod math;
 pub mod meta;

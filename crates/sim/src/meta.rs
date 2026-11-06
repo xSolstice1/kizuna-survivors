@@ -2,6 +2,8 @@
 //! The profile is plain `key=value` text so the client can keep it in localStorage.
 
 use crate::campaign::{Difficulty, Relic, StageId, ALL_RELICS, ALL_STAGES};
+use crate::gear::{self, Item, Loadout, Rarity, Slot, LOADOUT};
+use crate::rng::Rng;
 use crate::content::{EnemyKind, HeroId, PassiveKind, ShrineEvent, WeaponKind, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
 use crate::world::{RunState, World};
 
@@ -23,6 +25,16 @@ pub struct Bonus {
     pub recovery: f32,
     /// Extra lives.
     pub revivals: u8,
+    /// Equipment-only stats (fractions).
+    pub crit_chance: f32,
+    pub crit_damage: f32,
+    /// Extra damage to elites and bosses.
+    pub boss_damage: f32,
+    pub special_charge: f32,
+    /// Better chests and more floor pickups.
+    pub luck: f32,
+    /// More and rarer equipment drops.
+    pub gear_find: f32,
 }
 
 impl Bonus {
@@ -39,6 +51,12 @@ impl Bonus {
             armor: self.armor + o.armor,
             recovery: self.recovery + o.recovery,
             revivals: self.revivals + o.revivals,
+            crit_chance: self.crit_chance + o.crit_chance,
+            crit_damage: self.crit_damage + o.crit_damage,
+            boss_damage: self.boss_damage + o.boss_damage,
+            special_charge: self.special_charge + o.special_charge,
+            luck: self.luck + o.luck,
+            gear_find: self.gear_find + o.gear_find,
         }
     }
 }
@@ -163,15 +181,15 @@ impl PowerUp {
 pub fn unlock_text(h: HeroId) -> &'static str {
     match h {
         HeroId::Ren => "Available from the start.",
-        HeroId::Riku => "As Ren, defeat 2,000 Otherworlders in one night.",
-        HeroId::Shun => "As Riku, defeat the Great Oni.",
-        HeroId::Toya => "As Shun, survive 12:00.",
+        HeroId::Riku => "As Ren, clear Neon Shotengai.",
+        HeroId::Shun => "As Riku, clear Hidden Shrine Valley.",
+        HeroId::Toya => "As Shun, clear Pale Citadel of Souls.",
         HeroId::Kaede => "As Ren, Awaken a weapon.",
         HeroId::Mika => "As Riku, defeat the Night Lord.",
         HeroId::Haru => "As Toya, open 10 chests in one night.",
         HeroId::Nanami => "As Shun, take 3 shrine blessings in one night.",
         HeroId::Yuzu => "As Toya, reach level 60.",
-        HeroId::Kuon => "As Toya, defeat the Night Lord.",
+        HeroId::Kuon => "As Toya, clear Rainward 13.",
     }
 }
 
@@ -218,6 +236,16 @@ pub struct Profile {
     pub stage_best: [[f32; 3]; ALL_STAGES.len()],
     pub stage_bosses: [u8; ALL_STAGES.len()],
     pub relics: Vec<Relic>,
+    /// Nightmare+N: highest Ascension open per stage (a Nightmare+N clear opens N+1) and the pick.
+    pub asc_open: [u32; ALL_STAGES.len()],
+    pub ascension: u32,
+    /// Equipment: the shared bag, each hero's 12 slots (item ids, 0 = empty), Spirit Dust,
+    /// Shrine Draw pity and the next item id.
+    pub items: Vec<Item>,
+    pub loadouts: [[u32; 12]; ALL_HEROES.len()],
+    pub dust: u32,
+    pub draw_pity: u32,
+    pub next_item: u32,
     /// Settings (0..=1).
     pub music_volume: f32,
     pub sfx_volume: f32,
@@ -261,6 +289,13 @@ impl Default for Profile {
             stage_best: [[0.0; 3]; ALL_STAGES.len()],
             stage_bosses: [0; ALL_STAGES.len()],
             relics: Vec::new(),
+            asc_open: [0; ALL_STAGES.len()],
+            ascension: 0,
+            items: Vec::new(),
+            loadouts: [[0; 12]; ALL_HEROES.len()],
+            dust: 0,
+            draw_pity: 0,
+            next_item: 1,
             music_volume: 0.6,
             sfx_volume: 0.8,
         }
@@ -279,7 +314,14 @@ pub struct RunReport {
     pub relic: Option<Relic>,
     /// A stage this clear opened.
     pub stage_unlocked: Option<StageId>,
+    /// Equipment banked from the run (ids into the bag).
+    pub gear: Vec<u32>,
+    /// A new Ascension tier this clear opened.
+    pub ascension_opened: Option<u32>,
 }
+
+/// Bag size; drops beyond it are salvaged into Spirit Dust automatically.
+pub const BAG_SIZE: usize = 300;
 
 impl Profile {
     pub fn rank(&self, p: PowerUp) -> u8 {
@@ -332,6 +374,150 @@ impl Profile {
         self.unlocked.contains(&h)
     }
 
+    // ───────────── Equipment ─────────────
+
+    pub fn item(&self, id: u32) -> Option<&Item> {
+        self.items.iter().find(|i| i.id == id)
+    }
+
+    /// Adds an item to the bag (or salvages it when the bag is full). Returns its id (0 if salvaged).
+    pub fn add_item(&mut self, mut it: Item) -> u32 {
+        if self.items.len() >= BAG_SIZE {
+            self.dust += it.salvage();
+            return 0;
+        }
+        it.id = self.next_item;
+        self.next_item += 1;
+        let id = it.id;
+        self.items.push(it);
+        id
+    }
+
+    /// Who is wearing item `id`: (hero index, loadout position).
+    pub fn worn_by(&self, id: u32) -> Option<(usize, usize)> {
+        for (h, l) in self.loadouts.iter().enumerate() {
+            if let Some(p) = l.iter().position(|x| *x == id) {
+                return Some((h, p));
+            }
+        }
+        None
+    }
+
+    /// Equips `id` on `hero` at loadout position `pos` (moving it off anyone else).
+    pub fn equip(&mut self, hero: HeroId, pos: usize, id: u32) -> bool {
+        let Some(it) = self.item(id) else { return false };
+        if pos >= LOADOUT.len() || LOADOUT[pos] != it.slot {
+            return false;
+        }
+        if let Some((h, p)) = self.worn_by(id) {
+            self.loadouts[h][p] = 0;
+        }
+        self.loadouts[hero.index()][pos] = id;
+        true
+    }
+
+    pub fn unequip(&mut self, hero: HeroId, pos: usize) {
+        if pos < LOADOUT.len() {
+            self.loadouts[hero.index()][pos] = 0;
+        }
+    }
+
+    /// Where `slot` goes on `hero`: the first empty matching position, else the first match.
+    pub fn slot_for(&self, hero: HeroId, slot: Slot) -> usize {
+        let l = &self.loadouts[hero.index()];
+        let matching: Vec<usize> = (0..LOADOUT.len()).filter(|&p| LOADOUT[p] == slot).collect();
+        matching.iter().copied().find(|&p| l[p] == 0).unwrap_or(matching[0])
+    }
+
+    pub fn loadout(&self, hero: HeroId) -> Loadout {
+        let items: Vec<&Item> = self.loadouts[hero.index()].iter().filter_map(|id| if *id == 0 { None } else { self.item(*id) }).collect();
+        Loadout::from_items(&items)
+    }
+
+    /// Breaks an item into Spirit Dust (locked items are kept). Unequips it first.
+    pub fn salvage(&mut self, id: u32) -> u32 {
+        let Some(i) = self.items.iter().position(|x| x.id == id) else { return 0 };
+        if self.items[i].locked {
+            return 0;
+        }
+        if let Some((h, p)) = self.worn_by(id) {
+            self.loadouts[h][p] = 0;
+        }
+        let d = self.items.swap_remove(i).salvage();
+        self.dust += d;
+        d
+    }
+
+    /// Salvages every unlocked, unworn item at or below `max` rarity.
+    pub fn salvage_below(&mut self, max: Rarity) -> u32 {
+        let ids: Vec<u32> = self.items.iter().filter(|i| i.rarity <= max && !i.locked && self.worn_by(i.id).is_none()).map(|i| i.id).collect();
+        ids.into_iter().map(|id| self.salvage(id)).sum()
+    }
+
+    pub fn upgrade(&mut self, id: u32) -> bool {
+        let Some(i) = self.items.iter().position(|x| x.id == id) else { return false };
+        let cost = self.items[i].upgrade_cost();
+        if self.items[i].plus >= gear::MAX_PLUS || self.dust < cost {
+            return false;
+        }
+        self.dust -= cost;
+        self.items[i].plus += 1;
+        true
+    }
+
+    pub fn reroll(&mut self, id: u32, affix: usize, seed: u64) -> bool {
+        let Some(i) = self.items.iter().position(|x| x.id == id) else { return false };
+        let cost = self.items[i].reroll_cost();
+        if self.dust < cost || affix >= self.items[i].affixes.len() {
+            return false;
+        }
+        self.dust -= cost;
+        let mut rng = Rng::new(seed);
+        self.items[i].reroll(affix, &mut rng);
+        true
+    }
+
+    /// Highest item level this profile has earned access to (Shrine Draw item level).
+    pub fn draw_ilvl(&self) -> u16 {
+        let mut best = gear::drop_ilvl(StageId::Shotengai, 0, 0);
+        for (si, st) in ALL_STAGES.iter().enumerate() {
+            for d in 0..3 {
+                if self.cleared[si][d] {
+                    let asc = if d == 2 { self.asc_open[si] } else { 0 };
+                    best = best.max(gear::drop_ilvl(*st, d, asc));
+                }
+            }
+        }
+        best
+    }
+
+    /// Shrine Draw: `n` draws for Sen. Returns the new item ids (empty if unaffordable).
+    pub fn draw(&mut self, n: u32, seed: u64) -> Vec<u32> {
+        let cost = if n >= 10 { gear::DRAW10_COST } else { gear::DRAW_COST * n };
+        if self.sen < cost {
+            return Vec::new();
+        }
+        self.sen -= cost;
+        let mut rng = Rng::new(seed);
+        let ilvl = self.draw_ilvl();
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let r = gear::draw_rarity(&mut rng, self.draw_pity);
+            self.draw_pity = if r >= Rarity::Legendary { 0 } else { self.draw_pity + 1 };
+            let it = gear::roll_item(&mut rng, None, r, ilvl, None);
+            out.push(self.add_item(it));
+        }
+        out
+    }
+
+    pub fn ascension_open(&self, s: StageId) -> u32 {
+        if self.cleared[s.index()][2] {
+            self.asc_open[s.index()].max(1)
+        } else {
+            0
+        }
+    }
+
     pub fn stage_open(&self, s: StageId) -> bool {
         s.requires().is_none_or(|r| self.cleared[r.index()][0])
     }
@@ -369,6 +555,21 @@ impl Profile {
             }
         }
         self.sen += report.sen;
+        // Ascension: a Nightmare+N clear opens N+1.
+        if won && diff == Difficulty::Nightmare {
+            let si = stage.index();
+            let next = w.cfg.ascension + 1;
+            if next > self.asc_open[si] {
+                self.asc_open[si] = next;
+                report.ascension_opened = Some(next);
+            }
+        }
+        for it in &w.loot {
+            let id = self.add_item(it.clone());
+            if id != 0 {
+                report.gear.push(id);
+            }
+        }
         self.total_kills += w.kills as u64;
         self.best_time = self.best_time.max(w.time);
         self.best_level = self.best_level.max(w.player.level);
@@ -419,15 +620,15 @@ impl Profile {
         for h in ALL_HEROES {
             let earned = match h {
                 HeroId::Ren => true,
-                HeroId::Riku => as_hero == HeroId::Ren && w.kills >= 2_000,
-                HeroId::Shun => as_hero == HeroId::Riku && w.great_oni_defeated,
-                HeroId::Toya => as_hero == HeroId::Shun && w.time >= 720.0,
+                HeroId::Riku => as_hero == HeroId::Ren && won && stage == StageId::Shotengai,
+                HeroId::Shun => as_hero == HeroId::Riku && won && stage == StageId::ShrineValley,
+                HeroId::Toya => as_hero == HeroId::Shun && won && stage == StageId::PaleCitadel,
                 HeroId::Kaede => as_hero == HeroId::Ren && awakened,
                 HeroId::Mika => as_hero == HeroId::Riku && night_lord,
                 HeroId::Haru => as_hero == HeroId::Toya && w.chests_opened >= 10,
                 HeroId::Nanami => as_hero == HeroId::Shun && w.shrines_taken.len() >= 3,
                 HeroId::Yuzu => as_hero == HeroId::Toya && w.player.level >= 60,
-                HeroId::Kuon => as_hero == HeroId::Toya && night_lord,
+                HeroId::Kuon => as_hero == HeroId::Toya && won && stage == StageId::Rainward,
             };
             if earned && !self.is_unlocked(h) {
                 self.unlocked.push(h);
@@ -470,6 +671,17 @@ impl Profile {
         }
         let relics: Vec<&str> = self.relics.iter().map(|r| r.key()).collect();
         s += &format!("relics={}\n", relics.join(","));
+        let asc: Vec<String> = self.asc_open.iter().map(|a| a.to_string()).collect();
+        s += &format!("asc_open={}\nascension={}\ndust={}\ndraw_pity={}\nnext_item={}\n", asc.join(","), self.ascension, self.dust, self.draw_pity, self.next_item);
+        for it in &self.items {
+            s += &format!("item={}\n", it.serialize());
+        }
+        for (i, h) in ALL_HEROES.iter().enumerate() {
+            if self.loadouts[i].iter().any(|x| *x != 0) {
+                let ids: Vec<String> = self.loadouts[i].iter().map(|x| x.to_string()).collect();
+                s += &format!("loadout.{}={}\n", h.key(), ids.join(","));
+            }
+        }
         s
     }
 
@@ -514,6 +726,21 @@ impl Profile {
                 "shrines_taken" => p.shrines_taken = v.parse().unwrap_or(0),
                 "awakened_total" => p.awakenings = v.parse().unwrap_or(0),
                 "specials" => p.specials_used = v.parse().unwrap_or(0),
+                "asc_open" => {
+                    for (i, x) in v.split(',').enumerate().take(ALL_STAGES.len()) {
+                        p.asc_open[i] = x.parse().unwrap_or(0);
+                    }
+                }
+                "ascension" => p.ascension = v.parse().unwrap_or(0),
+                "dust" => p.dust = v.parse().unwrap_or(0),
+                "draw_pity" => p.draw_pity = v.parse().unwrap_or(0),
+                "next_item" => p.next_item = v.parse().unwrap_or(1).max(1),
+                "item" => {
+                    if let Some(it) = Item::parse(v) {
+                        p.next_item = p.next_item.max(it.id + 1);
+                        p.items.push(it);
+                    }
+                }
                 "map" => {
                     if let Some(st) = StageId::from_key(v) {
                         p.stage = st;
@@ -541,6 +768,11 @@ impl Profile {
                             p.hero_runs[i] = f.first().and_then(|x| x.parse().ok()).unwrap_or(0);
                             p.hero_wins[i] = f.get(1).and_then(|x| x.parse().ok()).unwrap_or(0);
                             p.hero_best[i] = f.get(2).and_then(|x| x.parse().ok()).unwrap_or(0.0);
+                        }
+                    }
+                    if let Some(h) = k.strip_prefix("loadout.").and_then(HeroId::from_key) {
+                        for (i, x) in v.split(',').enumerate().take(12) {
+                            p.loadouts[h.index()][i] = x.parse().unwrap_or(0);
                         }
                     }
                     if let Some(st) = k.strip_prefix("stage.").and_then(StageId::from_key) {
@@ -573,6 +805,15 @@ impl Profile {
         }
         if !p.stage_open(p.stage) {
             p.stage = StageId::ShrineValley;
+        }
+        // Drop loadout ids that no longer exist or sit in the wrong slot.
+        for h in 0..ALL_HEROES.len() {
+            for pos in 0..LOADOUT.len() {
+                let id = p.loadouts[h][pos];
+                if id != 0 && !p.items.iter().any(|i| i.id == id && i.slot == LOADOUT[pos]) {
+                    p.loadouts[h][pos] = 0;
+                }
+            }
         }
         p
     }
@@ -659,20 +900,20 @@ mod tests {
         let mut w = World::new(WorldConfig::default());
         w.kills = 2_500;
         w.sen = 40;
-        w.state = RunState::Dead;
+        w.state = RunState::Won;
         let r = p.record_run(&w);
-        assert_eq!(r.unlocked, vec![HeroId::Riku], "2,000 kills as Ren unlocks Riku");
+        assert_eq!(r.unlocked, vec![HeroId::Riku], "clearing the Shotengai as Ren unlocks Riku");
         assert!(p.weapons_found.contains(&WeaponKind::Ofuda));
         assert!(r.discovered >= 2, "Riku + Ofuda");
-        assert_eq!(p.sen, 40);
+        assert_eq!(p.sen, 40 + Difficulty::Normal.first_clear_sen());
         assert!(p.record_run(&w).unlocked.is_empty(), "only unlocks once");
         // The same feat as another hero doesn't count for that unlock.
         let mut w = World::new(WorldConfig { hero: HeroId::Riku, ..Default::default() });
-        w.time = 800.0;
-        w.state = RunState::Dead;
-        assert!(p.record_run(&w).unlocked.is_empty(), "surviving 12:00 as Riku unlocks nothing");
-        w.great_oni_defeated = true;
-        assert_eq!(p.record_run(&w).unlocked, vec![HeroId::Shun], "Great Oni as Riku unlocks Shun");
+        w.state = RunState::Won;
+        assert_eq!(p.record_run(&w).unlocked, vec![HeroId::Mika], "the Night Lord as Riku unlocks Mika, not Shun");
+        let mut w = World::new(WorldConfig { hero: HeroId::Riku, stage: StageId::ShrineValley, ..Default::default() });
+        w.state = RunState::Won;
+        assert_eq!(p.record_run(&w).unlocked, vec![HeroId::Shun], "Shrine Valley as Riku unlocks Shun");
     }
 }
 
@@ -703,5 +944,52 @@ mod campaign_tests {
         // A world win is not a Night Lord.
         assert_eq!(p.night_lords, 0);
         assert_eq!(p.wins, 3);
+    }
+}
+
+#[cfg(test)]
+mod gear_tests {
+    use super::*;
+    use crate::WorldConfig;
+
+    #[test]
+    fn loot_banks_equips_saves_and_crafts() {
+        let mut p = Profile { sen: 10_000, ..Default::default() };
+        let mut w = World::new(WorldConfig::default());
+        let mut rng = Rng::new(5);
+        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Epic, 10, None));
+        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Legendary, 10, None));
+        w.state = RunState::Dead;
+        let r = p.record_run(&w);
+        assert_eq!(r.gear.len(), 2);
+        let (a, b) = (r.gear[0], r.gear[1]);
+        assert!(p.equip(HeroId::Ren, p.slot_for(HeroId::Ren, Slot::Ring), a));
+        assert!(p.equip(HeroId::Ren, p.slot_for(HeroId::Ren, Slot::Ring), b), "second ring slot");
+        assert!(!p.equip(HeroId::Ren, 0, a), "a ring doesn't fit the hat slot");
+        let l = p.loadout(HeroId::Ren);
+        assert!(l.bonus.crit_chance > 0.0 && l.uniques.len() == 1);
+        p.dust = 10_000;
+        assert!(p.upgrade(a) && p.reroll(b, 0, 99));
+        let drawn = p.draw(10, 3);
+        assert_eq!(drawn.len(), 10);
+        assert_eq!(p.sen, 10_000 - gear::DRAW10_COST);
+        let back = Profile::parse(&p.serialize());
+        assert_eq!(back.items.len(), p.items.len());
+        assert_eq!(back.loadouts, p.loadouts);
+        assert_eq!(back.dust, p.dust);
+        assert_eq!(back.item(a).unwrap().plus, 1);
+        // The hero's gear reaches the run.
+        let w = World::new(WorldConfig { gear: p.loadout(HeroId::Ren), ..Default::default() });
+        assert!(w.bonus.crit_chance > 0.0);
+    }
+
+    #[test]
+    fn arsenal_grants_a_slotless_weapon() {
+        let mut rng = Rng::new(2);
+        let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 20, None);
+        it.arsenal = Some(WeaponKind::Familiars);
+        let w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
+        let extra = w.weapons.iter().find(|x| x.kind == WeaponKind::Familiars).unwrap();
+        assert!(extra.extra && extra.awakened && extra.level == 8);
     }
 }
