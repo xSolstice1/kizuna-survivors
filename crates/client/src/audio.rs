@@ -220,6 +220,13 @@ impl Audio {
                 Event::Iai { .. } => continue, // the Fired cue covers the cut
                 Event::LanternPulse { .. } => Sfx::Pulse,
                 Event::Lash { .. } => Sfx::LashSfx,
+                Event::PickupSpawned { .. } => Sfx::Bell,
+                Event::PickupTaken { kind, .. } => match kind {
+                    sim::content::PickupKind::ExorcismSeal => Sfx::Special,
+                    sim::content::PickupKind::SenPurse => Sfx::Coin,
+                    sim::content::PickupKind::Hourglass => Sfx::Warble,
+                    _ => Sfx::LevelUp,
+                },
                 Event::Devour { .. } => Sfx::Chomp,
                 Event::MukadeAwakened { .. } => Sfx::Roar,
             };

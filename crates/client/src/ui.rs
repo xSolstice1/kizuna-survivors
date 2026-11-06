@@ -117,6 +117,25 @@ pub fn hud(world: &World, assets: &Assets) {
         }
     }
 
+    // Active pickup buffs: icon + countdown bar.
+    let mut bx = 14.0;
+    for (kind, left, total) in [
+        (sim::content::PickupKind::SwiftGeta, world.speed_buff, sim::content::BUFF_SECONDS),
+        (sim::content::PickupKind::OniSake, world.damage_buff, sim::content::BUFF_SECONDS),
+        (sim::content::PickupKind::Hourglass, world.freeze, sim::content::FREEZE_SECONDS),
+        (sim::content::PickupKind::ShrineBell, world.vacuum, sim::content::VACUUM_SECONDS),
+    ] {
+        if left > 0.0 {
+            let col = crate::render::pickup_color(kind);
+            kit::rounded(bx, 192.0, 46.0, 40.0, 8.0, Color::new(0.06, 0.05, 0.11, 0.88));
+            kit::rounded_outline(bx, 192.0, 46.0, 40.0, 8.0, 1.5, col);
+            draw_texture_ex(assets.pickup(kind), bx + 4.0, 196.0, WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
+            kit::text(&format!("{:.0}", left.ceil()), bx + 27.0, 212.0, 14.0, INK);
+            kit::bar(bx + 4.0, 222.0, 38.0, 5.0, left / total, col, Color::new(1.0, 1.0, 1.0, 0.1));
+            bx += 52.0;
+        }
+    }
+
     // Timer card, top-centre.
     let (tw, tx) = (220.0, (w - 220.0) / 2.0);
     kit::panel(tx, 22.0, tw, 62.0);

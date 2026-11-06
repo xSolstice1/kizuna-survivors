@@ -3,7 +3,7 @@
 use macroquad::prelude::*;
 
 use crate::kit;
-use sim::content::{EnemyKind, HeroId, PassiveKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES};
+use sim::content::{EnemyKind, HeroId, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
 use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
@@ -26,6 +26,8 @@ pub struct Assets {
     cleaver_rest: Texture2D,
     cleaver_rest_hannya: Texture2D,
     familiar: Texture2D,
+    /// Floor pickups, in `ALL_PICKUPS` order.
+    pickups: Vec<Texture2D>,
     shuriken: Texture2D,
     pub coin: Texture2D,
     pub wisp: Texture2D,
@@ -71,6 +73,15 @@ impl Assets {
             cleaver_rest: sprites::texture(include_str!("../../../art/src/cleaver_rest.px")),
             cleaver_rest_hannya: sprites::texture(include_str!("../../../art/src/cleaver_rest_hannya.px")),
             familiar: sprites::texture(include_str!("../../../art/src/familiar.px")),
+            pickups: vec![
+                sprites::texture(include_str!("../../../art/src/pickups/feast.px")),
+                sprites::texture(include_str!("../../../art/src/pickups/swift_geta.px")),
+                sprites::texture(include_str!("../../../art/src/pickups/oni_sake.px")),
+                sprites::texture(include_str!("../../../art/src/pickups/shrine_bell.px")),
+                sprites::texture(include_str!("../../../art/src/pickups/hourglass.px")),
+                sprites::texture(include_str!("../../../art/src/pickups/exorcism_seal.px")),
+                sprites::texture(include_str!("../../../art/src/pickups/sen_purse.px")),
+            ],
             shuriken: sprites::texture(include_str!("../../../art/src/shuriken.px")),
             coin: sprites::texture(include_str!("../../../art/src/coin.px")),
             wisp: sprites::texture(include_str!("../../../art/src/wisp.px")),
@@ -133,6 +144,10 @@ impl Assets {
             (HeroId::Toya, true) => &self.toya_mukade[0],
             _ => &self.hero(h)[0],
         }
+    }
+
+    pub fn pickup(&self, k: PickupKind) -> &Texture2D {
+        &self.pickups[ALL_PICKUPS.iter().position(|x| *x == k).unwrap()]
     }
 
     pub fn icon_named(&self, key: &str) -> &Texture2D {
@@ -443,6 +458,13 @@ impl Fx {
                         self.say("Phew... the foxfire's cooling.");
                     }
                 }
+                Event::PickupTaken { pos, kind } => {
+                    self.say(&format!("{}! {}", kind.name(), kind.describe()));
+                    if kind == PickupKind::ExorcismSeal {
+                        self.bursts.push((vec2(pos.x, pos.y), sim::content::EXORCISM_RADIUS, 0.0, 1));
+                        self.shake = self.shake.max(0.5);
+                    }
+                }
                 Event::Lash { from, to } => self.lashes.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
                 Event::Devour { pos, radius } => self.devours.push((vec2(pos.x, pos.y), radius, 0.0)),
                 Event::MukadeAwakened { .. } => {
@@ -625,6 +647,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_circle(x, y, 2.5, Color::new(0.55, 0.82, 1.0, fade));
         draw_rectangle(x - 2.0, y + 6.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
     }
+    for (c, k) in &world.pickups {
+        draw_pickup(a, vec2(c.x, c.y), *k, time as f32);
+    }
     for (c, v) in &world.coins {
         let size = if *v >= 50 { 16.0 } else if *v >= 5 { 12.0 } else { 10.0 };
         let bob = ((time * 4.0 + c.x as f64).sin() * 1.0) as f32;
@@ -636,7 +661,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
         let pos = e.pos[i];
-        let tint = if e.flash[i] > 0 { flash } else { WHITE };
+        let frozen = world.freeze > 0.0 && !e.kind[i].is_boss();
+        let tint = if e.flash[i] > 0 {
+            flash
+        } else if frozen {
+            Color::new(0.6, 0.85, 1.0, 1.0)
+        } else {
+            WHITE
+        };
         let flip = e.kind[i] != EnemyKind::Wisp && pos.x > p.x;
         if e.kind[i] == EnemyKind::GreatOni {
             // Double-size oni; flashes and shows its line while winding up a charge.
@@ -1203,6 +1235,24 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             draw_texture_ex(&a.shrine, tip.x - d.x * 34.0 - 12.0, tip.y - d.y * 34.0 - 14.0, Color::new(1.0, 1.0, 1.0, 0.85), DrawTextureParams { dest_size: Some(vec2(24.0, 27.0)), ..Default::default() });
         }
     }
+    // Off-screen pickups get a small coloured arrow at the screen edge.
+    for (c, k) in &world.pickups {
+        let sp = cam.world_to_screen(vec2(c.x, c.y));
+        let (w, h) = (screen_width(), screen_height());
+        if sp.x < 0.0 || sp.y < 0.0 || sp.x > w || sp.y > h {
+            let ctr = vec2(w / 2.0, h / 2.0);
+            let d = (sp - ctr).normalize_or_zero();
+            let t = ((w / 2.0 - 34.0) / d.x.abs().max(1e-3)).min((h / 2.0 - 34.0) / d.y.abs().max(1e-3));
+            let tip = ctr + d * t;
+            let side = vec2(-d.y, d.x);
+            let col = pickup_color(*k);
+            let pulse = 0.7 + 0.3 * (time * 6.0).sin() as f32;
+            draw_circle(tip.x - d.x * 24.0, tip.y - d.y * 24.0, 15.0, Color::new(0.05, 0.04, 0.1, 0.85));
+            draw_circle_lines(tip.x - d.x * 24.0, tip.y - d.y * 24.0, 15.0, 2.0, Color::new(col.r, col.g, col.b, pulse));
+            draw_texture_ex(a.pickup(*k), tip.x - d.x * 24.0 - 10.0, tip.y - d.y * 24.0 - 10.0, WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
+            draw_triangle(tip + d * 10.0, tip - d * 4.0 + side * 7.0, tip - d * 4.0 - side * 7.0, Color::new(col.r, col.g, col.b, pulse));
+        }
+    }
     if let Some((line, left)) = &fx.bark {
         let s = cam.world_to_screen(vec2(p.x, p.y - 34.0));
         let d = kit::measure(line, 20);
@@ -1477,5 +1527,35 @@ fn draw_curse_motes(p: sim::Vec2, t: f32, mukade: bool) {
         let y = p.y - 8.0 + a.sin() * r * 0.5 - ph * if mukade { 34.0 } else { 14.0 };
         let c = if k % 3 == 0 { Color::new(0.05, 0.0, 0.02, 0.9 * (1.0 - ph)) } else { Color::new(0.9, 0.12, 0.2, 0.8 * (1.0 - ph)) };
         draw_rectangle(x, y, 2.0, 2.0, c);
+    }
+}
+
+pub fn pickup_color(k: PickupKind) -> Color {
+    match k {
+        PickupKind::Feast => Color::new(0.45, 1.0, 0.55, 1.0),
+        PickupKind::SwiftGeta => Color::new(0.45, 0.95, 1.0, 1.0),
+        PickupKind::OniSake => Color::new(1.0, 0.35, 0.3, 1.0),
+        PickupKind::ShrineBell => Color::new(1.0, 0.85, 0.3, 1.0),
+        PickupKind::Hourglass => Color::new(0.6, 0.85, 1.0, 1.0),
+        PickupKind::ExorcismSeal => Color::new(0.75, 0.55, 1.0, 1.0),
+        PickupKind::SenPurse => Color::new(1.0, 0.75, 0.35, 1.0),
+    }
+}
+
+/// A pickup on the ground: a coloured light pillar, a pulsing ring and the bobbing icon.
+fn draw_pickup(a: &Assets, c: Vec2, k: PickupKind, t: f32) {
+    let col = pickup_color(k);
+    let pulse = 0.5 + 0.5 * (t * 4.0 + c.x * 0.1).sin();
+    draw_rectangle(c.x - 6.0, c.y - 140.0, 12.0, 140.0, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
+    draw_rectangle(c.x - 2.0, c.y - 140.0, 4.0, 140.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
+    draw_ellipse(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, Color::new(col.r, col.g, col.b, 0.25));
+    draw_ellipse_lines(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.8));
+    draw_circle(c.x, c.y - 10.0, 14.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
+    let bob = (t * 3.0 + c.y * 0.1).sin() * 2.5;
+    draw_texture_ex(a.pickup(k), (c.x - 10.0).round(), (c.y - 20.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
+    for i in 0..4 {
+        let ph = (t * 0.8 + i as f32 * 0.25).fract();
+        let x = c.x + ((i as f32 * 2.3 + t).sin()) * 9.0;
+        draw_rectangle(x, c.y - 6.0 - ph * 40.0, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - ph));
     }
 }
