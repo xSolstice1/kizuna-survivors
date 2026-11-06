@@ -4308,6 +4308,15 @@ impl World {
     }
 
     /// Dev shortcut: Awaken every owned weapon.
+    /// Dev: defeats every non-boss enemy on the field (they drop as usual).
+    pub fn debug_clear_enemies(&mut self) {
+        for i in 0..self.enemies.len() {
+            if !self.enemies.kind[i].is_boss() {
+                self.enemies.hp[i] = 0.0;
+            }
+        }
+    }
+
     pub fn debug_awaken_all(&mut self) {
         for w in &mut self.weapons {
             w.level = MAX_LEVEL;

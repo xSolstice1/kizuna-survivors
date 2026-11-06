@@ -68,9 +68,10 @@ pub enum MenuAction {
     Collection,
     Stats,
     Settings,
+    Dev,
 }
 
-pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAction> {
+pub fn main_menu(profile: &Profile, assets: &Assets, time: f64, dev: bool) -> Option<MenuAction> {
     backdrop(time);
     let (w, h) = (screen_width(), screen_height());
     centered("KIZUNA SURVIVORS", h * 0.24, 72.0, ACCENT);
@@ -83,12 +84,12 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     let mut action = None;
     let items: [(&str, MenuAction, KeyCode); 7] = [
         ("Start", MenuAction::Start, KeyCode::Enter),
-        ("Armory", MenuAction::Armory, KeyCode::A),
-        ("Shrine Draw", MenuAction::Draw, KeyCode::D),
-        ("Shrine Shop", MenuAction::Shop, KeyCode::S),
-        ("Collections", MenuAction::Collection, KeyCode::C),
-        ("Stats", MenuAction::Stats, KeyCode::T),
-        ("Settings", MenuAction::Settings, KeyCode::O),
+        ("Armory", MenuAction::Armory, KeyCode::F13),
+        ("Shrine Draw", MenuAction::Draw, KeyCode::F14),
+        ("Shrine Shop", MenuAction::Shop, KeyCode::F15),
+        ("Collections", MenuAction::Collection, KeyCode::F16),
+        ("Stats", MenuAction::Stats, KeyCode::F17),
+        ("Settings", MenuAction::Settings, KeyCode::F18),
     ];
     for (i, (label, act, key)) in items.into_iter().enumerate() {
         if button(Rect::new(x, y0 + i as f32 * step, bw, bh), label, true) || is_key_pressed(key) {
@@ -96,6 +97,9 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
         }
     }
     fullscreen_button(Rect::new(20.0, 18.0, 230.0, 40.0));
+    if dev && kit::button(Rect::new(20.0, h - 58.0, 120.0, 40.0), "Dev", true, kit::Style::Danger) {
+        action = Some(MenuAction::Dev);
+    }
 
     centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", y0 + 7.0 * step + 16.0, 16.0, Color::new(1.0, 1.0, 1.0, 0.55));
     action

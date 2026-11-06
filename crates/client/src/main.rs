@@ -6,6 +6,7 @@ use sim::{Input, RunState, Stress, World, WorldConfig};
 mod armory;
 mod audio;
 mod chest_ui;
+mod devmenu;
 mod kit;
 mod menu;
 mod platform;
@@ -100,6 +101,8 @@ async fn main() {
     let mut collection = menu::CollectionState::default();
     let mut armory_state = armory::ArmoryState::default();
     let mut draw_state = armory::DrawState::default();
+    let mut dev = devmenu::DevMenu::default();
+    let mut dev_pending: Option<devmenu::DevAction> = None;
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
     let mut map_opened_now = false;
@@ -137,39 +140,25 @@ async fn main() {
             Screen::Title | Screen::Playing | Screen::Paused => {}
             _ => audio.set_music(Some(synth::Track::Menu)),
         }
-        // Dev (remove before release): F7 on the menu or character select unlocks every hero.
-        if matches!(screen, Screen::Menu | Screen::Characters | Screen::Stages) && is_key_pressed(KeyCode::F7) {
-            for h in sim::content::ALL_HEROES {
-                if !profile.unlocked.contains(&h) {
-                    profile.unlocked.push(h);
-                }
+        // Hidden dev menu: the secret is watched on the main menu.
+        if screen == Screen::Menu && !dev.open {
+            let (w, h) = (kit::screen_width(), kit::screen_height());
+            let title = Rect::new(w / 2.0 - 380.0, h * 0.24 - 64.0, 760.0, 76.0);
+            let tapped = is_mouse_button_pressed(MouseButton::Left) && title.contains(kit::mouse_position().into());
+            if dev.watch_secret(tapped, now) {
+                audio.play(synth::Sfx::Awaken);
             }
-            save::store(&profile);
-            audio.play(synth::Sfx::Buy);
         }
-        // Dev (remove before release): F9 in the Armory adds every Exotic and Arsenal art, and Dust.
-        if screen == Screen::Armory && is_key_pressed(KeyCode::F9) {
-            let mut rng = sim::rng::Rng::new((get_time() * 1000.0) as u64);
-            for e in sim::gear::ALL_EXOTICS {
-                profile.add_item(sim::gear::roll_exotic(&mut rng, e, 40));
+        let out_of_run = !matches!(screen, Screen::Title | Screen::Playing | Screen::Paused);
+        if out_of_run && dev.open {
+            menu::backdrop(now);
+            if let Some(a) = dev.draw(false) {
+                dev_profile_action(a, &mut profile);
+                save::store(&profile);
+                audio.play(synth::Sfx::Buy);
             }
-            for a in sim::gear::LEGENDARY_ARTS {
-                let mut it = sim::gear::roll_item(&mut rng, Some(sim::gear::Slot::Arsenal), sim::gear::Rarity::Mythic, 40, None);
-                it.art = Some(a);
-                profile.add_item(it);
-            }
-            profile.dust += 5000;
-            save::store(&profile);
-            audio.play(synth::Sfx::Buy);
-        }
-        // Dev (remove before release): F6 on the map select opens every world and difficulty.
-        if screen == Screen::Stages && is_key_pressed(KeyCode::F6) {
-            for row in profile.cleared.iter_mut() {
-                row[0] = true;
-                row[1] = true;
-            }
-            save::store(&profile);
-            audio.play(synth::Sfx::Buy);
+            next_frame().await;
+            continue;
         }
 
         // --- Out-of-run screens ---
@@ -180,7 +169,8 @@ async fn main() {
                     screen = Screen::Menu;
                 }
             }
-            Screen::Menu => match menu::main_menu(&profile, &assets, now) {
+            Screen::Menu => match menu::main_menu(&profile, &assets, now, dev.unlocked) {
+                Some(menu::MenuAction::Dev) => dev.open = true,
                 Some(menu::MenuAction::Start) => screen = Screen::Stages,
                 Some(menu::MenuAction::Shop) => screen = Screen::Shop,
                 Some(menu::MenuAction::Armory) => {
@@ -279,13 +269,21 @@ async fn main() {
         // --- Global keys ---
         let over = matches!(world.state, RunState::Dead | RunState::Won);
         // Esc pauses only during play; on the shrine screen it means "walk away".
-        if is_key_pressed(KeyCode::Escape) && !over && !map_open && (screen == Screen::Paused || !world.paused()) {
+        if is_key_pressed(KeyCode::Escape) && !dev.open && !over && !map_open && (screen == Screen::Paused || !world.paused()) {
             screen = if screen == Screen::Paused { Screen::Playing } else { Screen::Paused };
         }
         if is_key_pressed(KeyCode::N) {
             fx.show_numbers = !fx.show_numbers;
         }
-        let toggle_stress = is_key_pressed(KeyCode::F1);
+        let mut toggle_stress = false;
+        let mut dev_run: Option<devmenu::DevAction> = None;
+        if screen == Screen::Paused && dev.open {
+            // Drawn later with the pause UI; actions come back through `dev_run` next frame.
+            dev_run = dev_pending.take();
+        }
+        if dev_run == Some(devmenu::DevAction::Stress) {
+            toggle_stress = true;
+        }
         if toggle_stress {
             stress = match stress {
                 None => Some(Stress { enemies: 2000, projectiles: 4000 }),
@@ -325,53 +323,33 @@ async fn main() {
             fx.clear();
             screen = Screen::Playing;
         }
-        // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest,
-        // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots), F7 shrine underfoot,
-        // F8 skip to the final boss, B skip to the second boss, F9 fill the special meter, F10 Awaken every owned weapon,
-        // P drop a random pickup nearby, O drop a chest nearby.
-        if is_key_pressed(KeyCode::F2) {
-            world.time = world.time.max(world.stage().mini_at - 3.0);
-        }
-        // Dev: B skips to the stage's second boss.
-        if is_key_pressed(KeyCode::B) {
-            if let Some((_, at)) = world.stage().boss {
-                world.time = world.time.max(at - 3.0);
+        if let Some(a) = dev_run {
+            use devmenu::DevAction::*;
+            let st = world.stage();
+            match a {
+                SkipMini => world.time = world.time.max(st.mini_at - 3.0),
+                SkipBoss => {
+                    if let Some((_, at)) = st.boss {
+                        world.time = world.time.max(at - 3.0);
+                    }
+                }
+                SkipFinal => world.time = world.time.max(st.final_at - 3.0),
+                MaxLoadout => world.debug_max_loadout(),
+                AllWeapons => world.debug_all_weapons(),
+                AwakenAll => world.debug_awaken_all(),
+                FillSpecial => world.player.special = 1.0,
+                Chest => world.chests.push((world.player.pos + sim::Vec2::new(90.0, -40.0), 1)),
+                BigChest => world.chests.push((world.player.pos + sim::Vec2::new(90.0, -40.0), 5)),
+                Pickup => {
+                    let k = sim::content::PickupKind::roll(rand::gen_range(0.0, 1.0));
+                    let ang = rand::gen_range(0.0, std::f32::consts::TAU);
+                    world.pickups.push((world.player.pos + sim::Vec2::from_angle(ang) * 70.0, k));
+                }
+                Shrine => world.shrine = Some(world.player.pos + sim::Vec2::new(0.0, 40.0)),
+                ClearEnemies => world.debug_clear_enemies(),
+                _ => {}
             }
-        }
-        if is_key_pressed(KeyCode::F3) {
-            world.debug_max_loadout();
-        }
-        if is_key_pressed(KeyCode::F4) && !world.paused() {
-            world.open_chest(1);
-        }
-        if is_key_pressed(KeyCode::F5) && !world.paused() {
-            world.open_chest(5);
-        }
-        if is_key_pressed(KeyCode::F6) {
-            world.debug_all_weapons();
-        }
-        if is_key_pressed(KeyCode::F7) {
-            world.shrine = Some(world.player.pos);
-        }
-        if is_key_pressed(KeyCode::O) && screen == Screen::Playing {
-            // Dev: drop a treasure chest nearby (sometimes a boss chest).
-            let tier = if rand::gen_range(0, 3) == 0 { 3 } else { 1 };
-            world.chests.push((world.player.pos + sim::Vec2::new(90.0, -40.0), tier));
-        }
-        if is_key_pressed(KeyCode::P) {
-            // Dev: drop a random floor pickup near the player.
-            let k = sim::content::PickupKind::roll(rand::gen_range(0.0, 1.0));
-            let a = rand::gen_range(0.0, std::f32::consts::TAU);
-            world.pickups.push((world.player.pos + sim::Vec2::from_angle(a) * 70.0, k));
-        }
-        if is_key_pressed(KeyCode::F10) {
-            world.debug_awaken_all();
-        }
-        if is_key_pressed(KeyCode::F9) {
-            world.player.special = 1.0;
-        }
-        if is_key_pressed(KeyCode::F8) {
-            world.time = world.time.max(world.stage().final_at - 3.0);
+            audio.play(synth::Sfx::Buy);
         }
         if let Some(s) = stress.as_mut() {
             let mut changed = true;
@@ -454,7 +432,9 @@ async fn main() {
                 map_opened_now = true;
             }
         }
-        ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
+        if dev.show_fps || stress.is_some() {
+            ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
+        }
         if in_run && !map_open && screen == Screen::Playing {
             let form = world.form_kind().map(|k| world.player.form / k.duration());
             touch.draw(world.player.special, world.player.special >= 1.0, form);
@@ -504,8 +484,13 @@ async fn main() {
             if ui::minimap(&world, &assets, true, map_opened_now) {
                 map_open = false;
             }
+        } else if screen == Screen::Paused && dev.open {
+            if let Some(a) = dev.draw(true) {
+                dev_pending = Some(a);
+            }
         } else if screen == Screen::Paused {
-            match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume) {
+            match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume, dev.unlocked) {
+                Some(ui::PauseAction::Dev) => dev.open = true,
                 Some(ui::PauseAction::Resume) => {
                     audio.play(synth::Sfx::Click);
                     screen = Screen::Playing;
@@ -534,5 +519,49 @@ async fn main() {
         }
 
         next_frame().await
+    }
+}
+
+/// Dev menu actions on the profile (out of a run).
+fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
+    use devmenu::DevAction::*;
+    use sim::gear::{self, Rarity, Slot};
+    let mut rng = sim::rng::Rng::new((get_time() * 1e6) as u64);
+    match a {
+        UnlockHeroes => {
+            for h in sim::content::ALL_HEROES {
+                if !profile.unlocked.contains(&h) {
+                    profile.unlocked.push(h);
+                }
+            }
+        }
+        OpenWorlds => {
+            for (i, row) in profile.cleared.iter_mut().enumerate() {
+                *row = [true; 3];
+                profile.asc_open[i] = profile.asc_open[i].max(5);
+            }
+        }
+        GrantExotics => {
+            for e in gear::ALL_EXOTICS {
+                profile.add_item(gear::roll_exotic(&mut rng, e, 40));
+            }
+        }
+        GrantArts => {
+            for art in gear::LEGENDARY_ARTS {
+                let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 40, None);
+                it.art = Some(art);
+                profile.add_item(it);
+            }
+        }
+        GrantGear => {
+            for k in 0..20 {
+                let r = if k % 3 == 0 { Rarity::Mythic } else { Rarity::Legendary };
+                let set = sim::campaign::ALL_STAGES[(rng.next_u32() as usize) % 6];
+                profile.add_item(gear::roll_item(&mut rng, None, r, 40, Some(set)));
+            }
+        }
+        Sen => profile.sen += 10_000,
+        Dust => profile.dust += 5_000,
+        _ => {}
     }
 }

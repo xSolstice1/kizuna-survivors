@@ -355,6 +355,7 @@ pub enum PauseAction {
     GiveUp,
     /// Volume changed (save it).
     Volume,
+    Dev,
 }
 
 /// Small 0..=1 slider. Returns true if changed.
@@ -373,7 +374,7 @@ fn mini_slider(label: &str, x: f32, y: f32, w: f32, v: &mut f32) -> bool {
     (*v - before).abs() > 1e-6
 }
 
-pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> Option<PauseAction> {
+pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev: bool) -> Option<PauseAction> {
     dim_screen(0.7);
     let (w, h) = (screen_width(), screen_height());
     let hero = hero_def(world.cfg.hero);
@@ -448,7 +449,7 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> 
     }
     mark(at(st.mini_at), "mini-boss", Color::new(1.0, 0.5, 0.5, 0.9), false);
     if let Some((_, b)) = st.boss {
-        mark(at(b), "boss", Color::new(1.0, 0.42, 0.42, 0.95), true);
+        mark(at(b), "boss", Color::new(1.0, 0.42, 0.42, 0.95), false);
     }
     mark(at(st.final_at), st.final_boss.short_name(), Color::new(1.0, 0.35, 0.35, 1.0), false);
     mark(at(st.limit), "dawn", Color::new(1.0, 0.9, 0.6, 1.0), false);
@@ -480,7 +481,14 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> 
     if kit::button(Rect::new(rx + 30.0 + bw / 2.0 + 8.0, by + 88.0, bw / 2.0 - 8.0, 46.0), "Give up", true, Style::Danger) {
         action = Some(PauseAction::GiveUp);
     }
-    crate::menu::fullscreen_button(Rect::new(rx + 30.0, by + 144.0, bw, 40.0));
+    if dev {
+        crate::menu::fullscreen_button(Rect::new(rx + 30.0, by + 144.0, bw / 2.0 - 8.0, 40.0));
+        if kit::button(Rect::new(rx + 30.0 + bw / 2.0 + 8.0, by + 144.0, bw / 2.0 - 8.0, 40.0), "Dev", true, Style::Danger) {
+            action = Some(PauseAction::Dev);
+        }
+    } else {
+        crate::menu::fullscreen_button(Rect::new(rx + 30.0, by + 144.0, bw, 40.0));
+    }
     kit::panel_title("SOUND", rx + 18.0, by + 210.0, 16.0, GOLD);
     let mut changed = mini_slider("Music", rx + 30.0, by + 224.0, rw - 60.0, music);
     changed |= mini_slider("Effects", rx + 30.0, by + 256.0, rw - 60.0, sfx);
@@ -606,7 +614,7 @@ pub fn debug_overlay(fps: i32, sim_ms: f32, world: &World, stress: bool) {
         "{fps} fps · sim {sim_ms:.2} ms · {} enemies · {} proj{}",
         world.enemies.len(),
         world.projectiles.len(),
-        if stress { " · STRESS (F1)  [ ] enemies  - = projectiles" } else { "" }
+        if stress { " · STRESS  [ ] enemies  - = projectiles" } else { "" }
     );
     kit::text(&txt, 16.0, screen_height() - 12.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
 }
