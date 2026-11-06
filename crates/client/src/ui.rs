@@ -45,12 +45,6 @@ fn wrap(text: &str, width: f32, size: u16) -> Vec<String> {
 /// Hero head in a round frame (the top of the idle sprite).
 fn portrait(assets: &Assets, world: &World, cx: f32, cy: f32, r: f32) {
     let form = world.form_kind().is_some();
-    let ring = match world.form_kind() {
-        Some(SpecialKind::NineTails) => Color::new(1.0, 0.65, 0.2, 1.0),
-        Some(SpecialKind::Hannya) => VERMILION,
-        _ => GOLD,
-    };
-    draw_circle(cx + 2.0, cy + 3.0, r, Color::new(0.0, 0.0, 0.0, 0.4));
     draw_circle(cx, cy, r, Color::new(0.10, 0.08, 0.18, 1.0));
     let tex = assets.portrait(world.cfg.hero, form);
     let s = r * 2.0 / 18.0; // show the top 18 rows (the head)
@@ -61,7 +55,6 @@ fn portrait(assets: &Assets, world: &World, cx: f32, cy: f32, r: f32) {
         WHITE,
         DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0, 18.0)), dest_size: Some(vec2(24.0 * s, 18.0 * s)), ..Default::default() },
     );
-    draw_circle_lines(cx, cy, r, 3.0, ring);
 }
 
 // ───────────────────────── HUD ─────────────────────────

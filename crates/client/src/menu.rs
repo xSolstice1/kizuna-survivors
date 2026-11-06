@@ -54,6 +54,7 @@ pub enum MenuAction {
     Start,
     Shop,
     Collection,
+    Stats,
     Settings,
 }
 
@@ -73,31 +74,17 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     if button(Rect::new(x, h * 0.42 + 68.0, bw, bh), "Shrine Shop", true) || is_key_pressed(KeyCode::S) {
         action = Some(MenuAction::Shop);
     }
-    let (found, total) = collection_progress(profile);
-    if button(Rect::new(x, h * 0.42 + 136.0, bw, bh), &format!("Collection  {found}/{total}"), true) || is_key_pressed(KeyCode::C) {
+    if button(Rect::new(x, h * 0.42 + 136.0, bw, bh), "Collections", true) || is_key_pressed(KeyCode::C) {
         action = Some(MenuAction::Collection);
     }
-    if button(Rect::new(x, h * 0.42 + 204.0, bw, bh), "Settings", true) || is_key_pressed(KeyCode::O) {
+    if button(Rect::new(x, h * 0.42 + 204.0, bw, bh), "Stats", true) || is_key_pressed(KeyCode::T) {
+        action = Some(MenuAction::Stats);
+    }
+    if button(Rect::new(x, h * 0.42 + 272.0, bw, bh), "Settings", true) || is_key_pressed(KeyCode::O) {
         action = Some(MenuAction::Settings);
     }
 
-    let unlocked = profile.unlocked.len();
-    let lines = [
-        format!("Nights played {}   ·   Otherworlders defeated {}", profile.runs, profile.total_kills),
-        format!(
-            "Longest night {:02}:{:02}   ·   Highest level {}   ·   Night Lords defeated {}   ·   Heroes {}/{}",
-            profile.best_time as u32 / 60,
-            profile.best_time as u32 % 60,
-            profile.best_level,
-            profile.night_lords,
-            unlocked,
-            ALL_HEROES.len()
-        ),
-    ];
-    for (i, l) in lines.iter().enumerate() {
-        centered(l, h - 70.0 + i as f32 * 26.0, 20.0, DIM);
-    }
-    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.42 + 290.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.7));
+    centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.42 + 360.0, 18.0, Color::new(1.0, 1.0, 1.0, 0.55));
     action
 }
 
@@ -586,4 +573,143 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
         return Some(SettingsAction::Back);
     }
     changed.then_some(SettingsAction::Changed)
+}
+
+// ───────────────────────── Stats ─────────────────────────
+
+fn fmt_time(t: f32) -> String {
+    let s = t.max(0.0) as u32;
+    if s >= 3600 {
+        format!("{}h {:02}m", s / 3600, (s / 60) % 60)
+    } else {
+        format!("{:02}:{:02}", s / 60, s % 60)
+    }
+}
+
+/// A big number with a label underneath.
+fn tile(x: f32, y: f32, w: f32, value: &str, label: &str, accent: Color) {
+    kit::panel(x, y, w, 78.0);
+    let d = kit::measure(value, 30);
+    kit::text_shadow(value, x + (w - d.width) / 2.0, y + 40.0, 30.0, accent);
+    let d = kit::measure(label, 14);
+    kit::text(label, x + (w - d.width) / 2.0, y + 64.0, 14.0, kit::DIM);
+}
+
+/// Label on the left, value on the right.
+fn row(x: f32, y: f32, w: f32, label: &str, value: &str, accent: Color) {
+    kit::text(label, x, y, 17.0, kit::DIM);
+    let d = kit::measure(value, 18);
+    kit::text(value, x + w - d.width, y, 18.0, accent);
+    draw_line(x, y + 9.0, x + w, y + 9.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.05));
+}
+
+/// Returns true to go back.
+pub fn stats(profile: &Profile, assets: &Assets, time: f64) -> bool {
+    backdrop(time);
+    let w = screen_width();
+    kit::centered("STATS", w / 2.0, 62.0, 44.0, ACCENT);
+
+    // Headline tiles.
+    let tiles = [
+        (profile.runs.to_string(), "Nights played", kit::INK),
+        (profile.wins.to_string(), "Night Lords defeated", GOLD),
+        (profile.deaths.to_string(), "Fallen", kit::SAKURA),
+        (profile.dawn_outs.to_string(), "Dawn without victory", Color::new(1.0, 0.6, 0.4, 1.0)),
+        (fmt_time(profile.time_played), "Time in the night", kit::SKY),
+        (profile.total_kills.to_string(), "Otherworlders defeated", kit::INK),
+    ];
+    let (tw, gap) = (180.0, 12.0);
+    let x0 = (w - (tiles.len() as f32 * tw + (tiles.len() as f32 - 1.0) * gap)) / 2.0;
+    for (i, (v, l, c)) in tiles.iter().enumerate() {
+        tile(x0 + i as f32 * (tw + gap), 86.0, tw, v, l, *c);
+    }
+
+    // Three columns.
+    let (cw, cy, ch) = (360.0, 182.0, 250.0);
+    let total = 3.0 * cw + 2.0 * 20.0;
+    let cx0 = (w - total) / 2.0;
+    let pad = 22.0;
+    // Records.
+    let x = cx0;
+    kit::panel(x, cy, cw, ch);
+    kit::panel_title("RECORDS", x + 16.0, cy + 30.0, 16.0, GOLD);
+    let winrate = if profile.runs > 0 { format!("{:.0}%", profile.wins as f32 / profile.runs as f32 * 100.0) } else { "-".into() };
+    for (i, (l, v)) in [
+        ("Longest night", fmt_time(profile.best_time)),
+        ("Highest level", profile.best_level.to_string()),
+        ("Most defeated in a night", profile.best_kills.to_string()),
+        ("Great Oni defeated", profile.great_onis.to_string()),
+        ("Win rate", winrate),
+    ]
+    .iter()
+    .enumerate()
+    {
+        row(x + pad, cy + 70.0 + i as f32 * 34.0, cw - 2.0 * pad, l, v, kit::INK);
+    }
+    // Economy & feats.
+    let x = cx0 + cw + 20.0;
+    kit::panel(x, cy, cw, ch);
+    kit::panel_title("SEN & FEATS", x + 16.0, cy + 30.0, 16.0, GOLD);
+    let (found, total_c) = collection_progress(profile);
+    for (i, (l, v, c)) in [
+        ("Sen earned", profile.sen_earned.to_string(), GOLD),
+        ("Sen offered at the shrine", profile.spent.to_string(), GOLD),
+        ("Chests opened", profile.chests_opened.to_string(), kit::INK),
+        ("Shrine blessings taken", profile.shrines_taken.to_string(), kit::INK),
+        ("Awakenings achieved", profile.awakenings.to_string(), GOLD),
+        ("Specials unleashed", profile.specials_used.to_string(), kit::INK),
+        ("Collection", format!("{found}/{total_c}"), kit::SKY),
+    ]
+    .iter()
+    .enumerate()
+    {
+        row(x + pad, cy + 62.0 + i as f32 * 26.0, cw - 2.0 * pad, l, v, *c);
+    }
+    // Most defeated Otherworlders.
+    let x = cx0 + 2.0 * (cw + 20.0);
+    kit::panel(x, cy, cw, ch);
+    kit::panel_title("MOST DEFEATED", x + 16.0, cy + 30.0, 16.0, GOLD);
+    let mut order: Vec<usize> = (0..ALL_ENEMIES.len()).filter(|&i| profile.enemy_kills[i] > 0).collect();
+    order.sort_by(|a, b| profile.enemy_kills[*b].cmp(&profile.enemy_kills[*a]));
+    let top = order.first().map_or(1, |&i| profile.enemy_kills[i].max(1));
+    if order.is_empty() {
+        kit::text("Nothing yet. The night awaits.", x + pad, cy + 80.0, 16.0, kit::FAINT);
+    }
+    for (row_i, &i) in order.iter().take(5).enumerate() {
+        let k = ALL_ENEMIES[i];
+        let y = cy + 50.0 + row_i as f32 * 38.0;
+        let (icon, tint) = enemy_icon(assets, k);
+        let (iw, ih) = (icon.width(), icon.height());
+        let sc = (28.0 / iw.max(ih)).min(2.0);
+        draw_texture_ex(icon, x + pad, y + (30.0 - ih * sc) / 2.0, tint, DrawTextureParams { dest_size: Some(vec2(iw * sc, ih * sc)), ..Default::default() });
+        kit::text(k.name(), x + pad + 40.0, y + 14.0, 15.0, kit::INK);
+        let frac = profile.enemy_kills[i] as f32 / top as f32;
+        kit::bar(x + pad + 40.0, y + 20.0, cw - 2.0 * pad - 110.0, 7.0, frac, kit::SAKURA, Color::new(1.0, 1.0, 1.0, 0.08));
+        let v = profile.enemy_kills[i].to_string();
+        let d = kit::measure(&v, 15);
+        kit::text(&v, x + cw - pad - d.width, y + 27.0, 15.0, kit::DIM);
+    }
+
+    // Heroes strip.
+    let hy = cy + ch + 20.0;
+    let heroes: Vec<_> = ALL_HEROES.iter().copied().filter(|h| profile.is_unlocked(*h)).collect();
+    let hw = 150.0;
+    let hx0 = (w - (heroes.len() as f32 * hw + (heroes.len() as f32 - 1.0) * 12.0)) / 2.0;
+    for (i, h) in heroes.iter().enumerate() {
+        let x = hx0 + i as f32 * (hw + 12.0);
+        kit::panel(x, hy, hw, 96.0);
+        let tex = &assets.hero(*h)[0];
+        draw_texture_ex(tex, x + 10.0, hy + 14.0, WHITE, DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0, 18.0)), dest_size: Some(vec2(48.0, 36.0)), ..Default::default() });
+        let name = hero_def(*h).name.split(' ').next().unwrap_or("");
+        kit::text(name, x + 64.0, hy + 30.0, 17.0, kit::INK);
+        let hi = h.index();
+        let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        kit::text(&plural(profile.hero_runs[hi], "night", "nights"), x + 64.0, hy + 50.0, 13.0, kit::DIM);
+        kit::text(&plural(profile.hero_wins[hi], "win", "wins"), x + 12.0, hy + 74.0, 13.0, GOLD);
+        let best = format!("best {}", fmt_time(profile.hero_best[hi]));
+        let d = kit::measure(&best, 13);
+        kit::text(&best, x + hw - 12.0 - d.width, hy + 74.0, 13.0, kit::SKY);
+    }
+
+    button(Rect::new((w - 200.0) / 2.0, hy + 112.0, 200.0, 46.0), "Back", true) || is_key_pressed(KeyCode::Escape)
 }

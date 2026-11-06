@@ -29,6 +29,7 @@ enum Screen {
     Characters,
     Shop,
     Collection,
+    Stats,
     Settings,
     Playing,
     Paused,
@@ -102,6 +103,16 @@ async fn main() {
             Screen::Title | Screen::Playing | Screen::Paused => {}
             _ => audio.set_music(Some(synth::Track::Menu)),
         }
+        // Dev (remove before release): F7 on the menu or character select unlocks every hero.
+        if matches!(screen, Screen::Menu | Screen::Characters) && is_key_pressed(KeyCode::F7) {
+            for h in sim::content::ALL_HEROES {
+                if !profile.unlocked.contains(&h) {
+                    profile.unlocked.push(h);
+                }
+            }
+            save::store(&profile);
+            audio.play(synth::Sfx::Buy);
+        }
 
         // --- Out-of-run screens ---
         match screen {
@@ -115,11 +126,17 @@ async fn main() {
                 Some(menu::MenuAction::Start) => screen = Screen::Characters,
                 Some(menu::MenuAction::Shop) => screen = Screen::Shop,
                 Some(menu::MenuAction::Collection) => screen = Screen::Collection,
+                Some(menu::MenuAction::Stats) => screen = Screen::Stats,
                 Some(menu::MenuAction::Settings) => screen = Screen::Settings,
                 None => {}
             },
             Screen::Collection => {
                 if menu::collection(&profile, &assets, &mut collection, now) {
+                    screen = Screen::Menu;
+                }
+            }
+            Screen::Stats => {
+                if menu::stats(&profile, &assets, now) {
                     screen = Screen::Menu;
                 }
             }
