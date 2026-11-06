@@ -94,7 +94,7 @@ pub fn item_detail(profile: &Profile, assets: &Assets, it: &Item, hero: HeroId, 
     let line_w = w - 28.0;
     if let Some((st, v)) = it.main_value() {
         kit::text_fit(&st.format(v), x + 14.0, ly, line_w, 18.0, INK);
-        ly += 8.0;
+        ly += 18.0;
     }
     if let Some(e) = it.exotic {
         kit::text("EXOTIC", x + 14.0, ly + 4.0, 14.0, c);
@@ -224,19 +224,24 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     dust_badge(assets, profile.dust, w - 330.0, 18.0);
     let mut changed = false;
 
-    // Heroes (unlocked).
-    let heroes: Vec<HeroId> = ALL_HEROES.iter().copied().filter(|h| profile.is_unlocked(*h)).collect();
-    if !heroes.iter().any(|h| h.index() == st.hero) {
-        st.hero = profile.selected.index();
-    }
-    let hero = ALL_HEROES[st.hero];
+    // Heroes: pick one to view, equip it to make it the active hero.
+    let heroes: Vec<HeroId> = ALL_HEROES.to_vec();
+    let hero = ALL_HEROES[st.hero.min(ALL_HEROES.len() - 1)];
+    let open = profile.is_unlocked(hero);
     let lx = 24.0;
     for (i, h) in heroes.iter().enumerate() {
         let r = Rect::new(lx + i as f32 * 42.0, 74.0, 38.0, 46.0);
         let sel = *h == hero;
+        let active = *h == profile.selected;
+        let unlocked = profile.is_unlocked(*h);
         kit::rounded(r.x, r.y, r.w, r.h, 6.0, if sel { Color::new(0.3, 0.16, 0.3, 0.95) } else { kit::PANEL });
-        kit::rounded_outline(r.x, r.y, r.w, r.h, 6.0, 1.5, if sel { crate::menu::ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
-        draw_texture_ex(&assets.hero(*h)[0], r.x + 4.0, r.y + 3.0, WHITE, DrawTextureParams { dest_size: Some(vec2(30.0, 40.0)), ..Default::default() });
+        kit::rounded_outline(r.x, r.y, r.w, r.h, 6.0, if active { 2.5 } else { 1.5 }, if active { GOLD } else if sel { crate::menu::ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+        if hero_def(*h).finished {
+            let tint = if unlocked { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) };
+            draw_texture_ex(&assets.hero(*h)[0], r.x + 4.0, r.y + 3.0, tint, DrawTextureParams { dest_size: Some(vec2(30.0, 40.0)), ..Default::default() });
+        } else {
+            kit::text_fit_centered("?", r.x + r.w / 2.0, r.y + 32.0, r.w, 24.0, FAINT);
+        }
         if r.contains(mouse) && is_mouse_button_pressed(MouseButton::Left) {
             st.hero = h.index();
         }
@@ -245,9 +250,52 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     // Paper doll.
     let (dx, dy, dw, dh) = (lx, 128.0, 410.0, 400.0);
     kit::panel(dx, dy, dw, dh);
-    kit::text_fit(hero_def(hero).name, dx + 16.0, dy + 30.0, dw - 32.0, 20.0, INK);
+    let def = hero_def(hero);
+    let soon = !def.finished;
+    kit::text_fit(if open { def.name } else { "???" }, dx + 16.0, dy + 30.0, dw - 150.0, 20.0, INK);
+    // Equip the hero: it becomes the one you play (and the menu follows it).
+    let er = Rect::new(dx + dw - 126.0, dy + 10.0, 112.0, 30.0);
+    if hero == profile.selected {
+        kit::rounded(er.x, er.y, er.w, er.h, 8.0, Color::new(0.3, 0.24, 0.08, 0.95));
+        kit::rounded_outline(er.x, er.y, er.w, er.h, 8.0, 1.5, GOLD);
+        kit::text_fit_centered("EQUIPPED", er.x + er.w / 2.0, er.y + 21.0, er.w - 10.0, 15.0, GOLD);
+    } else if kit::button(er, if open { "Equip hero" } else if soon { "Coming soon" } else { "Locked" }, open, Style::Primary) {
+        profile.selected = hero;
+        changed = true;
+    }
     let bob = ((time * 2.0).sin() * 2.0) as f32;
-    draw_texture_ex(&assets.hero(hero)[0], dx + dw / 2.0 - 54.0, dy + 92.0 + bob, WHITE, DrawTextureParams { dest_size: Some(vec2(108.0, 144.0)), ..Default::default() });
+    if soon {
+        crate::menu::centered_at("?", dx + dw / 2.0, dy + 160.0, 90.0, FAINT);
+    } else {
+        let tint = if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) };
+        draw_texture_ex(&assets.hero(hero)[0], dx + dw / 2.0 - 48.0, dy + 66.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(96.0, 128.0)), ..Default::default() });
+    }
+    // Who they are, in the column between the slots.
+    let colx = dx + 16.0 + 50.0 + 64.0;
+    let colw = dw - 2.0 * (16.0 + 50.0 + 64.0) + 8.0;
+    let mut ty2 = dy + 214.0;
+    let lines: Vec<(String, Color, u16)> = if open {
+        vec![
+            (def.archetype.to_string(), crate::menu::ACCENT, 13),
+            (format!("Starts with {}", Upgrade::Weapon(def.signature).name()), INK, 12),
+            (format!("Innate: {}", def.innate_text), JADE, 12),
+            (crate::menu::special_text(&def), GOLD, 12),
+        ]
+    } else if soon {
+        vec![("COMING SOON".to_string(), GOLD, 15), ("A new hero is on the way.".to_string(), DIM, 12)]
+    } else {
+        vec![("LOCKED".to_string(), DIM, 14), (format!("Unlock: {}", sim::meta::unlock_text(hero)), GOLD, 12)]
+    };
+    for (t, c, sz) in lines {
+        for l in kit::wrap(&t, colw, sz) {
+            if ty2 > dy + dh - 10.0 {
+                break;
+            }
+            kit::text_fit_centered(&l, colx + colw / 2.0, ty2, colw, sz as f32, c);
+            ty2 += sz as f32 + 3.0;
+        }
+        ty2 += 4.0;
+    }
     let cs = 50.0;
     let loadout = profile.loadouts[hero.index()];
     for (pos, slot) in LOADOUT.iter().enumerate() {

@@ -16,6 +16,11 @@ pub const ACCENT: Color = Color::new(1.0, 0.43, 0.63, 1.0);
 const GOLD: Color = Color::new(1.0, 0.85, 0.4, 1.0);
 const DIM: Color = Color::new(1.0, 1.0, 1.0, 0.55);
 
+pub fn centered_at(text: &str, cx: f32, y: f32, size: f32, color: Color) {
+    let d = kit::measure(text, size as u16);
+    kit::text(text, cx - d.width / 2.0, y, size, color);
+}
+
 pub fn centered(text: &str, y: f32, size: f32, color: Color) {
     let d = kit::measure(text, size as u16);
     kit::text(text, (screen_width() - d.width) / 2.0, y, size, color);
@@ -23,7 +28,7 @@ pub fn centered(text: &str, y: f32, size: f32, color: Color) {
 
 /// Draws a button; returns true when clicked. Main actions get the vermilion style.
 fn button(r: Rect, label: &str, enabled: bool) -> bool {
-    let primary = matches!(label, "Start" | "Begin the night" | "Buy" | "Choose hero");
+    let primary = matches!(label, "Start" | "Begin the night" | "Buy");
     kit::button(r, label, enabled, if primary { kit::Style::Primary } else { kit::Style::Secondary })
 }
 
@@ -321,116 +326,32 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     if dev && kit::button(Rect::new(20.0, h - 52.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
         action = Some(MenuAction::Dev);
     }
+    // Copyright (the font has no © glyph, so the circle is drawn).
+    let owner = "2026 xSolstice1";
+    let ow = kit::measure(owner, 13).width;
+    let (cx2, cy2) = (w - 24.0 - ow - 14.0, h - 18.0);
+    draw_circle_lines(cx2, cy2, 6.5, 1.2, Color::new(1.0, 1.0, 1.0, 0.45));
+    kit::text("c", cx2 - 3.2, cy2 + 3.6, 11.0, Color::new(1.0, 1.0, 1.0, 0.45));
+    kit::text(owner, w - 24.0 - ow, h - 13.5, 13.0, Color::new(1.0, 1.0, 1.0, 0.45));
     let hint = "WASD / arrows to move   ·   Space: special   ·   Esc to pause";
     kit::text_fit_centered(hint, w / 2.0, h - 14.0, w - 300.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
     action
 }
 
-pub enum SelectAction {
-    Begin,
-    Back,
-}
-
-/// Character select. `cursor` is the highlighted hero index (kept between frames).
-pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f64) -> Option<SelectAction> {
-    backdrop(time);
-    let w = screen_width();
-    centered("CHOOSE YOUR HERO", 70.0, 44.0, ACCENT);
-    sen_badge(assets, profile.sen);
-
-    // Hero cards in a row.
-    let n = ALL_HEROES.len();
-    let gap = 12.0;
-    let cw = ((w - 40.0 - gap * (n as f32 - 1.0)) / n as f32).min(150.0);
-    let ch = 190.0;
-    let x0 = (w - (n as f32 * cw + (n as f32 - 1.0) * gap)) / 2.0;
-    let y0 = 110.0;
-    let mouse: Vec2 = mouse_position().into();
-    for (i, hero) in ALL_HEROES.iter().enumerate() {
-        let r = Rect::new(x0 + i as f32 * (cw + gap), y0, cw, ch);
-        let open = profile.is_unlocked(*hero);
-        let sel = *cursor == i;
-        let hover = r.contains(mouse);
-        kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL }, if sel { ACCENT } else if hover { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
-        let tint = if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) };
-        let bob = if sel && open { ((time * 4.0).sin() * 2.0) as f32 } else { 0.0 };
-        draw_texture_ex(&assets.hero(*hero)[0], r.x + (cw - 72.0) / 2.0, r.y + 18.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(72.0, 96.0)), ..Default::default() });
-        let def = hero_def(*hero);
-        let name = if open { def.name.split(' ').next().unwrap_or(def.name) } else { "???" };
-        kit::text_fit_centered(name, r.x + cw / 2.0, r.y + 140.0, cw - 12.0, 24.0, if open { WHITE } else { DIM });
-        kit::text_fit_centered(def.archetype, r.x + cw / 2.0, r.y + 162.0, cw - 10.0, 16.0, DIM);
-        if hover && is_mouse_button_pressed(MouseButton::Left) {
-            *cursor = i;
-        }
+/// One-line description of a hero's special move.
+pub fn special_text(def: &sim::content::HeroDef) -> String {
+    if !def.finished {
+        return "Placeholder: own sprite and special move coming later.".to_string();
     }
-    if is_key_pressed(KeyCode::Left) || is_key_pressed(KeyCode::A) {
-        *cursor = (*cursor + n - 1) % n;
-    }
-    if is_key_pressed(KeyCode::Right) || is_key_pressed(KeyCode::D) {
-        *cursor = (*cursor + 1) % n;
-    }
-
-    // Detail panel.
-    let hero = ALL_HEROES[*cursor];
-    let def = hero_def(hero);
-    let open = profile.is_unlocked(hero);
-    // The panel grows to fit its (wrapped) lines.
-    let pw = 760.0f32.min(w - 40.0);
-    let inner = pw - 40.0;
-    let innate = kit::wrap(&format!("Innate: {}", def.innate_text), inner, 20);
-    let px = (w - pw) / 2.0;
-    let py = y0 + ch + 20.0;
-    let special_text = if !def.finished {
-        "Placeholder: own sprite and special move coming later.".to_string()
-    } else {
-        let what = match def.special {
-            sim::content::SpecialKind::Barrier => "a purifying ring that erases fireballs",
-            sim::content::SpecialKind::NineTails => "8s transformation: nine tails, aura, golden orb volleys",
-            sim::content::SpecialKind::Hannya => "8s berserk: beams, crescent waves, shadow steps, finale blast",
-            sim::content::SpecialKind::Mukade => "8s predator form: tendril barrage, eruptions, regeneration",
-            sim::content::SpecialKind::Firmament => "8s domain: enemies suspended and crushed, ends in a giant void lance",
-            sim::content::SpecialKind::Divine => "8s invulnerable: ofuda storm, yin-yang crashes, seal rings, final purification",
-        };
-        format!("Special: {} ({what})", def.special_name)
+    let what = match def.special {
+        sim::content::SpecialKind::Barrier => "a purifying ring that erases fireballs",
+        sim::content::SpecialKind::NineTails => "8s transformation: nine tails, aura, golden orb volleys",
+        sim::content::SpecialKind::Hannya => "8s berserk: beams, crescent waves, shadow steps, finale blast",
+        sim::content::SpecialKind::Mukade => "8s predator form: tendril barrage, eruptions, regeneration",
+        sim::content::SpecialKind::Firmament => "8s domain: enemies suspended and crushed, ends in a giant void lance",
+        sim::content::SpecialKind::Divine => "8s invulnerable: ofuda storm, yin-yang crashes, seal rings, final purification",
     };
-    let special = kit::wrap(&special_text, inner, 17);
-    let ph = if open { 120.0 + innate.len() as f32 * 24.0 + special.len() as f32 * 21.0 + 14.0 } else { 150.0 };
-    kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
-    if open {
-        kit::text_fit(def.name, px + 20.0, py + 40.0, inner, 32.0, WHITE);
-        kit::text_fit(def.archetype, px + 20.0, py + 64.0, inner, 18.0, ACCENT);
-        draw_texture_ex(assets.icon(Upgrade::Weapon(def.signature)), px + 20.0, py + 78.0, WHITE, DrawTextureParams { dest_size: Some(vec2(28.0, 28.0)), ..Default::default() });
-        kit::text_fit(&format!("Starts with {}", Upgrade::Weapon(def.signature).name()), px + 58.0, py + 99.0, inner - 40.0, 20.0, WHITE);
-        let mut ly = py + 132.0;
-        for l in &innate {
-            kit::text(l, px + 20.0, ly, 20.0, Color::new(0.6, 1.0, 0.7, 1.0));
-            ly += 24.0;
-        }
-        if !def.finished {
-            kit::text(&special_text, px + 20.0, ly, 17.0, DIM);
-        } else {
-            for l in &special {
-                kit::text(l, px + 20.0, ly + 4.0, 17.0, Color::new(1.0, 0.8, 0.45, 1.0));
-                ly += 21.0;
-            }
-        }
-    } else {
-        kit::text("LOCKED", px + 20.0, py + 44.0, 32.0, DIM);
-        kit::text_fit(&format!("{} (unlock to reveal)", def.archetype), px + 20.0, py + 72.0, inner, 20.0, DIM);
-        kit::text_fit(&format!("Unlock: {}", unlock_text(hero)), px + 20.0, py + 116.0, inner, 24.0, GOLD);
-    }
-
-    let mut action = None;
-    let by = py + ph + 24.0;
-    if button(Rect::new(w / 2.0 - 330.0, by, 200.0, 52.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
-        action = Some(SelectAction::Back);
-    }
-    let begin = button(Rect::new(w / 2.0 - 100.0, by, 430.0, 52.0), if open { "Begin the night" } else { "Locked" }, open);
-    if open && (begin || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space)) {
-        profile.selected = hero;
-        action = Some(SelectAction::Begin);
-    }
-    action
+    format!("Special: {} ({what})", def.special_name)
 }
 
 fn powerup_icon(assets: &Assets, p: PowerUp) -> &Texture2D {
@@ -648,6 +569,7 @@ fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry
                 lines: vec![format!("Blessing: {bless}"), format!("Price: {price}")],
             }
         }
+        Tab::Heroes if !hero_def(ALL_HEROES[i]).finished => Entry { found: false, icon: &assets.hero(ALL_HEROES[i])[0], tint: WHITE, name: "???".into(), lines: vec!["Coming soon.".into()] },
         Tab::Heroes => {
             let h = ALL_HEROES[i];
             let d = hero_def(h);
@@ -774,7 +696,9 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         kit::text("???", px + 20.0, py + 40.0, 30.0, DIM);
         kit::text(hint(st.tab), px + 20.0, py + 74.0, 20.0, DIM);
         if st.tab == Tab::Heroes {
-            kit::text(&format!("Unlock: {}", unlock_text(ALL_HEROES[st.cursor])), px + 20.0, py + 104.0, 20.0, GOLD);
+            let h = ALL_HEROES[st.cursor];
+            let t = if hero_def(h).finished { format!("Unlock: {}", unlock_text(h)) } else { "Coming soon.".to_string() };
+            kit::text(&t, px + 20.0, py + 104.0, 20.0, GOLD);
         }
     }
     button(Rect::new((w - 200.0) / 2.0, py + ph + 18.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape)
@@ -1207,7 +1131,11 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
         kit::text(l, px + 16.0, ty + k as f32 * 19.0, 15.0, DIM);
     }
     let mut action = None;
-    if button(Rect::new(px + pw - 196.0, py + 14.0, 180.0, 48.0), "Choose hero", profile.stage_open(sid)) || is_key_pressed(KeyCode::Enter) {
+    // The active hero (chosen in the Armory).
+    let hdef = hero_def(profile.selected);
+    draw_texture_ex(&assets.hero(profile.selected)[0], px + pw - 250.0, py + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(36.0, 48.0)), ..Default::default() });
+    kit::text_fit(hdef.name.split(' ').next().unwrap_or(""), px + pw - 250.0, py + 78.0, 50.0, 12.0, DIM);
+    if button(Rect::new(px + pw - 196.0, py + 14.0, 180.0, 48.0), "Begin the night", profile.stage_open(sid)) || is_key_pressed(KeyCode::Enter) {
         action = Some(StageAction::Go);
     }
     if button(Rect::new(px + pw - 196.0, py + 70.0, 180.0, 36.0), "Back", true) || is_key_pressed(KeyCode::Escape) {

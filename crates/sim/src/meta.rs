@@ -370,8 +370,9 @@ impl Profile {
         b
     }
 
+    /// Unlocked and playable (placeholder heroes are "coming soon" and never available).
     pub fn is_unlocked(&self, h: HeroId) -> bool {
-        self.unlocked.contains(&h)
+        self.unlocked.contains(&h) && crate::content::hero_def(h).finished
     }
 
     // ───────────── Equipment ─────────────
@@ -632,7 +633,7 @@ impl Profile {
                 HeroId::Yuzu => as_hero == HeroId::Toya && w.player.level >= 60,
                 HeroId::Kuon => as_hero == HeroId::Toya && won && stage == StageId::Rainward,
             };
-            if earned && !self.is_unlocked(h) {
+            if earned && !self.is_unlocked(h) && crate::content::hero_def(h).finished {
                 self.unlocked.push(h);
                 report.unlocked.push(h);
                 report.discovered += 1;
@@ -841,9 +842,9 @@ pub fn collection_progress(p: &Profile) -> (usize, usize) {
         + p.awakenings_found.len()
         + p.passives_found.len()
         + p.shrines_found.len()
-        + p.unlocked.len()
+        + p.unlocked.iter().filter(|h| crate::content::hero_def(**h).finished).count()
         + p.relics.len();
-    let total = ALL_ENEMIES.len() + 2 * ALL_WEAPONS.len() + ALL_PASSIVES.len() + ALL_SHRINE_EVENTS.len() + ALL_HEROES.len() + ALL_RELICS.len();
+    let total = ALL_ENEMIES.len() + 2 * ALL_WEAPONS.len() + ALL_PASSIVES.len() + ALL_SHRINE_EVENTS.len() + ALL_HEROES.iter().filter(|h| crate::content::hero_def(**h).finished).count() + ALL_RELICS.len();
     (found, total)
 }
 
@@ -860,8 +861,8 @@ mod tests {
     fn profile_round_trips() {
         let mut p = Profile { sen: 1234, spent: 300, runs: 3, total_kills: 99_999, best_time: 612.5, best_level: 41, great_onis: 2, night_lords: 1, ..Default::default() };
         p.ranks[PowerUp::Greed.index()] = 4;
-        p.unlocked.push(HeroId::Kaede);
-        p.selected = HeroId::Kaede;
+        p.unlocked.push(HeroId::Kuon);
+        p.selected = HeroId::Kuon;
         p.enemy_kills[2] = 77;
         p.weapons_found = vec![WeaponKind::Ofuda, WeaponKind::Taiko];
         p.awakenings_found = vec![WeaponKind::Taiko];
@@ -912,7 +913,7 @@ mod tests {
         // The same feat as another hero doesn't count for that unlock.
         let mut w = World::new(WorldConfig { hero: HeroId::Riku, ..Default::default() });
         w.state = RunState::Won;
-        assert_eq!(p.record_run(&w).unlocked, vec![HeroId::Mika], "the Night Lord as Riku unlocks Mika, not Shun");
+        assert!(p.record_run(&w).unlocked.is_empty(), "the Shotengai as Riku unlocks nothing (Mika is a placeholder)");
         let mut w = World::new(WorldConfig { hero: HeroId::Riku, stage: StageId::ShrineValley, ..Default::default() });
         w.state = RunState::Won;
         assert_eq!(p.record_run(&w).unlocked, vec![HeroId::Shun], "Shrine Valley as Riku unlocks Shun");

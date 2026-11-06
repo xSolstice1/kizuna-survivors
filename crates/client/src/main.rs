@@ -31,7 +31,6 @@ enum Screen {
     Menu,
     /// Map select (world + difficulty), before character select.
     Stages,
-    Characters,
     Armory,
     Draw,
     Shop,
@@ -88,7 +87,6 @@ async fn main() {
     let mut world = new_world(stress, &profile);
     // Set once a finished run has been banked into the profile.
     let mut report: Option<RunReport> = None;
-    let mut hero_cursor = sim::content::ALL_HEROES.iter().position(|h| *h == profile.selected).unwrap_or(0);
     let mut shop_cursor = 0usize;
     let mut acc = 0.0f32;
     let mut sim_ms = 0.0f32;
@@ -218,17 +216,6 @@ async fn main() {
             Screen::Stages => match menu::stage_select(&mut profile, &assets, &stage_art, now) {
                 Some(menu::StageAction::Go) => {
                     save::store(&profile);
-                    screen = Screen::Characters;
-                }
-                Some(menu::StageAction::Back) => {
-                    save::store(&profile);
-                    screen = Screen::Menu;
-                }
-                None => {}
-            },
-            Screen::Characters => match menu::char_select(&mut profile, &assets, &mut hero_cursor, now) {
-                Some(menu::SelectAction::Begin) => {
-                    save::store(&profile);
                     if profile.stage.index() > 0 {
                         audio.prepare(synth::Track::World(profile.stage.index() as u8)).await;
                     }
@@ -240,7 +227,10 @@ async fn main() {
                     jingle_played = false;
                     screen = Screen::Playing;
                 }
-                Some(menu::SelectAction::Back) => screen = Screen::Stages,
+                Some(menu::StageAction::Back) => {
+                    save::store(&profile);
+                    screen = Screen::Menu;
+                }
                 None => {}
             },
             Screen::Shop => match menu::shop(&mut profile, &assets, &mut shop_cursor, now) {
