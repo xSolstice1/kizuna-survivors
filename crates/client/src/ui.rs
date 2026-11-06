@@ -1,6 +1,8 @@
 //! Screen-space UI: HUD, level-up cards, shrine, pause menu, title and results screens.
 
 use macroquad::prelude::*;
+#[allow(unused_imports)]
+use crate::kit::{draw_circle, draw_circle_lines};
 use sim::content::{
     awakened_name, complement, hero_def, passive_max, EnemyKind, ShrineEvent, SpecialKind, Upgrade, AWAKEN_FROM, MAX_LEVEL,
 };
@@ -62,7 +64,7 @@ fn portrait(assets: &Assets, world: &World, cx: f32, cy: f32, r: f32) {
         cx - 12.0 * s,
         cy - r + 1.0,
         WHITE,
-        DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0, 18.0)), dest_size: Some(vec2(24.0 * s, 18.0 * s)), ..Default::default() },
+        DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0 * crate::sprites::UP, 18.0 * crate::sprites::UP)), dest_size: Some(vec2(24.0 * s, 18.0 * s)), ..Default::default() },
     );
 }
 

@@ -1,6 +1,8 @@
 //! Draws the world: ground, pickups, enemies, player, weapons, effects.
 
 use macroquad::prelude::*;
+#[allow(unused_imports)]
+use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
 use sim::content::{EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
@@ -778,7 +780,7 @@ fn draw_world_enemy(world: &World, i: usize, t: &Texture2D, tint: Color, flip: b
         Rank::Final => 2.2,
         _ => 1.0,
     };
-    let (w, h) = (t.width() * scale, t.height() * scale);
+    let (w, h) = { let n = crate::sprites::nat(t); (n.x * scale, n.y * scale) };
     let tf = time as f32;
     let bob = if rank >= Rank::Mini { (tf * 2.0 + i as f32).sin() * 2.5 } else { 0.0 };
     let mut tint = tint;
@@ -1140,7 +1142,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let t = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
             tint.a = t.clamp(0.1, 1.0) * 0.85;
         }
-        draw_texture_ex(&tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { flip_x: flip, ..Default::default() });
+        draw_texture_ex(&tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(&tex)), flip_x: flip, ..Default::default() });
     }
 
     // Player: walk cycle while moving, blink during i-frames.
@@ -1176,14 +1178,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         // Rampage afterimages trailing behind.
         for (pos, left, age) in &fx.trail {
             let k = 1.0 - age / 0.35;
-            draw_texture_ex(&a.toya_mukade[0], (pos.x - 12.0).round(), (pos.y - 26.0).round(), Color::new(0.9, 0.1, 0.15, 0.35 * k), DrawTextureParams { flip_x: *left, ..Default::default() });
+            draw_texture_ex(&a.toya_mukade[0], (pos.x - 12.0).round(), (pos.y - 26.0).round(), Color::new(0.9, 0.1, 0.15, 0.35 * k), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.toya_mukade[0])), flip_x: *left, ..Default::default() });
         }
     }
     // Shadow Step afterimages (explode shortly) and streaks.
     for (c, left) in &world.afterimages {
         let k = left / 0.35;
         draw_circle(c.x, c.y - 10.0, 18.0 * (1.5 - k), Color::new(0.6, 0.05, 0.1, 0.25 * (1.0 - k) + 0.1));
-        draw_texture_ex(&a.shun_hannya[0], (c.x - 12.0).round(), (c.y - 26.0).round(), Color::new(0.9, 0.15, 0.2, 0.55 * k + 0.2), DrawTextureParams::default());
+        draw_texture_ex(&a.shun_hannya[0], (c.x - 12.0).round(), (c.y - 26.0).round(), Color::new(0.9, 0.15, 0.2, 0.55 * k + 0.2), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.shun_hannya[0])), ..Default::default() });
     }
     for (from, to, age) in &fx.steps {
         let k = 1.0 - age / 0.3;
@@ -1202,9 +1204,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         // Afterimage trailing behind when moving.
         if c.moving {
             let back = c.facing * -5.0;
-            draw_texture_ex(ctex, cx + back.x, cy + back.y, Color::new(0.5, 0.65, 1.0, 0.25 * fade), DrawTextureParams { flip_x: c.facing.x < 0.0, ..Default::default() });
+            draw_texture_ex(ctex, cx + back.x, cy + back.y, Color::new(0.5, 0.65, 1.0, 0.25 * fade), DrawTextureParams { dest_size: Some(crate::sprites::nat(ctex)), flip_x: c.facing.x < 0.0, ..Default::default() });
         }
-        draw_texture_ex(ctex, cx, cy, tint, DrawTextureParams { flip_x: c.facing.x < 0.0, ..Default::default() });
+        draw_texture_ex(ctex, cx, cy, tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(ctex)), flip_x: c.facing.x < 0.0, ..Default::default() });
         if c.striking > 0.0 {
             let base = c.facing.y.atan2(c.facing.x);
             let k = c.striking / 0.15;
@@ -1245,7 +1247,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         &a.hero(world.cfg.hero)[frame]
     };
     let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
-    let params = DrawTextureParams { flip_x: pl.facing.x < 0.0, ..Default::default() };
+    let params = DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: pl.facing.x < 0.0, ..Default::default() };
     if fox || hannya || mukade || domain || divine {
         // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread / star-blue), offset around.
         let flare = 0.45 + 0.25 * (t * 9.0).sin();
@@ -1363,7 +1365,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 q.x - 3.0,
                 q.y - 5.0,
                 ink,
-                DrawTextureParams { rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() },
+                DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.talisman)), rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() },
             ),
             ProjKind::Foxfire | ProjKind::Comet => {
                 let comet = pr.kind[i] == ProjKind::Comet;
@@ -1418,7 +1420,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     let c = q + back * (k as f32 * 3.5);
                     draw_rectangle(c.x - 1.0, c.y - 1.0, 2.0, 2.0, Color::new(1.0, 0.75, 0.3, 0.8 - k as f32 * 0.2));
                 }
-                draw_texture_ex(&a.familiar, (q.x - 6.0).round(), (q.y - 5.0).round(), WHITE, DrawTextureParams { flip_x: v.x < 0.0, ..Default::default() });
+                draw_texture_ex(&a.familiar, (q.x - 6.0).round(), (q.y - 5.0).round(), WHITE, DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.familiar)), flip_x: v.x < 0.0, ..Default::default() });
             }
             ProjKind::CrescentWave => {
                 let hannya = world.form_kind() == Some(SpecialKind::Hannya);
@@ -1445,7 +1447,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     draw_circle(c.x, c.y, 4.0 - k as f32 * 0.7, Color::new(1.0, 0.8, 0.3, 0.5 - k as f32 * 0.1));
                 }
                 draw_circle(q.x, q.y, 8.0, Color::new(1.0, 0.85, 0.35, 0.25));
-                draw_texture_ex(&a.talisman, q.x - 3.0, q.y - 5.0, Color::new(1.0, 0.85, 0.35, 1.0), DrawTextureParams { rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() });
+                draw_texture_ex(&a.talisman, q.x - 3.0, q.y - 5.0, Color::new(1.0, 0.85, 0.35, 1.0), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.talisman)), rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() });
             }
             ProjKind::Petal => {
                 let a = t * 10.0 + q.x * 0.1;
@@ -1880,7 +1882,7 @@ fn draw_blade(a: &Assets, p: sim::Vec2, flip: bool, hannya: bool, swing: Option<
             let tex = if hannya { &a.cleaver_rest_hannya } else { &a.cleaver_rest };
             // Grip anchor inside the 30x30 sprite is (5, 23); mirror it when facing left.
             let x = if flip { hand.x - 24.0 } else { hand.x - 5.0 };
-            draw_texture_ex(tex, x, hand.y - 23.0, WHITE, DrawTextureParams { flip_x: flip, ..Default::default() });
+            draw_texture_ex(tex, x, hand.y - 23.0, WHITE, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
         }
         Some((left, dir)) => {
             let tex = if hannya { &a.cleaver_hannya } else { &a.cleaver };
@@ -1894,7 +1896,7 @@ fn draw_blade(a: &Assets, p: sim::Vec2, flip: bool, hannya: bool, swing: Option<
                 hand.x - 4.5,
                 hand.y - 35.0,
                 WHITE,
-                DrawTextureParams { rotation: rot, pivot: Some(hand), flip_x: flip, ..Default::default() },
+                DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), rotation: rot, pivot: Some(hand), flip_x: flip, ..Default::default() },
             );
         }
     }

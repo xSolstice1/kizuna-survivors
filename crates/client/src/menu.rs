@@ -1,6 +1,8 @@
 //! Out-of-run screens: main menu, character select and the Shrine Shop.
 
 use macroquad::prelude::*;
+#[allow(unused_imports)]
+use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
 use crate::kit::{mouse_position, screen_height, screen_width};
@@ -49,21 +51,125 @@ fn sen_badge(assets: &Assets, sen: u32) {
 }
 
 pub fn backdrop(time: f64) {
-    clear_background(Color::from_rgba(18, 14, 30, 255));
+    scenery(time, Color::new(1.0, 0.45, 0.65, 1.0));
+}
+
+fn lerp_c(a: Color, b: Color, t: f32) -> Color {
+    Color::new(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t)
+}
+
+/// Vertical gradient band.
+pub fn gradient(x: f32, y: f32, w: f32, h: f32, top: Color, bottom: Color) {
+    let n = ((h / 6.0) as usize).clamp(2, 80);
+    let step = h / n as f32;
+    for k in 0..n {
+        let t = (k as f32 + 0.5) / n as f32;
+        draw_rectangle(x, y + k as f32 * step, w, step + 0.6, lerp_c(top, bottom, t));
+    }
+}
+
+/// A soft ridge line filled down to `bottom`: sum of sines, drawn as a strip of quads.
+fn ridge(x0: f32, x1: f32, base: f32, amp: f32, freq: f32, seed: f32, drift: f32, bottom: f32, c: Color) {
+    let step = 12.0;
+    let mut x = x0;
+    let hgt = |x: f32| {
+        let u = x * freq + seed + drift;
+        base - amp * (0.55 * (u).sin() + 0.3 * (u * 2.3 + 1.7).sin() + 0.15 * (u * 5.1 + 0.4).sin()).abs().powf(0.9)
+    };
+    while x < x1 {
+        let (ya, yb) = (hgt(x), hgt(x + step));
+        draw_triangle(vec2(x, ya), vec2(x + step, yb), vec2(x, bottom), c);
+        draw_triangle(vec2(x + step, yb), vec2(x + step, bottom), vec2(x, bottom), c);
+        x += step;
+    }
+}
+
+/// The painted night used behind every menu: sky gradient, stars, a moon with shafts of
+/// light, layered mountains, mist, a distant torii and lanterns, petals and fireflies.
+pub fn scenery(time: f64, acc: Color) {
     let (w, h) = (screen_width(), screen_height());
-    for k in 0..8 {
-        let y = h * (0.55 + k as f32 * 0.06);
-        draw_rectangle(0.0, y, w, h * 0.06, Color::new(0.35, 0.12, 0.25, 0.025 * k as f32));
+    let t = time as f32;
+    clear_background(Color::new(0.04, 0.03, 0.08, 1.0));
+    let top = Color::new(0.05, 0.04, 0.12, 1.0);
+    let mid = lerp_c(Color::new(0.16, 0.08, 0.22, 1.0), Color::new(acc.r * 0.3, acc.g * 0.2, acc.b * 0.35, 1.0), 0.35);
+    gradient(0.0, 0.0, w, h * 0.62, top, mid);
+    gradient(0.0, h * 0.62, w, h * 0.38, mid, Color::new(0.03, 0.02, 0.06, 1.0));
+    // Stars.
+    for k in 0..90 {
+        let sx = ((k as f32 * 0.7548).fract()) * w;
+        let sy = ((k as f32 * 0.5698).fract()) * h * 0.55;
+        let tw = 0.35 + 0.65 * (t * (0.8 + (k % 5) as f32 * 0.3) + k as f32).sin().abs();
+        let r = if k % 9 == 0 { 1.6 } else { 0.9 };
+        draw_circle(sx, sy, r, Color::new(1.0, 0.95, 0.9, 0.55 * tw));
     }
-    draw_circle(w * 0.82, h * 0.2, 70.0, Color::new(1.0, 0.9, 0.7, 0.07));
-    draw_circle(w * 0.82, h * 0.2, 46.0, Color::new(1.0, 0.92, 0.75, 0.10));
-    // Drifting lantern lights.
+    // Moon, halo and shafts.
+    let (mx, my) = (w * 0.62, 70.0);
+    for (r, a) in [(190.0, 0.025), (130.0, 0.04), (90.0, 0.07), (64.0, 0.1)] {
+        draw_circle(mx, my, r + (t * 0.8).sin() * 4.0, Color::new(1.0, 0.92, 0.82, a));
+    }
+    draw_circle(mx, my, 46.0, Color::new(1.0, 0.96, 0.88, 0.95));
+    for (cx, cy, r) in [(-14.0, -10.0, 9.0), (12.0, 8.0, 12.0), (-6.0, 18.0, 6.0), (18.0, -16.0, 5.0)] {
+        draw_circle(mx + cx, my + cy, r, Color::new(0.88, 0.84, 0.78, 0.55));
+    }
+    draw_circle(mx + 10.0, my + 6.0, 46.0, Color::new(0.7, 0.62, 0.7, 0.12));
+    for k in 0..6 {
+        let ang = 2.0 + k as f32 * 0.17 + (t * 0.15 + k as f32).sin() * 0.03;
+        let (dx, dy) = (ang.cos(), ang.sin());
+        let len = h * 1.5;
+        let side = vec2(-dy, dx) * (16.0 + k as f32 * 7.0);
+        let p0 = vec2(mx, my);
+        let p1 = p0 + vec2(dx, dy) * len;
+        draw_triangle(p0, p1 + side, p1 - side, Color::new(1.0, 0.95, 0.85, 0.016 + 0.009 * ((t * 0.7 + k as f32).sin() + 1.0)));
+    }
+    // Mountains, far to near, slowly drifting.
+    let far = lerp_c(Color::new(0.14, 0.1, 0.24, 1.0), acc, 0.08);
+    ridge(0.0, w + 12.0, h * 0.58, h * 0.2, 0.004, 1.0, t * 0.01, h, far);
+    // Mist between the ranges.
+    for k in 0..3 {
+        let y = h * (0.56 + 0.06 * k as f32) + (t * 0.3 + k as f32).sin() * 6.0;
+        gradient(0.0, y - 20.0, w, 40.0, Color::new(0.7, 0.65, 0.95, 0.0), Color::new(0.7, 0.65, 0.95, 0.05));
+    }
+    let midc = Color::new(0.08, 0.06, 0.15, 1.0);
+    ridge(0.0, w + 12.0, h * 0.7, h * 0.16, 0.007, 4.0, t * 0.02, h, midc);
+    // A distant torii on the middle range, with a lantern glow.
+    let (tx, ty) = (w * 0.24, h * 0.66);
+    let tc = Color::new(0.05, 0.035, 0.09, 1.0);
+    draw_rectangle(tx - 34.0, ty - 46.0, 6.0, 52.0, tc);
+    draw_rectangle(tx + 28.0, ty - 46.0, 6.0, 52.0, tc);
+    draw_rectangle(tx - 44.0, ty - 50.0, 88.0, 6.0, tc);
+    draw_rectangle(tx - 38.0, ty - 38.0, 76.0, 4.0, tc);
+    let glow = 0.5 + 0.2 * (t * 2.0).sin();
+    draw_circle(tx, ty - 10.0, 26.0, Color::new(1.0, 0.6, 0.3, 0.08 * glow));
+    draw_circle(tx, ty - 10.0, 4.0, Color::new(1.0, 0.75, 0.4, 0.8 * glow));
+    let near = Color::new(0.03, 0.02, 0.06, 1.0);
+    ridge(0.0, w + 12.0, h * 0.86, h * 0.08, 0.012, 9.0, t * 0.035, h, near);
+    // Falling petals.
+    for k in 0..46 {
+        let seed = (k as f32 * 0.618).fract();
+        let speed = 22.0 + (k % 7) as f32 * 6.0;
+        let y = ((t * speed + k as f32 * 131.0) % (h + 40.0)) - 20.0;
+        let x = (seed * (w + 200.0) - 100.0 + y * 0.35 + (t * 0.9 + k as f32).sin() * 26.0) % (w + 100.0);
+        let rot = t * (1.5 + (k % 5) as f32 * 0.4) + k as f32;
+        let sz = 3.0 + (k % 3) as f32;
+        let a = vec2(rot.cos(), rot.sin()) * sz;
+        let b = vec2(-rot.sin(), rot.cos()) * sz * 0.55;
+        let c = vec2(x, y);
+        let col = Color::new(1.0, 0.64 + 0.1 * (k % 2) as f32, 0.8, 0.6);
+        draw_triangle(c + a, c + b, c - a, col);
+        draw_triangle(c + a, c - b, c - a, col);
+    }
+    // Fireflies.
     for k in 0..24 {
-        let fx = (k as f32 * 0.618).fract();
-        let x = fx * screen_width();
-        let y = screen_height() - ((time as f32 * (12.0 + k as f32 * 1.7) + k as f32 * 97.0) % (screen_height() + 60.0));
-        draw_circle(x, y, 3.0 + (k % 3) as f32, Color::new(1.0, 0.55 + 0.1 * (k % 3) as f32, 0.3, 0.25));
+        let fx = (k as f32 * 0.381).fract();
+        let x = fx * w + (t * 0.4 + k as f32 * 2.0).sin() * 40.0;
+        let y = h - ((t * (8.0 + k as f32 * 1.1) + k as f32 * 97.0) % (h + 60.0));
+        let flick = 0.5 + 0.5 * (t * 3.0 + k as f32 * 1.7).sin();
+        draw_circle(x, y, 8.0, Color::new(acc.r, acc.g, acc.b, 0.07 * flick));
+        draw_circle(x, y, 2.2, Color::new(acc.r, acc.g, acc.b, 0.5 * flick + 0.2));
     }
+    // Vignette.
+    gradient(0.0, 0.0, w, 90.0, Color::new(0.0, 0.0, 0.0, 0.35), Color::new(0.0, 0.0, 0.0, 0.0));
+    gradient(0.0, h - 120.0, w, 120.0, Color::new(0.0, 0.0, 0.0, 0.0), Color::new(0.0, 0.0, 0.0, 0.45));
 }
 
 pub enum MenuAction {
@@ -128,7 +234,11 @@ fn menu_card(r: Rect, label: &str, sub: &str, accent: Color, art: impl FnOnce(Re
     hover && is_mouse_button_pressed(MouseButton::Left)
 }
 
+/// Draws a sprite standing at `bottom`, `h` tall (capped at 3.5x its art size so pixel art
+/// never balloons into blocks).
 fn tex_in(t: &Texture2D, cx: f32, bottom: f32, h: f32, tint: Color) {
+    let n = crate::sprites::nat(t);
+    let h = h.min(n.y * 3.5);
     let s = h / t.height();
     draw_texture_ex(t, (cx - t.width() * s / 2.0).round(), (bottom - h).round(), tint, DrawTextureParams { dest_size: Some(vec2(t.width() * s, h)), ..Default::default() });
 }
@@ -136,64 +246,7 @@ fn tex_in(t: &Texture2D, cx: f32, bottom: f32, h: f32, tint: Color) {
 pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageArt, time: f64, dev: bool) -> Option<MenuAction> {
     let (w, h) = (screen_width(), screen_height());
     let t = time as f32;
-    // Backdrop: the chosen world's ground, slowly drifting, darkened.
-    let drift = (t * 6.0) % 96.0;
-    art.draw_patch(profile.stage, -drift, -drift * 0.5, w + 96.0, h + 96.0, 3.0);
-    draw_rectangle(0.0, 0.0, w, h, Color::new(0.03, 0.02, 0.07, 0.72));
-    for k in 0..10 {
-        let y = h * (0.5 + k as f32 * 0.05);
-        draw_rectangle(0.0, y, w, h * 0.05, Color::new(0.0, 0.0, 0.02, 0.05 * k as f32));
-    }
-    let acc = crate::stage::accent(profile.stage);
-    // A great moon with a slow halo.
-    let (mx, my) = (w * 0.62, 62.0);
-    for (r, a) in [(150.0, 0.03), (105.0, 0.05), (72.0, 0.08)] {
-        draw_circle(mx, my, r + (t * 0.8).sin() * 4.0, Color::new(1.0, 0.92, 0.8, a));
-    }
-    draw_circle(mx, my, 46.0, Color::new(1.0, 0.95, 0.85, 0.42));
-    // Crescent: a shadow bite and a few craters.
-    draw_circle(mx + 16.0, my - 8.0, 40.0, Color::new(0.06, 0.05, 0.12, 0.55));
-    draw_circle(mx - 18.0, my + 10.0, 6.0, Color::new(0.85, 0.8, 0.72, 0.35));
-    draw_circle(mx - 26.0, my - 12.0, 4.0, Color::new(0.85, 0.8, 0.72, 0.3));
-    // Light shafts from the moon.
-    for k in 0..5 {
-        let ang = 2.2 + k as f32 * 0.16 + (t * 0.15 + k as f32).sin() * 0.03;
-        let (dx, dy) = (ang.cos(), ang.sin());
-        let len = h * 1.4;
-        let side = vec2(-dy, dx) * (18.0 + k as f32 * 6.0);
-        let p0 = vec2(mx, my);
-        let p1 = p0 + vec2(dx, dy) * len;
-        draw_triangle(p0, p1 + side, p1 - side, Color::new(1.0, 0.95, 0.85, 0.018 + 0.01 * ((t * 0.7 + k as f32).sin() + 1.0)));
-    }
-    // Drifting mist bands.
-    for k in 0..4 {
-        let y = h * (0.55 + 0.11 * k as f32) + (t * 0.3 + k as f32).sin() * 10.0;
-        draw_rectangle(0.0, y, w, 40.0, Color::new(0.6, 0.6, 0.9, 0.02 + 0.01 * (t * 0.5 + k as f32 * 1.7).sin().abs()));
-    }
-    // Falling petals.
-    for k in 0..46 {
-        let seed = (k as f32 * 0.618).fract();
-        let speed = 22.0 + (k % 7) as f32 * 6.0;
-        let y = ((t * speed + k as f32 * 131.0) % (h + 40.0)) - 20.0;
-        let x = (seed * (w + 200.0) - 100.0 + y * 0.35 + (t * 0.9 + k as f32).sin() * 26.0) % (w + 100.0);
-        let rot = t * (1.5 + (k % 5) as f32 * 0.4) + k as f32;
-        let sz = 3.0 + (k % 3) as f32;
-        let a = vec2(rot.cos(), rot.sin()) * sz;
-        let b = vec2(-rot.sin(), rot.cos()) * sz * 0.55;
-        let c = vec2(x, y);
-        let col = Color::new(1.0, 0.62 + 0.1 * (k % 2) as f32, 0.78, 0.55);
-        draw_triangle(c + a, c + b, c - a, col);
-        draw_triangle(c + a, c - b, c - a, col);
-    }
-    // Fireflies in the world's accent colour.
-    for k in 0..22 {
-        let fx = (k as f32 * 0.381).fract();
-        let x = fx * w + (t * 0.4 + k as f32 * 2.0).sin() * 40.0;
-        let y = h - ((t * (8.0 + k as f32 * 1.1) + k as f32 * 97.0) % (h + 60.0));
-        let flick = 0.5 + 0.5 * (t * 3.0 + k as f32 * 1.7).sin();
-        draw_circle(x, y, 7.0, Color::new(acc.r, acc.g, acc.b, 0.06 * flick));
-        draw_circle(x, y, 2.2, Color::new(acc.r, acc.g, acc.b, 0.5 * flick + 0.2));
-    }
+    scenery(time, crate::stage::accent(profile.stage));
 
     // Logo: soft glow, gently bobbing letters and a light sweep.
     let tr = title_rect();
@@ -250,8 +303,10 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     let stage = profile.stage;
     let sdef = stage.def();
     if menu_card(card(0), "START", &format!("{}  ·  {}", sdef.chapter, sdef.name), crate::stage::accent(stage), |r, hover| {
-        art.draw_patch(stage, r.x, r.y, r.w, r.h, 2.0);
         let c = crate::stage::accent(stage);
+        gradient(r.x, r.y, r.w, r.h, Color::new(c.r * 0.25, c.g * 0.2, c.b * 0.35, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
+        art.draw_patch(stage, r.x, r.y + r.h * 0.72, r.w, r.h * 0.28, 2.0);
+        gradient(r.x, r.y + r.h * 0.72, r.w, r.h * 0.12, Color::new(0.04, 0.03, 0.08, 0.9), Color::new(0.04, 0.03, 0.08, 0.0));
         draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.45, r.w * 0.42, Color::new(c.r, c.g, c.b, if hover { 0.22 } else { 0.14 }));
         let bob = (t * 2.0).sin() * 3.0;
         tex_in(assets.enemy_tex(sdef.final_boss), r.x + r.w / 2.0, r.y + r.h * 0.78 + bob, r.h * 0.62, WHITE);
@@ -260,7 +315,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Start);
     }
     if menu_card(card(1), "ARMORY", &format!("{} items", profile.items.len()), kit::SKY, |r, _| {
-        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.08, 0.1, 0.18, 1.0));
+        gradient(r.x, r.y, r.w, r.h, Color::new(0.12, 0.18, 0.32, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.48, r.w * 0.36, Color::new(0.35, 0.6, 1.0, 0.12));
         tex_in(&assets.hero(profile.selected)[0], r.x + r.w / 2.0, r.y + r.h * 0.8, r.h * 0.5, WHITE);
         let slots = [sim::gear::Slot::Hat, sim::gear::Slot::Ring, sim::gear::Slot::Charm, sim::gear::Slot::Shoes, sim::gear::Slot::Arsenal, sim::gear::Slot::Omamori];
@@ -274,9 +329,9 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Armory);
     }
     if menu_card(card(2), "SHRINE DRAW", "Test your fortune", GOLD, |r, hover| {
-        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.16, 0.06, 0.1, 1.0));
+        gradient(r.x, r.y, r.w, r.h, Color::new(0.32, 0.12, 0.14, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         let glow = if hover { 0.3 } else { 0.18 };
-        draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.5, r.w * 0.45, Color::new(1.0, 0.75, 0.35, glow));
+        draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.62, r.w * 0.3, Color::new(1.0, 0.75, 0.35, glow));
         tex_in(&assets.shrine, r.x + r.w / 2.0, r.y + r.h * 0.82, r.h * 0.55, WHITE);
         for k in 0..10 {
             let a = t * 0.8 + k as f32 * 0.628;
@@ -289,7 +344,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Draw);
     }
     if menu_card(card(3), "SHRINE SHOP", "Permanent blessings", kit::JADE, |r, _| {
-        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.06, 0.13, 0.1, 1.0));
+        gradient(r.x, r.y, r.w, r.h, Color::new(0.1, 0.24, 0.18, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.45, r.w * 0.4, Color::new(0.4, 1.0, 0.6, 0.1));
         for (k, name) in ["might", "guard", "haste", "vitality", "magnetism", "recovery"].iter().enumerate() {
             let (c, row) = (k % 2, k / 2);
@@ -307,7 +362,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     }
     let found = profile.enemy_kills.iter().filter(|k| **k > 0).count();
     if menu_card(card(4), "COLLECTIONS", &format!("{found} Otherworlders met"), SAKURA, |r, _| {
-        draw_rectangle(r.x, r.y, r.w, r.h, Color::new(0.12, 0.06, 0.16, 1.0));
+        gradient(r.x, r.y, r.w, r.h, Color::new(0.24, 0.1, 0.28, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         let show = [EnemyKind::Wisp, EnemyKind::Kodama, EnemyKind::LeafShinobi, EnemyKind::LostSoul, EnemyKind::RainGhoul, EnemyKind::CursedSpawn, EnemyKind::Chochin, EnemyKind::LanternFairy, EnemyKind::CurseEye];
         for (k, e) in show.iter().enumerate() {
             let (c, row) = (k % 3, k / 3);
@@ -654,7 +709,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         let sel = st.cursor == i;
         kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL }, if sel { ACCENT } else if r.contains(mouse) { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         // Fit the icon into the cell keeping its aspect ratio.
-        let (iw, ih) = (e.icon.width(), e.icon.height());
+        let (iw, ih) = { let n = crate::sprites::nat(e.icon); (n.x, n.y) };
         let k = ((cw - 22.0) / iw.max(ih)).floor().max(1.0).min(4.0);
         let (dw, dh) = (iw * k, ih * k);
         let tint = if e.found { e.tint } else { Color::new(0.0, 0.0, 0.0, 0.85) };
@@ -880,7 +935,7 @@ pub fn stats(profile: &Profile, assets: &Assets, scroll: &mut StripScroll, time:
         let k = ALL_ENEMIES[i];
         let y = cy + 50.0 + row_i as f32 * 38.0;
         let (icon, tint) = enemy_icon(assets, k);
-        let (iw, ih) = (icon.width(), icon.height());
+        let (iw, ih) = { let n = crate::sprites::nat(icon); (n.x, n.y) };
         let sc = (28.0 / iw.max(ih)).min(2.0);
         draw_texture_ex(icon, x + pad, y + (30.0 - ih * sc) / 2.0, tint, DrawTextureParams { dest_size: Some(vec2(iw * sc, ih * sc)), ..Default::default() });
         kit::text(k.name(), x + pad + 40.0, y + 14.0, 15.0, kit::INK);
@@ -939,7 +994,7 @@ pub fn stats(profile: &Profile, assets: &Assets, scroll: &mut StripScroll, time:
         }
         kit::panel(x, hy, hw, 96.0);
         let tex = &assets.hero(*h)[0];
-        draw_texture_ex(tex, x + 10.0, hy + 14.0, WHITE, DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0, 18.0)), dest_size: Some(vec2(48.0, 36.0)), ..Default::default() });
+        draw_texture_ex(tex, x + 10.0, hy + 14.0, WHITE, DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0 * crate::sprites::UP, 18.0 * crate::sprites::UP)), dest_size: Some(vec2(48.0, 36.0)), ..Default::default() });
         let name = hero_def(*h).name.split(' ').next().unwrap_or("");
         kit::text(name, x + 64.0, hy + 30.0, 17.0, kit::INK);
         let hi = h.index();
@@ -1005,7 +1060,8 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
         draw_rectangle(ax, ay, aw, ah, Color::new(0.0, 0.0, 0.0, 0.25));
         if let Some(prop) = art.world_tex(*sid, 4) {
             let s = 1.6;
-            draw_texture_ex(prop, ax + 18.0, ay + ah - prop.height() * s - 4.0, if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.8) }, DrawTextureParams { dest_size: Some(vec2(prop.width() * s, prop.height() * s)), ..Default::default() });
+            let n = crate::sprites::nat(prop);
+            draw_texture_ex(prop, ax + 18.0, ay + ah - n.y * s - 4.0, if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.8) }, DrawTextureParams { dest_size: Some(n * s), ..Default::default() });
         }
         let boss = assets.enemy_tex(def.final_boss);
         let bs = (ah - 6.0) / boss.height();
@@ -1113,7 +1169,7 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
         sim::gear::drop_ilvl(sid, d.index(), asc)
     );
     let tx = px + 16.0 + 3.0 * (bw + 10.0) + 6.0;
-    let tw = px + pw - 210.0 - tx;
+    let tw = px + pw - 262.0 - tx;
     kit::text_fit(&mods, tx, py + 30.0, tw, 15.0, kit::INK);
     let reward = match (d, def.relic) {
         (Difficulty::Nightmare, Some(r)) => format!("First clear: +{} Sen and the relic {} ({})", d.first_clear_sen(), r.name(), r.describe()),
@@ -1125,7 +1181,7 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
     } else {
         format!("{}  ·  {}: {}", def.blurb, def.mechanic.name(), def.mechanic.describe())
     };
-    let lines = kit::wrap(&twist, pw - 230.0, 15);
+    let lines = kit::wrap(&twist, pw - 300.0, 15);
     let ty = if profile.difficulty == Difficulty::Nightmare && open_asc > 0 { py + 106.0 } else { py + 80.0 };
     for (k, l) in lines.iter().take(2).enumerate() {
         kit::text(l, px + 16.0, ty + k as f32 * 19.0, 15.0, DIM);

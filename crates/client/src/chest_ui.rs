@@ -1,6 +1,8 @@
 //! Gacha-style chest opening: shake → burst (rarity reveal) → reward cards pop in one by one.
 
 use macroquad::prelude::*;
+#[allow(unused_imports)]
+use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
 use crate::kit::{screen_height, screen_width};

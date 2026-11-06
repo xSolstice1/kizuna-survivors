@@ -66,10 +66,143 @@ pub fn parse(src: &str) -> Sprite {
     Sprite { w: w as u16, h: h as u16, rgba }
 }
 
+/// Every sprite texture is stored at this multiple of its art size, smoothed (Scale2x twice)
+/// and linearly filtered, so pixel art reads as clean, rounded shapes instead of blocks.
+/// Draw with `nat(t)` (the art size) as the destination size.
+pub const UP: f32 = 4.0;
+
+/// A texture's size in art pixels.
+pub fn nat(t: &Texture2D) -> Vec2 {
+    vec2(t.width(), t.height()) / UP
+}
+
+/// Scale2x (EPX): doubles a pixel image, rounding diagonal edges. `wrap` treats the
+/// image as tiling (for ground tiles).
+fn scale2x(w: usize, h: usize, src: &[u8], wrap: bool) -> Vec<u8> {
+    let px = |x: isize, y: isize| -> [u8; 4] {
+        let (x, y) = if wrap {
+            (x.rem_euclid(w as isize) as usize, y.rem_euclid(h as isize) as usize)
+        } else {
+            (x.clamp(0, w as isize - 1) as usize, y.clamp(0, h as isize - 1) as usize)
+        };
+        let o = (y * w + x) * 4;
+        [src[o], src[o + 1], src[o + 2], src[o + 3]]
+    };
+    let (w2, _h2) = (w * 2, h * 2);
+    let mut out = vec![0u8; w * h * 16];
+    for y in 0..h as isize {
+        for x in 0..w as isize {
+            let (e, b, d, f, hh) = (px(x, y), px(x, y - 1), px(x - 1, y), px(x + 1, y), px(x, y + 1));
+            let e0 = if d == b && b != f && d != hh { d } else { e };
+            let e1 = if b == f && b != d && f != hh { f } else { e };
+            let e2 = if d == hh && d != b && hh != f { d } else { e };
+            let e3 = if hh == f && d != hh && b != f { f } else { e };
+            for (k, c) in [e0, e1, e2, e3].iter().enumerate() {
+                let (ox, oy) = (x as usize * 2 + k % 2, y as usize * 2 + k / 2);
+                let o = (oy * w2 + ox) * 4;
+                out[o..o + 4].copy_from_slice(c);
+            }
+        }
+    }
+    out
+}
+
+/// Gives transparent pixels the colour of an opaque neighbour, so linear filtering
+/// doesn't pull a dark fringe in from (0,0,0,0).
+fn bleed(w: usize, h: usize, px: &mut [u8]) {
+    let src = px.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let o = (y * w + x) * 4;
+            if src[o + 3] != 0 {
+                continue;
+            }
+            let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0u32);
+            for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+                if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                    continue;
+                }
+                let q = (ny as usize * w + nx as usize) * 4;
+                if src[q + 3] != 0 {
+                    r += src[q] as u32;
+                    g += src[q + 1] as u32;
+                    b += src[q + 2] as u32;
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                px[o] = (r / n) as u8;
+                px[o + 1] = (g / n) as u8;
+                px[o + 2] = (b / n) as u8;
+            }
+        }
+    }
+}
+
+/// A light 3x3 (1-2-1) blur at 4x resolution: anti-aliases the remaining stair steps
+/// without visibly blurring the art. Colours are premultiplied so edges don't darken.
+fn soften(w: usize, h: usize, src: &[u8], wrap: bool) -> Vec<u8> {
+    let at = |x: isize, y: isize| -> usize {
+        let (x, y) = if wrap {
+            (x.rem_euclid(w as isize) as usize, y.rem_euclid(h as isize) as usize)
+        } else {
+            (x.clamp(0, w as isize - 1) as usize, y.clamp(0, h as isize - 1) as usize)
+        };
+        (y * w + x) * 4
+    };
+    let mut out = vec![0u8; src.len()];
+    const K: [f32; 3] = [1.0, 2.0, 1.0];
+    for y in 0..h as isize {
+        for x in 0..w as isize {
+            let (mut r, mut g, mut b, mut a, mut wsum) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+            for dy in -1..=1isize {
+                for dx in -1..=1isize {
+                    let k = K[(dx + 1) as usize] * K[(dy + 1) as usize];
+                    let o = at(x + dx, y + dy);
+                    let al = src[o + 3] as f32 / 255.0;
+                    r += src[o] as f32 * al * k;
+                    g += src[o + 1] as f32 * al * k;
+                    b += src[o + 2] as f32 * al * k;
+                    a += al * k;
+                    wsum += k;
+                }
+            }
+            let o = at(x, y);
+            let alpha = a / wsum;
+            if a > 0.0 {
+                out[o] = (r / a).min(255.0) as u8;
+                out[o + 1] = (g / a).min(255.0) as u8;
+                out[o + 2] = (b / a).min(255.0) as u8;
+            }
+            out[o + 3] = (alpha * 255.0).round() as u8;
+        }
+    }
+    out
+}
+
 impl Sprite {
+    fn upscaled(&self, wrap: bool) -> (u16, u16, Vec<u8>) {
+        let (w, h) = (self.w as usize, self.h as usize);
+        let a = scale2x(w, h, &self.rgba, wrap);
+        let mut b = scale2x(w * 2, h * 2, &a, wrap);
+        bleed(w * 4, h * 4, &mut b);
+        let b = soften(w * 4, h * 4, &b, wrap);
+        ((w * 4) as u16, (h * 4) as u16, b)
+    }
+
     pub fn texture(&self) -> Texture2D {
-        let t = Texture2D::from_rgba8(self.w, self.h, &self.rgba);
-        t.set_filter(FilterMode::Nearest);
+        let (w, h, px) = self.upscaled(false);
+        let t = Texture2D::from_rgba8(w, h, &px);
+        t.set_filter(FilterMode::Linear);
+        t
+    }
+
+    /// A seamless ground tile.
+    pub fn tile_texture(&self) -> Texture2D {
+        let (w, h, px) = self.upscaled(true);
+        let t = Texture2D::from_rgba8(w, h, &px);
+        t.set_filter(FilterMode::Linear);
         t
     }
 
@@ -96,4 +229,8 @@ impl Sprite {
 
 pub fn texture(src: &str) -> Texture2D {
     parse(src).texture()
+}
+
+pub fn tile(src: &str) -> Texture2D {
+    parse(src).tile_texture()
 }

@@ -55,6 +55,19 @@ pub fn begin_ui() {
     set_camera(&Camera2D { target: vec2(w / 2.0, h / 2.0), zoom: vec2(2.0 / w, 2.0 / h), ..Default::default() });
 }
 
+/// Smooth circles: macroquad's default uses 20 segments, which shows on big circles.
+pub fn draw_circle(x: f32, y: f32, r: f32, c: Color) {
+    macroquad::shapes::draw_poly(x, y, circle_sides(r), r, 0.0, c);
+}
+
+pub fn draw_circle_lines(x: f32, y: f32, r: f32, thickness: f32, c: Color) {
+    macroquad::shapes::draw_poly_lines(x, y, circle_sides(r), r, 0.0, thickness, c);
+}
+
+fn circle_sides(r: f32) -> u8 {
+    (r * 0.6).clamp(12.0, 96.0) as u8
+}
+
 /// Clips drawing to a rectangle in virtual UI coordinates (None = no clip).
 pub fn clip(r: Option<Rect>) {
     let k = ui_scale() * screen_dpi_scale();

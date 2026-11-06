@@ -95,61 +95,61 @@ impl StageArt {
         let tex = vec![
         ("crates", sprites::texture(include_str!("../../../art/src/stage/crates.px"))),
         ("lantern", sprites::texture(include_str!("../../../art/src/stage/lantern.px"))),
-        ("manhole", sprites::texture(include_str!("../../../art/src/stage/manhole.px"))),
+        ("manhole", sprites::tile(include_str!("../../../art/src/stage/manhole.px"))),
         ("neon_sign", sprites::texture(include_str!("../../../art/src/stage/neon_sign.px"))),
-        ("paving_a", sprites::texture(include_str!("../../../art/src/stage/paving_a.px"))),
-        ("paving_b", sprites::texture(include_str!("../../../art/src/stage/paving_b.px"))),
-        ("puddle", sprites::texture(include_str!("../../../art/src/stage/puddle.px"))),
+        ("paving_a", sprites::tile(include_str!("../../../art/src/stage/paving_a.px"))),
+        ("paving_b", sprites::tile(include_str!("../../../art/src/stage/paving_b.px"))),
+        ("puddle", sprites::tile(include_str!("../../../art/src/stage/puddle.px"))),
         ("stall", sprites::texture(include_str!("../../../art/src/stage/stall.px"))),
-        ("tactile", sprites::texture(include_str!("../../../art/src/stage/tactile.px"))),
+        ("tactile", sprites::tile(include_str!("../../../art/src/stage/tactile.px"))),
         ("vending", sprites::texture(include_str!("../../../art/src/stage/vending.px"))),
         ];
         let worlds = vec![
             [
-                sprites::texture(include_str!("../../../art/src/w1/ground_a.px")),
-                sprites::texture(include_str!("../../../art/src/w1/ground_b.px")),
-                sprites::texture(include_str!("../../../art/src/w1/decal.px")),
-                sprites::texture(include_str!("../../../art/src/w1/path.px")),
+                sprites::tile(include_str!("../../../art/src/w1/ground_a.px")),
+                sprites::tile(include_str!("../../../art/src/w1/ground_b.px")),
+                sprites::tile(include_str!("../../../art/src/w1/decal.px")),
+                sprites::tile(include_str!("../../../art/src/w1/path.px")),
                 sprites::texture(include_str!("../../../art/src/w1/prop_a.px")),
                 sprites::texture(include_str!("../../../art/src/w1/prop_b.px")),
                 sprites::texture(include_str!("../../../art/src/w1/prop_c.px")),
                 sprites::texture(include_str!("../../../art/src/w1/prop_d.px")),
             ],
             [
-                sprites::texture(include_str!("../../../art/src/w2/ground_a.px")),
-                sprites::texture(include_str!("../../../art/src/w2/ground_b.px")),
-                sprites::texture(include_str!("../../../art/src/w2/decal.px")),
-                sprites::texture(include_str!("../../../art/src/w2/path.px")),
+                sprites::tile(include_str!("../../../art/src/w2/ground_a.px")),
+                sprites::tile(include_str!("../../../art/src/w2/ground_b.px")),
+                sprites::tile(include_str!("../../../art/src/w2/decal.px")),
+                sprites::tile(include_str!("../../../art/src/w2/path.px")),
                 sprites::texture(include_str!("../../../art/src/w2/prop_a.px")),
                 sprites::texture(include_str!("../../../art/src/w2/prop_b.px")),
                 sprites::texture(include_str!("../../../art/src/w2/prop_c.px")),
                 sprites::texture(include_str!("../../../art/src/w2/prop_d.px")),
             ],
             [
-                sprites::texture(include_str!("../../../art/src/w3/ground_a.px")),
-                sprites::texture(include_str!("../../../art/src/w3/ground_b.px")),
-                sprites::texture(include_str!("../../../art/src/w3/decal.px")),
-                sprites::texture(include_str!("../../../art/src/w3/path.px")),
+                sprites::tile(include_str!("../../../art/src/w3/ground_a.px")),
+                sprites::tile(include_str!("../../../art/src/w3/ground_b.px")),
+                sprites::tile(include_str!("../../../art/src/w3/decal.px")),
+                sprites::tile(include_str!("../../../art/src/w3/path.px")),
                 sprites::texture(include_str!("../../../art/src/w3/prop_a.px")),
                 sprites::texture(include_str!("../../../art/src/w3/prop_b.px")),
                 sprites::texture(include_str!("../../../art/src/w3/prop_c.px")),
                 sprites::texture(include_str!("../../../art/src/w3/prop_d.px")),
             ],
             [
-                sprites::texture(include_str!("../../../art/src/w4/ground_a.px")),
-                sprites::texture(include_str!("../../../art/src/w4/ground_b.px")),
-                sprites::texture(include_str!("../../../art/src/w4/decal.px")),
-                sprites::texture(include_str!("../../../art/src/w4/path.px")),
+                sprites::tile(include_str!("../../../art/src/w4/ground_a.px")),
+                sprites::tile(include_str!("../../../art/src/w4/ground_b.px")),
+                sprites::tile(include_str!("../../../art/src/w4/decal.px")),
+                sprites::tile(include_str!("../../../art/src/w4/path.px")),
                 sprites::texture(include_str!("../../../art/src/w4/prop_a.px")),
                 sprites::texture(include_str!("../../../art/src/w4/prop_b.px")),
                 sprites::texture(include_str!("../../../art/src/w4/prop_c.px")),
                 sprites::texture(include_str!("../../../art/src/w4/prop_d.px")),
             ],
             [
-                sprites::texture(include_str!("../../../art/src/w5/ground_a.px")),
-                sprites::texture(include_str!("../../../art/src/w5/ground_b.px")),
-                sprites::texture(include_str!("../../../art/src/w5/decal.px")),
-                sprites::texture(include_str!("../../../art/src/w5/path.px")),
+                sprites::tile(include_str!("../../../art/src/w5/ground_a.px")),
+                sprites::tile(include_str!("../../../art/src/w5/ground_b.px")),
+                sprites::tile(include_str!("../../../art/src/w5/decal.px")),
+                sprites::tile(include_str!("../../../art/src/w5/path.px")),
                 sprites::texture(include_str!("../../../art/src/w5/prop_a.px")),
                 sprites::texture(include_str!("../../../art/src/w5/prop_b.px")),
                 sprites::texture(include_str!("../../../art/src/w5/prop_c.px")),
@@ -216,7 +216,7 @@ impl StageArt {
             for tx in 0..cols {
                 let (t, _) = self.tile(stage, tx + 3, ty + 5);
                 let (dw, dh) = (s.min(w - tx as f32 * s), s.min(h - ty as f32 * s));
-                let src = Rect::new(0.0, 0.0, TILE * dw / s, TILE * dh / s);
+                let src = Rect::new(0.0, 0.0, TILE * dw / s * crate::sprites::UP, TILE * dh / s * crate::sprites::UP);
                 draw_texture_ex(t, x + tx as f32 * s, y + ty as f32 * s, WHITE, DrawTextureParams { dest_size: Some(vec2(dw, dh)), source: Some(src), ..Default::default() });
             }
         }
@@ -232,7 +232,7 @@ impl StageArt {
         for ty in ty0..=ty0 + (sh / TILE) as i32 + 1 {
             for tx in tx0..=tx0 + (sw / TILE) as i32 + 1 {
                 let (t, decal) = self.tile(stage, tx, ty);
-                draw_texture(t, tx as f32 * TILE, ty as f32 * TILE, WHITE);
+                draw_texture_ex(t, tx as f32 * TILE, ty as f32 * TILE, WHITE, DrawTextureParams { dest_size: Some(vec2(TILE, TILE)), ..Default::default() });
                 if decal {
                     decals.push(vec2(tx as f32 * TILE + TILE / 2.0, ty as f32 * TILE + TILE / 2.0));
                 }
@@ -278,13 +278,14 @@ impl StageArt {
                         let flicker = 0.85 + 0.15 * ((time * 3.0) as f32 + px * 0.13).sin();
                         g.a = (g.a * 3.2 * flicker).min(1.0);
                         let r = 64.0;
-                        let lift = if prop.kind == PropKind::A { t.height() - 8.0 } else { 6.0 };
+                        let lift = if prop.kind == PropKind::A { crate::sprites::nat(t).y - 8.0 } else { 6.0 };
                         draw_texture_ex(&self.glow, px - r, py - r - lift, g, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
                     }
                     // Contact shadow under the solid footprint.
                     let (min, max) = prop.footprint();
                     draw_rectangle(min.x - 1.0, max.y - 2.0, max.x - min.x + 2.0, 3.0, Color::new(0.0, 0.0, 0.0, 0.35));
-                    draw_texture(t, (px - t.width() / 2.0).round(), (py - t.height()).round() + 6.0, WHITE);
+                    let n = crate::sprites::nat(t);
+                    draw_texture_ex(t, (px - n.x / 2.0).round(), (py - n.y).round() + 6.0, WHITE, DrawTextureParams { dest_size: Some(n), ..Default::default() });
                 }
             }
         }

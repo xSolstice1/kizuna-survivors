@@ -4,6 +4,8 @@
 //! touch-to-mouse emulation.
 
 use macroquad::prelude::*;
+#[allow(unused_imports)]
+use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit::{self, screen_height, screen_width};
 

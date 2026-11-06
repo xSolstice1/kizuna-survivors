@@ -2,6 +2,8 @@
 //! Shrine Draw (Sen gacha with visible odds and pity).
 
 use macroquad::prelude::*;
+#[allow(unused_imports)]
+use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit::{self, mouse_position, screen_width, Style, DIM, FAINT, GOLD, INK, JADE, SKY};
 use crate::render::Assets;
