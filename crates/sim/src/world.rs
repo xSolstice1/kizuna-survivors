@@ -3225,14 +3225,9 @@ impl World {
                 if g.has(Exotic::ThousandCounter) && self.gear_kills % 1000 == 0 {
                     self.pending_exo_blasts.push((self.player.pos, 450.0, 400.0));
                 }
-                // Exotics: only this world's bosses drop this world's Exotics, rarely.
-                if kind.is_boss() {
-                    let base = match kind.rank() {
-                        Rank::Mini => gear::EXOTIC_CHANCE[0],
-                        Rank::Boss => gear::EXOTIC_CHANCE[1],
-                        _ => gear::EXOTIC_CHANCE[2],
-                    };
-                    let chance = base * gear::exotic_mult(self.cfg.difficulty.index(), self.cfg.ascension) * find;
+                // Exotics: only this world's final boss drops this world's Exotics, rarely.
+                if kind.rank() == Rank::Final {
+                    let chance = gear::EXOTIC_CHANCE * gear::exotic_mult(self.cfg.difficulty.index(), self.cfg.ascension) * find;
                     if self.rng.f32() < chance {
                         let pool: Vec<Exotic> = gear::ALL_EXOTICS.iter().copied().filter(|e| e.home() == self.cfg.stage).collect();
                         if !pool.is_empty() {

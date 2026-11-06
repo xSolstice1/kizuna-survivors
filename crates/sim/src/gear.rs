@@ -465,9 +465,8 @@ pub const ALL_EXOTICS: [Exotic; 14] = [
 
 /// Fingers count from the whole bag, up to this many.
 pub const MAX_FINGERS: u32 = 10;
-/// Chance a world's boss drops one of that world's Exotics, by boss rank
-/// (mini-boss, boss, final boss), before the difficulty multiplier.
-pub const EXOTIC_CHANCE: [f32; 3] = [0.0005, 0.001, 0.0025];
+/// Chance a world's final boss drops one of that world's Exotics, before the difficulty multiplier.
+pub const EXOTIC_CHANCE: f32 = 0.0025;
 
 /// Exotic drop multiplier by difficulty (Normal, Hard, Nightmare); Ascension adds 10% per tier.
 pub fn exotic_mult(difficulty: usize, ascension: u32) -> f32 {
@@ -531,7 +530,7 @@ impl Exotic {
             Exotic::Yasakani => Slot::Charm,
         }
     }
-    /// The world whose bosses drop it (the only way to get it).
+    /// The world whose final boss drops it (the only way to get it).
     pub fn home(self) -> StageId {
         match self {
             Exotic::LanternHeart => StageId::Shotengai,
@@ -542,7 +541,7 @@ impl Exotic {
             Exotic::SovereignFinger | Exotic::ClosedHandVow => StageId::Shatterline,
         }
     }
-    /// The Three Sacred Treasures may be worn together (and alongside one other Exotic).
+    /// One of the Three Sacred Treasures (all three worn: Imperial Regalia).
     pub fn treasure(self) -> bool {
         matches!(self, Exotic::Kusanagi | Exotic::YataMirror | Exotic::Yasakani)
     }

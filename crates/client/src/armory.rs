@@ -101,7 +101,7 @@ pub fn item_detail(profile: &Profile, assets: &Assets, it: &Item, hero: HeroId, 
         ly += 20.0;
         let mut text = e.describe();
         if e.treasure() {
-            text = format!("{text} Sacred Treasure: can be worn with another Exotic. {}", gear::REGALIA_TEXT);
+            text = format!("{text} Sacred Treasure. {}", gear::REGALIA_TEXT);
         }
         for l in kit::wrap(&text, line_w, 14) {
             kit::text(&l, x + 14.0, ly, 14.0, Color::new(1.0, 0.95, 0.85, 1.0));
@@ -502,7 +502,7 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
         }
     }
 
-    for (k, l) in kit::wrap("Exotics can't be drawn: only a world's own bosses drop them, rarely.", ow, 13).iter().enumerate() {
+    for (k, l) in kit::wrap("Exotics can't be drawn: only a world's final boss drops them, rarely.", ow, 13).iter().enumerate() {
         kit::text(l, ox, oy + oh + 148.0 + k as f32 * 16.0, 13.0, rarity_color(Rarity::Exotic));
     }
 

@@ -409,21 +409,8 @@ impl Profile {
         if pos >= LOADOUT.len() || LOADOUT[pos] != it.slot {
             return false;
         }
-        let exo = it.exotic;
         if let Some((h, p)) = self.worn_by(id) {
             self.loadouts[h][p] = 0;
-        }
-        // One Exotic at a time; the Three Sacred Treasures don't count toward the limit.
-        if let Some(e) = exo {
-            if !e.treasure() {
-                let hi = hero.index();
-                for p in 0..LOADOUT.len() {
-                    let other = self.loadouts[hi][p];
-                    if other != 0 && self.item(other).and_then(|x| x.exotic).is_some_and(|x| !x.treasure()) {
-                        self.loadouts[hi][p] = 0;
-                    }
-                }
-            }
         }
         self.loadouts[hero.index()][pos] = id;
         true
@@ -1016,7 +1003,7 @@ mod exotic_tests {
     use crate::WorldConfig;
 
     #[test]
-    fn one_exotic_at_a_time_but_treasures_stack_and_fingers_count() {
+    fn exotics_stack_and_fingers_count() {
         let mut p = Profile::default();
         let mut rng = Rng::new(4);
         let haori = p.add_item(roll_exotic(&mut rng, Exotic::WhiteHaori, 10));
@@ -1026,9 +1013,9 @@ mod exotic_tests {
         let h = HeroId::Ren;
         assert!(p.equip(h, p.slot_for(h, Slot::Top), haori));
         assert!(p.equip(h, p.slot_for(h, Slot::Bottom), organ));
-        assert!(p.worn_by(haori).is_none(), "the second Exotic replaces the first");
+        assert!(p.worn_by(haori).is_some() && p.worn_by(organ).is_some(), "Exotics can be worn together");
         assert!(p.equip(h, p.slot_for(h, Slot::Hat), mirror) && p.equip(h, p.slot_for(h, Slot::Charm), jewel));
-        assert!(p.worn_by(organ).is_some(), "Treasures don't push out the Exotic");
+        assert!(p.loadout(h).regalia() == false && p.loadout(h).exotics.len() == 4);
         for _ in 0..3 {
             p.add_item(roll_exotic(&mut rng, Exotic::SovereignFinger, 10));
         }
