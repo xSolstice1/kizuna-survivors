@@ -542,3 +542,128 @@ pub fn debug_overlay(fps: i32, sim_ms: f32, world: &World, stress: bool) {
     );
     kit::text(&txt, 16.0, screen_height() - 12.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
 }
+
+// ───────────────────────── Minimap ─────────────────────────
+
+/// Draws the map. Small: corner panel (returns true when clicked, to expand).
+/// Big: a large centred map with a legend (returns true when it should close).
+pub fn minimap(world: &World, assets: &Assets, big: bool) -> bool {
+    let (w, h) = (screen_width(), screen_height());
+    let (size, x, y, range) = if big {
+        let size = (h - 140.0).min(w - 80.0).min(620.0);
+        (size, (w - size) / 2.0, 90.0, 900.0)
+    } else {
+        (150.0, w - 164.0, 98.0, 650.0)
+    };
+    if big {
+        dim_screen(0.6);
+        centered("NIGHT MAP", 64.0, 36.0, INK);
+    }
+    kit::panel(x, y, size, size);
+    let c = vec2(x + size / 2.0, y + size / 2.0);
+    let scale = (size / 2.0 - 6.0) / range;
+    let p = world.player.pos;
+    let to_map = |q: sim::Vec2| -> Option<Vec2> {
+        let d = vec2(q.x - p.x, q.y - p.y) * scale;
+        let half = size / 2.0 - 5.0;
+        (d.x.abs() <= half && d.y.abs() <= half).then(|| c + d)
+    };
+    // Range rings.
+    for k in 1..=3 {
+        draw_circle_lines(c.x, c.y, (size / 2.0 - 6.0) * k as f32 / 3.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.05));
+    }
+    // Stage obstacles (from the stage's own layout) as faint blocks.
+    let (cx0, cy0) = sim::stage::chunk_of(sim::Vec2::new(p.x - range, p.y - range));
+    let (cx1, cy1) = sim::stage::chunk_of(sim::Vec2::new(p.x + range, p.y + range));
+    for cy in cy0..=cy1 {
+        for cx in cx0..=cx1 {
+            let (props, n) = sim::stage::chunk_props(cx, cy);
+            for prop in &props[..n] {
+                let (mn, mx) = prop.footprint();
+                if let (Some(a0), Some(a1)) = (to_map(mn), to_map(mx)) {
+                    draw_rectangle(a0.x, a0.y, (a1.x - a0.x).max(1.0), (a1.y - a0.y).max(1.0), Color::new(1.0, 1.0, 1.0, 0.12));
+                }
+            }
+        }
+    }
+    // Stage bounds, for bounded maps.
+    if let Some((mn, mx)) = world.map_bounds() {
+        let a0 = c + vec2(mn.x - p.x, mn.y - p.y) * scale;
+        let a1 = c + vec2(mx.x - p.x, mx.y - p.y) * scale;
+        draw_rectangle_lines(a0.x, a0.y, a1.x - a0.x, a1.y - a0.y, 2.0, Color::new(1.0, 0.85, 0.5, 0.5));
+    }
+    // Markers, drawn by kind (ordinary enemies first so important ones sit on top).
+    let pulse = 0.6 + 0.4 * (get_time() as f32 * 5.0).sin();
+    let mut markers = world.map_markers();
+    markers.sort_by_key(|m| !matches!(m.kind, sim::MarkerKind::Enemy));
+    for m in markers {
+        let Some(q) = to_map(m.pos) else { continue };
+        match m.kind {
+            sim::MarkerKind::Enemy => draw_rectangle(q.x - 0.75, q.y - 0.75, 1.5, 1.5, Color::new(0.75, 0.55, 1.0, 0.7)),
+            sim::MarkerKind::Elite => draw_circle(q.x, q.y, if big { 3.5 } else { 2.5 }, Color::new(1.0, 0.45, 0.35, 1.0)),
+            sim::MarkerKind::Boss => {
+                draw_circle(q.x, q.y, if big { 7.0 } else { 5.0 }, VERMILION);
+                draw_circle_lines(q.x, q.y, if big { 9.0 } else { 6.5 }, 1.5, INK);
+            }
+            sim::MarkerKind::Chest { tier } => {
+                let s = if tier >= 3 { 1.5 } else { 1.0 };
+                draw_rectangle(q.x - 3.0 * s, q.y - 2.5 * s, 6.0 * s, 5.0 * s, Color::new(1.0, 0.8, 0.3, pulse));
+            }
+            sim::MarkerKind::Shrine => {
+                draw_texture_ex(&assets.shrine, q.x - 7.0, q.y - 8.0, WHITE, DrawTextureParams { dest_size: Some(vec2(14.0, 16.0)), ..Default::default() });
+            }
+            sim::MarkerKind::Pickup(k) => {
+                let col = crate::render::pickup_color(k);
+                if big {
+                    draw_texture_ex(assets.pickup(k), q.x - 8.0, q.y - 8.0, WHITE, DrawTextureParams { dest_size: Some(vec2(16.0, 16.0)), ..Default::default() });
+                } else {
+                    draw_circle(q.x, q.y, 3.5, col);
+                    draw_circle_lines(q.x, q.y, 5.0, 1.0, Color::new(col.r, col.g, col.b, pulse));
+                }
+            }
+            sim::MarkerKind::Objective => draw_poly(q.x, q.y, 5, 5.0 + 2.0 * pulse, 0.0, GOLD),
+        }
+    }
+    // The player: an arrow pointing where they face.
+    let f = world.player.facing.normalize_or_zero();
+    let f = if f == sim::Vec2::ZERO { vec2(1.0, 0.0) } else { vec2(f.x, f.y) };
+    let side = vec2(-f.y, f.x);
+    let r = if big { 8.0 } else { 6.0 };
+    draw_triangle(c + f * r, c - f * r * 0.6 + side * r * 0.7, c - f * r * 0.6 - side * r * 0.7, INK);
+
+    let mouse: Vec2 = mouse_position().into();
+    let over = Rect::new(x, y, size, size).contains(mouse);
+    if big {
+        // Legend.
+        let ly = y + size + 26.0;
+        let items: [(&str, Color); 6] = [
+            ("you", INK),
+            ("Otherworlders", Color::new(0.75, 0.55, 1.0, 1.0)),
+            ("Oni", Color::new(1.0, 0.45, 0.35, 1.0)),
+            ("boss", VERMILION),
+            ("chest", GOLD),
+            ("pickup", JADE),
+        ];
+        let widths: Vec<f32> = items.iter().map(|(l, _)| kit::measure(l, 15).width + 40.0).collect();
+        let mut lx = (w - widths.iter().sum::<f32>()) / 2.0;
+        for ((label, col), wd) in items.iter().zip(&widths) {
+            draw_circle(lx + 6.0, ly - 5.0, 5.0, *col);
+            kit::text(label, lx + 16.0, ly, 15.0, DIM);
+            lx += wd;
+        }
+        kit::text("M / Tab / Esc to close", w / 2.0 - 70.0, ly + 24.0, 13.0, FAINT);
+        let close = kit::button(Rect::new(x + size - 40.0, y + 8.0, 32.0, 32.0), "X", true, Style::Secondary);
+        close || is_key_pressed(KeyCode::Escape) || (is_mouse_button_pressed(MouseButton::Left) && !over && mouse.y > 100.0)
+    } else {
+        kit::text("MAP", x + 10.0, y + 18.0, 12.0, FAINT);
+        if over {
+            rounded_hint(x, y, size);
+        }
+        over && is_mouse_button_pressed(MouseButton::Left)
+    }
+}
+
+fn rounded_hint(x: f32, y: f32, size: f32) {
+    kit::rounded_outline(x, y, size, size, 12.0, 2.0, GOLD);
+    kit::text("click to expand", x + size - 92.0, y + size - 8.0, 12.0, DIM);
+}

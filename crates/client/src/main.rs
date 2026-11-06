@@ -77,6 +77,8 @@ async fn main() {
     let mut special_queued = false;
 
     let mut collection = menu::CollectionState::default();
+    // The big map view is open (the run pauses meanwhile).
+    let mut map_open = false;
 
     kit::init();
     ui::loading();
@@ -181,7 +183,7 @@ async fn main() {
         // --- Global keys ---
         let over = matches!(world.state, RunState::Dead | RunState::Won);
         // Esc pauses only during play; on the shrine screen it means "walk away".
-        if is_key_pressed(KeyCode::Escape) && !over && (screen == Screen::Paused || !world.paused()) {
+        if is_key_pressed(KeyCode::Escape) && !over && !map_open && (screen == Screen::Paused || !world.paused()) {
             screen = if screen == Screen::Paused { Screen::Playing } else { Screen::Paused };
         }
         if is_key_pressed(KeyCode::N) {
@@ -226,7 +228,7 @@ async fn main() {
         // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest,
         // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots), F7 shrine underfoot,
         // F8 skip to the Night Lord, F9 fill the special meter, F10 Awaken every owned weapon,
-        // P drop a random pickup nearby.
+        // P drop a random pickup nearby, O drop a chest nearby.
         if is_key_pressed(KeyCode::F2) {
             world.time = world.time.max(sim::content::MIDBOSS_AT - 3.0);
         }
@@ -244,6 +246,11 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::F7) {
             world.shrine = Some(world.player.pos);
+        }
+        if is_key_pressed(KeyCode::O) && screen == Screen::Playing {
+            // Dev: drop a treasure chest nearby (sometimes a boss chest).
+            let tier = if rand::gen_range(0, 3) == 0 { 3 } else { 1 };
+            world.chests.push((world.player.pos + sim::Vec2::new(90.0, -40.0), tier));
         }
         if is_key_pressed(KeyCode::P) {
             // Dev: drop a random floor pickup near the player.
@@ -279,7 +286,14 @@ async fn main() {
         }
 
         // --- Fixed-timestep sim (paused while a menu or level-up is open) ---
-        if screen == Screen::Playing && !world.paused() {
+        // Map toggle (M / Tab) during play.
+        if screen == Screen::Playing && !over && !world.paused() && (is_key_pressed(KeyCode::M) || is_key_pressed(KeyCode::Tab)) {
+            map_open = !map_open;
+        }
+        if screen != Screen::Playing || over {
+            map_open = false;
+        }
+        if screen == Screen::Playing && !world.paused() && !map_open {
             acc += dt;
             let mut input = read_input();
             special_queued |= is_key_pressed(KeyCode::Space);
@@ -320,8 +334,11 @@ async fn main() {
         render::draw_world(&world, &assets, &stage_art, &fx, &cam, now);
         set_default_camera();
         stage_art.draw_vignette();
-        if screen != Screen::Paused {
+        if screen != Screen::Paused && !map_open {
             ui::hud(&world, &assets);
+            if !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false) {
+                map_open = true;
+            }
         }
         ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
 
@@ -364,6 +381,10 @@ async fn main() {
                     screen = Screen::Menu;
                 }
                 None => {}
+            }
+        } else if map_open {
+            if ui::minimap(&world, &assets, true) {
+                map_open = false;
             }
         } else if screen == Screen::Paused {
             match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume) {

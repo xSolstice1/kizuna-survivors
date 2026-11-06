@@ -626,6 +626,26 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     for (c, tier) in &world.chests {
         let bob = ((time * 3.0).sin() * 1.5) as f32;
         let size = if *tier >= 3 { 2.0 } else { 1.0 };
+        // Beacon like the floor pickups: gold for chests, a taller cycling pillar for boss chests.
+        let t = time as f32;
+        let col = if *tier >= 3 {
+            let hcyc = (t * 0.5).fract();
+            let ch = |o: f32| 0.6 + 0.4 * ((hcyc + o) * std::f32::consts::TAU).cos();
+            Color::new(ch(0.0), ch(0.33), ch(0.67), 1.0)
+        } else {
+            Color::new(1.0, 0.82, 0.35, 1.0)
+        };
+        let pulse = 0.5 + 0.5 * (t * 4.0 + c.x * 0.1).sin();
+        let ph = if *tier >= 3 { 220.0 } else { 150.0 };
+        draw_rectangle(c.x - 7.0 * size, c.y - ph, 14.0 * size, ph, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
+        draw_rectangle(c.x - 2.0 * size, c.y - ph, 4.0 * size, ph, Color::new(col.r, col.g, col.b, 0.2 + 0.1 * pulse));
+        draw_ellipse(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, Color::new(col.r, col.g, col.b, 0.22));
+        draw_ellipse_lines(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.85));
+        for i in 0..5 {
+            let rise = (t * 0.8 + i as f32 * 0.2).fract();
+            let x = c.x + ((i as f32 * 2.3 + t).sin()) * 10.0 * size;
+            draw_rectangle(x, c.y - 6.0 - rise * 46.0 * size, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - rise));
+        }
         draw_circle(c.x, c.y + 2.0, 10.0 * size, Color::new(1.0, 0.85, 0.4, 0.12 + 0.06 * (time * 5.0).sin() as f32));
         draw_texture_ex(
             &a.chest,
@@ -1233,6 +1253,25 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let pulse = 0.7 + 0.3 * (time * 5.0).sin() as f32;
             draw_triangle(tip + d * 14.0, tip - d * 8.0 + side * 10.0, tip - d * 8.0 - side * 10.0, Color::new(1.0, 0.85, 0.4, pulse));
             draw_texture_ex(&a.shrine, tip.x - d.x * 34.0 - 12.0, tip.y - d.y * 34.0 - 14.0, Color::new(1.0, 1.0, 1.0, 0.85), DrawTextureParams { dest_size: Some(vec2(24.0, 27.0)), ..Default::default() });
+        }
+    }
+    // Off-screen chests get a gold arrow at the screen edge.
+    for (c, tier) in &world.chests {
+        let sp = cam.world_to_screen(vec2(c.x, c.y));
+        let (w, h) = (screen_width(), screen_height());
+        if sp.x < 0.0 || sp.y < 0.0 || sp.x > w || sp.y > h {
+            let ctr = vec2(w / 2.0, h / 2.0);
+            let d = (sp - ctr).normalize_or_zero();
+            let t = ((w / 2.0 - 34.0) / d.x.abs().max(1e-3)).min((h / 2.0 - 34.0) / d.y.abs().max(1e-3));
+            let tip = ctr + d * t;
+            let side = vec2(-d.y, d.x);
+            let pulse = 0.7 + 0.3 * (time * 6.0).sin() as f32;
+            let col = Color::new(1.0, 0.82, 0.35, pulse);
+            let bc = vec2(tip.x - d.x * 24.0, tip.y - d.y * 24.0);
+            draw_circle(bc.x, bc.y, 15.0, Color::new(0.05, 0.04, 0.1, 0.85));
+            draw_circle_lines(bc.x, bc.y, 15.0, if *tier >= 3 { 3.0 } else { 2.0 }, col);
+            draw_texture_ex(&a.chest, bc.x - 10.0, bc.y - 8.0, WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 17.0)), ..Default::default() });
+            draw_triangle(tip + d * 10.0, tip - d * 4.0 + side * 7.0, tip - d * 4.0 - side * 7.0, col);
         }
     }
     // Off-screen pickups get a small coloured arrow at the screen edge.
