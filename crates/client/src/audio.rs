@@ -184,6 +184,9 @@ impl Audio {
                 Event::Fired(WeaponKind::Familiars) => Sfx::Yip,
                 Event::Fired(WeaponKind::GaleShuriken) => Sfx::Spin,
                 Event::Fired(WeaponKind::GraveCleaver) => Sfx::Cleave,
+                Event::Fired(WeaponKind::GravityWell) => Sfx::Warble,
+                Event::Fired(WeaponKind::RepulsionStar) => Sfx::Zap,
+                Event::Fired(WeaponKind::VoidLance) => Sfx::BeamSfx,
                 Event::Fired(WeaponKind::SoulTether) => Sfx::Chain,
                 Event::Fired(WeaponKind::IaiFlash) => Sfx::IaiSfx,
                 Event::Fired(_) => continue,
@@ -220,6 +223,11 @@ impl Audio {
                 Event::Iai { .. } => continue, // the Fired cue covers the cut
                 Event::LanternPulse { .. } => Sfx::Pulse,
                 Event::Lash { .. } => Sfx::LashSfx,
+                Event::WellCollapse { .. } => Sfx::DarkBurst,
+                Event::Warded => Sfx::Chime,
+                Event::DomainOpened { .. } => Sfx::GongDeep,
+                Event::VoidCharge { .. } => Sfx::Charge,
+                Event::VoidMaximum { .. } => Sfx::Meteor,
                 Event::PickupSpawned { .. } => Sfx::Bell,
                 Event::PickupTaken { kind, .. } => match kind {
                     sim::content::PickupKind::ExorcismSeal => Sfx::Special,

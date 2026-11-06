@@ -29,6 +29,7 @@ pub struct Assets {
     /// Shun in Hannya Unbound form, and his blade in both forms.
     shun_hannya: [Texture2D; 3],
     toya_mukade: [Texture2D; 3],
+    kuon_domain: [Texture2D; 3],
     cleaver: Texture2D,
     cleaver_hannya: Texture2D,
     cleaver_rest: Texture2D,
@@ -68,6 +69,7 @@ impl Assets {
                 HeroId::Riku => frames(sprites::parse(include_str!("../../../art/src/riku.px"))),
                 HeroId::Shun => frames(sprites::parse(include_str!("../../../art/src/shun.px"))),
                 HeroId::Toya => frames(sprites::parse(include_str!("../../../art/src/toya.px"))),
+                HeroId::Kuon => frames(sprites::parse(include_str!("../../../art/src/kuon.px"))),
                 _ => frames(sprites::parse(&sprites::recolor(base, hero_palette(*h)))),
             })
             .collect();
@@ -76,6 +78,7 @@ impl Assets {
             riku_fox: frames(sprites::parse(include_str!("../../../art/src/riku_fox.px"))),
             shun_hannya: frames(sprites::parse(include_str!("../../../art/src/shun_hannya.px"))),
             toya_mukade: frames(sprites::parse(include_str!("../../../art/src/toya_mukade.px"))),
+            kuon_domain: frames(sprites::parse(include_str!("../../../art/src/kuon_domain.px"))),
             cleaver: sprites::texture(include_str!("../../../art/src/cleaver.px")),
             cleaver_hannya: sprites::texture(include_str!("../../../art/src/cleaver_hannya.px")),
             cleaver_rest: sprites::texture(include_str!("../../../art/src/cleaver_rest.px")),
@@ -121,6 +124,9 @@ impl Assets {
             ("mukade_spines", sprites::texture(include_str!("../../../art/src/icons/mukade_spines.px"))),
             ("devour", sprites::texture(include_str!("../../../art/src/icons/devour.px"))),
             ("venom_fang", sprites::texture(include_str!("../../../art/src/icons/venom_fang.px"))),
+            ("gravity_well", sprites::texture(include_str!("../../../art/src/icons/gravity_well.px"))),
+            ("repulsion_star", sprites::texture(include_str!("../../../art/src/icons/repulsion_star.px"))),
+            ("void_lance", sprites::texture(include_str!("../../../art/src/icons/void_lance.px"))),
             ("guard", sprites::texture(include_str!("../../../art/src/icons/guard.px"))),
             ("haste", sprites::texture(include_str!("../../../art/src/icons/haste.px"))),
             ("magnetism", sprites::texture(include_str!("../../../art/src/icons/magnetism.px"))),
@@ -150,6 +156,7 @@ impl Assets {
             (HeroId::Riku, true) => &self.riku_fox[0],
             (HeroId::Shun, true) => &self.shun_hannya[0],
             (HeroId::Toya, true) => &self.toya_mukade[0],
+            (HeroId::Kuon, true) => &self.kuon_domain[0],
             _ => &self.hero(h)[0],
         }
     }
@@ -185,6 +192,9 @@ impl Assets {
                 WeaponKind::MukadeSpines => "mukade_spines",
                 WeaponKind::Devour => "devour",
                 WeaponKind::VenomFang => "venom_fang",
+                WeaponKind::GravityWell => "gravity_well",
+                WeaponKind::RepulsionStar => "repulsion_star",
+                WeaponKind::VoidLance => "void_lance",
             },
             Upgrade::Passive(p) => match p {
                 PassiveKind::Might => "might",
@@ -208,7 +218,7 @@ impl Assets {
 /// Palette chars: H/h/L hair, C/c outfit, I eyes, R ribbon.
 fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
     match h {
-        HeroId::Ren | HeroId::Riku | HeroId::Shun | HeroId::Toya => &[],
+        HeroId::Ren | HeroId::Riku | HeroId::Shun | HeroId::Toya | HeroId::Kuon => &[],
         HeroId::Kaede => &[('H', "#33334a"), ('h', "#1c1c2a"), ('L', "#5a5a7a"), ('C', "#2f5a3a"), ('c', "#1d3a25"), ('I', "#e84a4a"), ('R', "#c9a040")],
         HeroId::Mika => &[('H', "#ffd45a"), ('h', "#d49a2a"), ('L', "#fff0a0"), ('C', "#e88ac8"), ('c', "#b0609a"), ('I', "#4ac0ff"), ('R', "#ff5aa0")],
         HeroId::Haru => &[('H', "#c8cde0"), ('h', "#8890aa"), ('L', "#ffffff"), ('C', "#3a3a8a"), ('c', "#24245a"), ('I', "#6a7cff"), ('R', "#e83a3a")],
@@ -259,6 +269,8 @@ pub struct Fx {
     /// Recent player positions for Rampage afterimages: (pos, facing left, age).
     trail: Vec<(Vec2, bool, f32)>,
     trail_tick: f32,
+    /// Player position last frame (for effects spawned by events without a position).
+    pub last_player: Vec2,
     /// Lantern pulse rings: (pos, radius, age).
     pulses: Vec<(Vec2, f32, f32)>,
     /// Shadow Step streaks: (from, to, age).
@@ -474,6 +486,22 @@ impl Fx {
                     }
                 }
                 Event::Lash { from, to } => self.lashes.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
+                Event::WellCollapse { pos, radius } => {
+                    self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, 16));
+                    self.shake = self.shake.max(0.08);
+                }
+                Event::Warded => self.bursts.push((self.last_player, 26.0, 0.0, 17)),
+                Event::DomainOpened { .. } => {
+                    self.announce("DOMAIN: ENDLESS FIRMAMENT".into());
+                    self.say(self.lines().special);
+                    self.shake = self.shake.max(0.4);
+                }
+                Event::VoidCharge { .. } => self.say("Now... erase."),
+                Event::VoidMaximum { pos } => {
+                    self.bursts.push((vec2(pos.x, pos.y), 140.0, 0.0, 18));
+                    self.announce("VOID LANCE: MAXIMUM".into());
+                    self.shake = self.shake.max(0.7);
+                }
                 Event::Devour { pos, radius } => self.devours.push((vec2(pos.x, pos.y), radius, 0.0)),
                 Event::MukadeAwakened { .. } => {
                     self.announce("HUNDRED-LEG RAMPAGE".into());
@@ -493,6 +521,7 @@ impl Fx {
 
     /// Records Rampage afterimages while Toya moves in his form.
     pub fn track_trail(&mut self, world: &World, dt: f32) {
+        self.last_player = vec2(world.player.pos.x, world.player.pos.y - 8.0);
         self.trail_tick -= dt;
         if world.form_kind() == Some(SpecialKind::Mukade) && world.player.moving && self.trail_tick <= 0.0 {
             self.trail_tick = 0.05;
@@ -663,6 +692,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
         );
     }
+    for wl in &world.wells {
+        draw_well(vec2(wl.pos.x, wl.pos.y), wl.radius, wl.life / wl.max_life, time as f32);
+    }
+    // Endless Firmament: the battlefield darkens and becomes a starfield inside the domain.
+    if world.form_kind() == Some(SpecialKind::Firmament) {
+        draw_domain(world, time as f32);
+    }
     for l in &world.lanterns {
         let fade = (l.life / 0.4).min(1.0) * ((l.max_life - l.life) / 0.3).min(1.0);
         let bob = ((time * 3.0 + l.pos.x as f64).sin() * 2.0) as f32;
@@ -689,7 +725,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
         let pos = e.pos[i];
-        let frozen = world.freeze > 0.0 && !e.kind[i].is_boss();
+        let in_domain = world.form_kind() == Some(SpecialKind::Firmament) && (e.pos[i] - world.domain_center).length() < sim::content::DOMAIN_RADIUS;
+        let frozen = (world.freeze > 0.0 || in_domain) && !e.kind[i].is_boss();
         let tint = if e.flash[i] > 0 {
             flash
         } else if frozen {
@@ -771,6 +808,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_hannya_aura(world, t);
     }
     let mukade = form == Some(SpecialKind::Mukade);
+    let domain = form == Some(SpecialKind::Firmament);
+    if world.cfg.hero == HeroId::Kuon && !domain {
+        draw_stillness(world, t);
+    }
     if world.cfg.hero == HeroId::Toya {
         draw_tendrils_and_tail(world, t, mukade);
         // Rampage afterimages trailing behind.
@@ -837,15 +878,23 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         &a.shun_hannya[frame]
     } else if mukade {
         &a.toya_mukade[frame]
+    } else if domain {
+        &a.kuon_domain[frame]
     } else {
         &a.hero(world.cfg.hero)[frame]
     };
     let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
     let params = DrawTextureParams { flip_x: pl.facing.x < 0.0, ..Default::default() };
-    if fox || hannya || mukade {
-        // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread), offset around.
+    if fox || hannya || mukade || domain {
+        // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread / star-blue), offset around.
         let flare = 0.45 + 0.25 * (t * 9.0).sin();
-        let glow = if fox { Color::new(1.0, 0.75, 0.2, flare) } else { Color::new(0.75, 0.0, 0.1, flare + 0.2) };
+        let glow = if fox {
+            Color::new(1.0, 0.75, 0.2, flare)
+        } else if domain {
+            Color::new(0.45, 0.8, 1.0, flare + 0.2)
+        } else {
+            Color::new(0.75, 0.0, 0.1, flare + 0.2)
+        };
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
             draw_texture_ex(tex, x + dx, y + dy, glow, params.clone());
         }
@@ -865,6 +914,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         HeroId::Riku => draw_spirit_motes(p, t, fox),
         HeroId::Shun => draw_reaper_wisps(p, t, hannya),
         HeroId::Toya => draw_curse_motes(p, t, mukade),
+        HeroId::Kuon => draw_star_motes(p, t, domain),
         _ => {}
     }
     // Small HP bar under the player.
@@ -1037,6 +1087,36 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 draw_circle(q.x, q.y, 6.0, Color::new(0.55, 0.8, 1.0, 0.3));
                 draw_circle(q.x, q.y, 3.0, Color::new(0.9, 0.97, 1.0, 1.0));
             }
+            ProjKind::RedStar => {
+                let r = pr.radius[i];
+                let back = v.normalize_or_zero() * -1.0;
+                for k in 1..5 {
+                    let c = q + back * (k as f32 * 5.0);
+                    draw_circle(c.x, c.y, r * (0.6 - k as f32 * 0.1), Color::new(1.0, 0.2, 0.25, 0.4 - k as f32 * 0.08));
+                }
+                draw_circle(q.x, q.y, r * 1.6, Color::new(1.0, 0.2, 0.25, 0.22));
+                let rot = t * 10.0;
+                for k in 0..4 {
+                    let a = rot + k as f32 * std::f32::consts::FRAC_PI_2;
+                    let tip = vec2(q.x, q.y) + vec2(a.cos(), a.sin()) * r * 1.3;
+                    let l = vec2(q.x, q.y) + vec2((a + 0.6).cos(), (a + 0.6).sin()) * r * 0.35;
+                    let rr = vec2(q.x, q.y) + vec2((a - 0.6).cos(), (a - 0.6).sin()) * r * 0.35;
+                    draw_triangle(tip, l, rr, Color::new(1.0, 0.25, 0.3, 1.0));
+                }
+                draw_circle(q.x, q.y, r * 0.35, Color::new(1.0, 0.9, 0.9, 1.0));
+            }
+            ProjKind::VoidOrb => {
+                let r = pr.radius[i];
+                draw_circle(q.x, q.y, r * 1.5, Color::new(0.5, 0.2, 1.0, 0.18));
+                draw_circle(q.x, q.y, r, Color::new(0.55, 0.25, 1.0, 0.9));
+                draw_circle(q.x, q.y, r * 0.72, Color::new(0.05, 0.02, 0.12, 1.0));
+                for k in 0..10 {
+                    let a = t * 3.0 + k as f32 * 0.628;
+                    let rr = r * (0.9 + 0.12 * (t * 9.0 + k as f32).sin());
+                    draw_rectangle(q.x + a.cos() * rr - 1.0, q.y + a.sin() * rr - 1.0, 2.0, 2.0, Color::new(0.9, 0.8, 1.0, 1.0));
+                }
+                draw_circle_lines(q.x, q.y, r, 2.0, Color::new(0.85, 0.7, 1.0, 1.0));
+            }
             ProjKind::Fang => {
                 let back = v.normalize_or_zero() * -1.0;
                 for k in 1..4 {
@@ -1153,6 +1233,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             style::COMET => (Color::new(0.3, 0.6, 1.0, 0.45 * fade), Color::new(0.85, 0.95, 1.0, fade), 4.0),
             style::QUAKE => (Color::new(1.0, 0.6, 0.2, 0.25 * fade), Color::new(1.0, 0.85, 0.4, fade), 6.0),
             style::SPINE => (Color::new(0.4, 0.02, 0.06, 0.35 * fade), Color::new(0.9, 0.2, 0.25, fade), 2.0),
+            16 => (Color::new(0.2, 0.35, 0.9, 0.35 * fade), Color::new(0.75, 0.88, 1.0, fade), 3.0),
+            17 => (Color::new(0.45, 0.8, 1.0, 0.3 * fade), Color::new(0.9, 0.97, 1.0, fade), 2.5),
+            18 => (Color::new(0.55, 0.25, 1.0, 0.4 * fade), Color::new(0.9, 0.75, 1.0, fade), 7.0),
             style::VENOM => (Color::new(0.3, 0.75, 0.2, 0.35 * fade), Color::new(0.6, 1.0, 0.4, fade), 2.0),
             style::FRENZY => (Color::new(0.5, 0.0, 0.08, 0.4 * fade), Color::new(1.0, 0.25, 0.3, fade), 6.0),
             2 => (Color::new(0.6, 0.0, 0.1, 0.4 * fade), Color::new(1.0, 0.3, 0.3, 0.9 * fade), 3.0),
@@ -1356,6 +1439,9 @@ fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
 fn burst_life(st: u8) -> f32 {
     match st {
         style::SPINE => 0.45,
+        16 => 0.45,
+        17 => 0.3,
+        18 => 0.8,
         style::FRENZY => 0.7,
         style::VENOM => 0.3,
         style::METEOR => 0.8,
@@ -1605,5 +1691,107 @@ fn draw_pickup(a: &Assets, c: Vec2, k: PickupKind, t: f32) {
         let ph = (t * 0.8 + i as f32 * 0.25).fract();
         let x = c.x + ((i as f32 * 2.3 + t).sin()) * 9.0;
         draw_rectangle(x, c.y - 6.0 - ph * 40.0, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - ph));
+    }
+}
+
+/// A Gravity Well: a dark vortex with spiralling arms that tightens as it nears collapse.
+fn draw_well(c: Vec2, r: f32, life: f32, t: f32) {
+    let rr = r * (0.45 + 0.55 * life);
+    draw_circle(c.x, c.y, rr, Color::new(0.05, 0.08, 0.25, 0.45));
+    draw_circle(c.x, c.y, rr * 0.45, Color::new(0.0, 0.0, 0.05, 0.85));
+    for arm in 0..4 {
+        let mut prev = c;
+        for k in 1..14 {
+            let u = k as f32 / 13.0;
+            let a = t * 5.0 + arm as f32 * std::f32::consts::FRAC_PI_2 + u * 3.5;
+            let pt = c + vec2(a.cos(), a.sin()) * rr * u;
+            draw_line(prev.x, prev.y, pt.x, pt.y, 2.0, Color::new(0.45, 0.65, 1.0, 0.75 * (1.0 - u * 0.5)));
+            prev = pt;
+        }
+    }
+    draw_circle_lines(c.x, c.y, rr, 1.5, Color::new(0.75, 0.88, 1.0, 0.7));
+}
+
+/// Stillness: a faint rippling distortion around Kuon, brighter while the ward is ready.
+fn draw_stillness(world: &World, t: f32) {
+    let p = world.player.pos;
+    let r = sim::content::STILLNESS_RADIUS;
+    let ready = world.ward_cd <= 0.0;
+    let segs = 40;
+    for k in 0..segs {
+        let a0 = k as f32 / segs as f32 * std::f32::consts::TAU;
+        let a1 = (k + 1) as f32 / segs as f32 * std::f32::consts::TAU;
+        let w0 = r + (a0 * 5.0 + t * 3.0).sin() * 2.5;
+        let w1 = r + (a1 * 5.0 + t * 3.0).sin() * 2.5;
+        draw_line(p.x + a0.cos() * w0, p.y - 6.0 + a0.sin() * w0, p.x + a1.cos() * w1, p.y - 6.0 + a1.sin() * w1, 1.5, Color::new(0.55, 0.8, 1.0, 0.22));
+    }
+    draw_circle(p.x, p.y - 6.0, r, Color::new(0.4, 0.7, 1.0, 0.04));
+    if ready {
+        // The ward: a slow hexagon of light.
+        let rot = t * 0.8;
+        for k in 0..6 {
+            let a0 = rot + k as f32 * std::f32::consts::FRAC_PI_3;
+            let a1 = a0 + std::f32::consts::FRAC_PI_3;
+            draw_line(p.x + a0.cos() * 20.0, p.y - 8.0 + a0.sin() * 20.0, p.x + a1.cos() * 20.0, p.y - 8.0 + a1.sin() * 20.0, 1.5, Color::new(0.8, 0.92, 1.0, 0.55));
+        }
+    }
+}
+
+/// Endless Firmament: darkens the world, a starfield and geometric rings fill the domain,
+/// and the finale's purple sphere gathers above Kuon.
+fn draw_domain(world: &World, t: f32) {
+    let c = world.domain_center;
+    let p = world.player.pos;
+    let left = world.player.form;
+    let open = ((sim::content::DOMAIN_DURATION - left) / 0.6).min(1.0);
+    let r = sim::content::DOMAIN_RADIUS * open;
+    // Darken everything (a very large rect around the player).
+    draw_rectangle(p.x - 2000.0, p.y - 2000.0, 4000.0, 4000.0, Color::new(0.0, 0.0, 0.04, 0.45 * open));
+    draw_circle(c.x, c.y, r, Color::new(0.02, 0.03, 0.12, 0.65));
+    // Stars, deterministic per index.
+    for k in 0..140 {
+        let a = k as f32 * 2.399;
+        let d = r * ((k as f32 * 0.618).fract()).sqrt();
+        let x = c.x + a.cos() * d;
+        let y = c.y + a.sin() * d;
+        let tw = 0.5 + 0.5 * (t * 3.0 + k as f32).sin();
+        let s = if k % 9 == 0 { 2.0 } else { 1.0 };
+        draw_rectangle(x, y, s, s, Color::new(0.85, 0.92, 1.0, 0.4 + 0.6 * tw));
+    }
+    // Concentric rings and a rotating hexagram.
+    for k in 1..=4 {
+        draw_circle_lines(c.x, c.y, r * k as f32 / 4.0, 1.0, Color::new(0.5, 0.75, 1.0, 0.25));
+    }
+    for tri in 0..2 {
+        let rot = t * 0.3 * if tri == 0 { 1.0 } else { -1.0 } + tri as f32 * std::f32::consts::PI / 3.0;
+        for k in 0..3 {
+            let a0 = rot + k as f32 * std::f32::consts::TAU / 3.0;
+            let a1 = a0 + std::f32::consts::TAU / 3.0;
+            draw_line(c.x + a0.cos() * r * 0.9, c.y + a0.sin() * r * 0.9, c.x + a1.cos() * r * 0.9, c.y + a1.sin() * r * 0.9, 1.5, Color::new(0.65, 0.85, 1.0, 0.35));
+        }
+    }
+    draw_circle_lines(c.x, c.y, r, 3.0, Color::new(0.75, 0.9, 1.0, 0.8));
+    // Finale: the purple sphere gathering above Kuon.
+    if left <= sim::content::DOMAIN_FINALE_CHARGE {
+        let k = 1.0 - left / sim::content::DOMAIN_FINALE_CHARGE;
+        let s = 8.0 + 34.0 * k;
+        draw_circle(p.x, p.y - 40.0, s * 1.6, Color::new(0.5, 0.2, 1.0, 0.25));
+        draw_circle(p.x, p.y - 40.0, s, Color::new(0.55, 0.25, 1.0, 0.95));
+        draw_circle(p.x, p.y - 40.0, s * 0.7, Color::new(0.05, 0.02, 0.12, 1.0));
+        draw_circle_lines(p.x, p.y - 40.0, s, 2.0, Color::new(0.9, 0.8, 1.0, 1.0));
+    }
+}
+
+/// Star sparkles around Kuon; a constellation storm inside his domain.
+fn draw_star_motes(p: sim::Vec2, t: f32, domain: bool) {
+    let n = if domain { 24 } else { 8 };
+    for k in 0..n {
+        let kf = k as f32;
+        let a = t * (0.5 + 0.1 * (k % 4) as f32) + kf * std::f32::consts::TAU / n as f32;
+        let r = if domain { 18.0 + (k % 5) as f32 * 6.0 } else { 14.0 };
+        let x = p.x + a.cos() * r;
+        let y = p.y - 10.0 + a.sin() * r * 0.55;
+        let tw = 0.5 + 0.5 * (t * 5.0 + kf).sin();
+        draw_rectangle(x, y, 2.0, 2.0, Color::new(0.8, 0.92, 1.0, 0.4 + 0.5 * tw));
     }
 }

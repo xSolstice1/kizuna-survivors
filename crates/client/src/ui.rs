@@ -15,6 +15,16 @@ fn fmt_time(t: f32) -> String {
     format!("{:02}:{:02}", s / 60, s % 60)
 }
 
+/// Largest size up to `max` at which `text` fits in `width`.
+fn fit_size(text: &str, width: f32, max: f32) -> f32 {
+    let w = kit::measure(text, max as u16).width;
+    if w <= width {
+        max
+    } else {
+        (max * width / w).floor().max(9.0)
+    }
+}
+
 fn centered(text: &str, y: f32, size: f32, color: Color) {
     kit::centered(text, screen_width() / 2.0, y, size, color);
 }
@@ -85,17 +95,19 @@ pub fn hud(world: &World, assets: &Assets) {
             let flick = 0.8 + 0.2 * (t * 14.0).sin();
             let c = match kind {
                 SpecialKind::Hannya | SpecialKind::Mukade => Color::new(0.9 * flick, 0.1, 0.15, 1.0),
+                SpecialKind::Firmament => Color::new(0.45, 0.8 * flick, 1.0, 1.0),
                 _ => Color::new(1.0, 0.6 * flick, 0.15, 1.0),
             };
             kit::bar(92.0, 62.0, 206.0, 10.0, f, c, Color::new(0.1, 0.08, 0.16, 0.95));
-            kit::text(&format!("{}  {:.0}s", hero.special_name.to_uppercase(), p.form.ceil()), 94.0, 90.0, 14.0, c);
+            let label = format!("{}  {:.0}s", hero.special_name.to_uppercase(), p.form.ceil());
+            kit::text(&label, 94.0, 90.0, fit_size(&label, 210.0, 14.0), c);
         }
         None => {
             let full = p.special >= 1.0;
             let glow = if full { 0.75 + 0.25 * (t * 6.0).sin() } else { 1.0 };
             kit::bar(92.0, 62.0, 206.0, 10.0, p.special, Color::new(glow, 0.85 * glow, 0.45 * glow, 1.0), Color::new(0.1, 0.08, 0.16, 0.95));
             let label = if full { format!("{}  READY  [Space]", hero.special_name.to_uppercase()) } else { hero.special_name.to_uppercase() };
-            kit::text(&label, 94.0, 90.0, 14.0, if full { Color::new(1.0, 0.9, 0.5, glow) } else { FAINT });
+            kit::text(&label, 94.0, 90.0, fit_size(&label, 210.0, 14.0), if full { Color::new(1.0, 0.9, 0.5, glow) } else { FAINT });
         }
     }
 
