@@ -7,87 +7,9 @@ pub const RUN_SECONDS: f32 = 15.0 * 60.0;
 
 // ───────────────────────── Enemies ─────────────────────────
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EnemyKind {
-    Wisp,
-    Kasa,
-    Oni,
-    /// Mid-boss at 8:00: telegraphed charges, drops a 3-item chest.
-    GreatOni,
-    /// Paper-lantern yokai: keeps its distance and spits fireballs.
-    Chochin,
-    /// Faceless ghost: fades out and reappears beside the player.
-    Nopperabo,
-    /// Night Lord at 15:00 (Chochin Daimyo). Defeating it wins the night.
-    NightLord,
-}
+pub use crate::enemies::*;
 
-pub const ALL_ENEMIES: [EnemyKind; 7] = [
-    EnemyKind::Wisp,
-    EnemyKind::Kasa,
-    EnemyKind::Chochin,
-    EnemyKind::Nopperabo,
-    EnemyKind::Oni,
-    EnemyKind::GreatOni,
-    EnemyKind::NightLord,
-];
-
-impl EnemyKind {
-    pub fn index(self) -> usize {
-        ALL_ENEMIES.iter().position(|k| *k == self).unwrap()
-    }
-    pub fn name(self) -> &'static str {
-        match self {
-            EnemyKind::Wisp => "Hitodama Wisp",
-            EnemyKind::Kasa => "Kasa-obake",
-            EnemyKind::Chochin => "Chochin-obake",
-            EnemyKind::Nopperabo => "Nopperabo",
-            EnemyKind::Oni => "Oni",
-            EnemyKind::GreatOni => "Great Oni",
-            EnemyKind::NightLord => "Night Lord: Chochin Daimyo",
-        }
-    }
-    /// Collection entry text.
-    pub fn lore(self) -> &'static str {
-        match self {
-            EnemyKind::Wisp => "A stray soul-flame from a story nobody finished. Alone it flickers; a crowd of them smothers.",
-            EnemyKind::Kasa => "An umbrella left behind too long. Hops on one leg and stares with its one eye.",
-            EnemyKind::Chochin => "A paper lantern with a grudge. Keeps its distance and spits fireballs.",
-            EnemyKind::Nopperabo => "A faceless passer-by. Fades out and reappears right beside you.",
-            EnemyKind::Oni => "A horned brute from the old tales. Hits hard and guards a treasure chest.",
-            EnemyKind::GreatOni => "Arrives at 8:00. Plants its feet, then charges in a straight line.",
-            EnemyKind::NightLord => "Lantern warlord of the Shotengai, risen at 15:00. Defeat it before dawn.",
-        }
-    }
-    pub fn is_boss(self) -> bool {
-        matches!(self, EnemyKind::GreatOni | EnemyKind::NightLord)
-    }
-}
-
-pub struct EnemyDef {
-    pub hp: f32,
-    pub speed: f32,
-    pub damage: f32,
-    pub radius: f32,
-    pub xp: u32,
-    /// 0 = no knockback, 1 = full.
-    pub knockback: f32,
-}
-
-pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
-    match kind {
-        EnemyKind::Wisp => EnemyDef { hp: 8.0, speed: 46.0, damage: 5.0, radius: 7.0, xp: 1, knockback: 1.0 },
-        EnemyKind::Kasa => EnemyDef { hp: 22.0, speed: 56.0, damage: 9.0, radius: 7.0, xp: 2, knockback: 0.7 },
-        EnemyKind::Oni => EnemyDef { hp: 420.0, speed: 38.0, damage: 20.0, radius: 14.0, xp: 30, knockback: 0.0 },
-        EnemyKind::GreatOni => EnemyDef { hp: 7000.0, speed: 34.0, damage: 30.0, radius: 26.0, xp: 120, knockback: 0.0 },
-        EnemyKind::Chochin => EnemyDef { hp: 30.0, speed: 34.0, damage: 8.0, radius: 8.0, xp: 3, knockback: 0.6 },
-        EnemyKind::Nopperabo => EnemyDef { hp: 45.0, speed: 44.0, damage: 9.0, radius: 7.0, xp: 4, knockback: 0.5 },
-        // HP is absolute (not time-scaled): see `night_lord_hp`.
-        EnemyKind::NightLord => EnemyDef { hp: 1.0, speed: 28.0, damage: 35.0, radius: 30.0, xp: 0, knockback: 0.0 },
-    }
-}
-
-pub const MAX_ENEMY_RADIUS: f32 = 30.0;
+pub const MAX_ENEMY_RADIUS: f32 = 36.0;
 
 /// The Night Lord arrives at RUN_SECONDS; if still alive at this time, dawn takes the player.
 pub const DAWN_LIMIT: f32 = 17.0 * 60.0;
@@ -112,15 +34,6 @@ pub fn nopperabo_share(t: f32) -> f32 {
     if t < 540.0 { 0.0 } else { (0.02 + (t - 540.0) / 360.0 * 0.02).min(0.04) }
 }
 pub const MIDBOSS_AT: f32 = 480.0;
-
-/// Minimum rewards in the chest dropped on death (0 = no chest).
-pub fn chest_tier(kind: EnemyKind) -> u8 {
-    match kind {
-        EnemyKind::Oni => 1,
-        EnemyKind::GreatOni => 3,
-        _ => 0,
-    }
-}
 
 // ───────────────────────── Ren's special ─────────────────────────
 

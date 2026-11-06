@@ -26,7 +26,21 @@ impl World {
                 closest = closest.min(d2);
             }
         }
+        // Step out of telegraphed blasts, domains and pressure zones.
+        let mut danger = false;
+        for h in &self.hazards {
+            let d = p - h.pos;
+            let reach = h.radius + 14.0;
+            if d.length_sq() < reach * reach {
+                let away = if d.length_sq() > 1e-3 { d.normalize_or_zero() } else { Vec2::new(1.0, 0.0) };
+                flee += away * 0.2;
+                danger = true;
+            }
+        }
         let flee = flee.normalize_or_zero();
+        if danger {
+            return Input { move_dir: flee, special: self.player.special >= 1.0 && closest < 60.0 * 60.0 };
+        }
         let special = self.player.special >= 1.0 && closest < 60.0 * 60.0;
         if closest < 40.0 * 40.0 {
             return Input { move_dir: flee, special };

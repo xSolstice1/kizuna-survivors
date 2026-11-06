@@ -1,6 +1,7 @@
 //! Meta-progression: Sen (coins), Shrine Shop power-ups, hero unlocks and the save profile.
 //! The profile is plain `key=value` text so the client can keep it in localStorage.
 
+use crate::campaign::{Difficulty, Relic, StageId, ALL_RELICS, ALL_STAGES};
 use crate::content::{EnemyKind, HeroId, PassiveKind, ShrineEvent, WeaponKind, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
 use crate::world::{RunState, World};
 
@@ -209,6 +210,14 @@ pub struct Profile {
     pub hero_runs: [u32; ALL_HEROES.len()],
     pub hero_wins: [u32; ALL_HEROES.len()],
     pub hero_best: [f32; ALL_HEROES.len()],
+    /// Campaign: the stage and difficulty picked on the map, clears and best times per
+    /// stage x difficulty, bosses ever defeated per stage (bits: mini, boss, final), relics.
+    pub stage: StageId,
+    pub difficulty: Difficulty,
+    pub cleared: [[bool; 3]; ALL_STAGES.len()],
+    pub stage_best: [[f32; 3]; ALL_STAGES.len()],
+    pub stage_bosses: [u8; ALL_STAGES.len()],
+    pub relics: Vec<Relic>,
     /// Settings (0..=1).
     pub music_volume: f32,
     pub sfx_volume: f32,
@@ -246,6 +255,12 @@ impl Default for Profile {
             hero_runs: [0; ALL_HEROES.len()],
             hero_wins: [0; ALL_HEROES.len()],
             hero_best: [0.0; ALL_HEROES.len()],
+            stage: StageId::ShrineValley,
+            difficulty: Difficulty::Normal,
+            cleared: [[false; 3]; ALL_STAGES.len()],
+            stage_best: [[0.0; 3]; ALL_STAGES.len()],
+            stage_bosses: [0; ALL_STAGES.len()],
+            relics: Vec::new(),
             music_volume: 0.6,
             sfx_volume: 0.8,
         }
@@ -259,6 +274,11 @@ pub struct RunReport {
     pub unlocked: Vec<HeroId>,
     /// New Collection entries this run.
     pub discovered: u32,
+    /// First clear of this stage at this difficulty (its Sen bonus is in `sen`).
+    pub first_clear: Option<Difficulty>,
+    pub relic: Option<Relic>,
+    /// A stage this clear opened.
+    pub stage_unlocked: Option<StageId>,
 }
 
 impl Profile {
@@ -297,6 +317,9 @@ impl Profile {
 
     pub fn bonus(&self) -> Bonus {
         let mut b = Bonus::default();
+        for r in &self.relics {
+            b = b.plus(r.bonus());
+        }
         for p in ALL_POWERUPS {
             for _ in 0..self.rank(p) {
                 b = b.plus(p.per_rank());
@@ -309,19 +332,52 @@ impl Profile {
         self.unlocked.contains(&h)
     }
 
+    pub fn stage_open(&self, s: StageId) -> bool {
+        s.requires().is_none_or(|r| self.cleared[r.index()][0])
+    }
+
+    /// Normal is open with the stage; Hard after a Normal clear; Nightmare after Hard.
+    pub fn difficulty_open(&self, s: StageId, d: Difficulty) -> bool {
+        self.stage_open(s) && (d == Difficulty::Normal || self.cleared[s.index()][d.index() - 1])
+    }
+
     /// Folds a finished run into the profile: banks Sen, updates records, unlocks heroes.
     pub fn record_run(&mut self, w: &World) -> RunReport {
         debug_assert!(w.state != RunState::Playing);
         self.runs += 1;
-        self.sen += w.sen;
+        let (stage, diff) = (w.cfg.stage, w.cfg.difficulty);
+        let won = w.state == RunState::Won;
+        let mut report = RunReport { sen: w.sen, ..Default::default() };
+        {
+            let si = stage.index();
+            self.stage_best[si][diff.index()] = self.stage_best[si][diff.index()].max(w.time);
+            self.stage_bosses[si] |= w.bosses_down;
+            if won && !self.cleared[si][diff.index()] {
+                let opened_before: Vec<bool> = ALL_STAGES.iter().map(|s| self.stage_open(*s)).collect();
+                self.cleared[si][diff.index()] = true;
+                report.first_clear = Some(diff);
+                report.sen += diff.first_clear_sen();
+                if diff == Difficulty::Nightmare {
+                    if let Some(r) = stage.def().relic {
+                        if !self.relics.contains(&r) {
+                            self.relics.push(r);
+                            report.relic = Some(r);
+                        }
+                    }
+                }
+                report.stage_unlocked = ALL_STAGES.iter().enumerate().find(|(i, s)| !opened_before[*i] && self.stage_open(**s)).map(|(_, s)| *s);
+            }
+        }
+        self.sen += report.sen;
         self.total_kills += w.kills as u64;
         self.best_time = self.best_time.max(w.time);
         self.best_level = self.best_level.max(w.player.level);
         self.great_onis += w.great_oni_defeated as u32;
-        let night_lord = w.state == RunState::Won;
+        // Hero feats that name the Night Lord need the prologue's Night Lord.
+        let night_lord = won && stage == StageId::Shotengai;
         self.night_lords += night_lord as u32;
-        self.wins += night_lord as u32;
-        self.deaths += (!night_lord && !w.dawn_out) as u32;
+        self.wins += won as u32;
+        self.deaths += (!won && !w.dawn_out) as u32;
         self.dawn_outs += w.dawn_out as u32;
         self.best_kills = self.best_kills.max(w.kills);
         self.time_played += w.time;
@@ -332,9 +388,8 @@ impl Profile {
         self.specials_used += w.specials_used;
         let hi = w.cfg.hero.index();
         self.hero_runs[hi] += 1;
-        self.hero_wins[hi] += night_lord as u32;
+        self.hero_wins[hi] += won as u32;
         self.hero_best[hi] = self.hero_best[hi].max(w.time);
-        let mut report = RunReport { sen: w.sen, unlocked: Vec::new(), discovered: 0 };
         for (i, k) in w.kills_by_kind.iter().enumerate() {
             report.discovered += (self.enemy_kills[i] == 0 && *k > 0) as u32;
             self.enemy_kills[i] += *k as u64;
@@ -407,6 +462,14 @@ impl Profile {
         for (i, h) in ALL_HEROES.iter().enumerate() {
             s += &format!("hero.{}={},{},{}\n", h.key(), self.hero_runs[i], self.hero_wins[i], self.hero_best[i]);
         }
+        s += &format!("map={}\ndifficulty={}\n", self.stage.key(), self.difficulty.key());
+        for (i, st) in ALL_STAGES.iter().enumerate() {
+            let c = self.cleared[i];
+            let b = self.stage_best[i];
+            s += &format!("stage.{}={},{},{},{},{},{},{}\n", st.key(), c[0] as u8, c[1] as u8, c[2] as u8, b[0], b[1], b[2], self.stage_bosses[i]);
+        }
+        let relics: Vec<&str> = self.relics.iter().map(|r| r.key()).collect();
+        s += &format!("relics={}\n", relics.join(","));
         s
     }
 
@@ -451,6 +514,23 @@ impl Profile {
                 "shrines_taken" => p.shrines_taken = v.parse().unwrap_or(0),
                 "awakened_total" => p.awakenings = v.parse().unwrap_or(0),
                 "specials" => p.specials_used = v.parse().unwrap_or(0),
+                "map" => {
+                    if let Some(st) = StageId::from_key(v) {
+                        p.stage = st;
+                    }
+                }
+                "difficulty" => {
+                    if let Some(d) = Difficulty::from_key(v) {
+                        p.difficulty = d;
+                    }
+                }
+                "relics" => {
+                    for r in v.split(',').filter_map(Relic::from_key) {
+                        if !p.relics.contains(&r) {
+                            p.relics.push(r);
+                        }
+                    }
+                }
                 "music_volume" => p.music_volume = v.parse::<f32>().unwrap_or(0.6).clamp(0.0, 1.0),
                 "sfx_volume" => p.sfx_volume = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
                 _ => {
@@ -462,6 +542,15 @@ impl Profile {
                             p.hero_wins[i] = f.get(1).and_then(|x| x.parse().ok()).unwrap_or(0);
                             p.hero_best[i] = f.get(2).and_then(|x| x.parse().ok()).unwrap_or(0.0);
                         }
+                    }
+                    if let Some(st) = k.strip_prefix("stage.").and_then(StageId::from_key) {
+                        let f: Vec<&str> = v.split(',').collect();
+                        let i = st.index();
+                        for d in 0..3 {
+                            p.cleared[i][d] = f.get(d).is_some_and(|x| *x == "1");
+                            p.stage_best[i][d] = f.get(3 + d).and_then(|x| x.parse().ok()).unwrap_or(0.0);
+                        }
+                        p.stage_bosses[i] = f.get(6).and_then(|x| x.parse().ok()).unwrap_or(0);
                     }
                     if let Some(key) = k.strip_prefix("enemy.") {
                         if let Some(i) = ALL_ENEMIES.iter().position(|e| key_of(e) == key) {
@@ -478,6 +567,12 @@ impl Profile {
         }
         if !p.is_unlocked(p.selected) {
             p.selected = HeroId::Ren;
+        }
+        if !p.difficulty_open(p.stage, p.difficulty) {
+            p.difficulty = Difficulty::Normal;
+        }
+        if !p.stage_open(p.stage) {
+            p.stage = StageId::ShrineValley;
         }
         p
     }
@@ -503,8 +598,9 @@ pub fn collection_progress(p: &Profile) -> (usize, usize) {
         + p.awakenings_found.len()
         + p.passives_found.len()
         + p.shrines_found.len()
-        + p.unlocked.len();
-    let total = ALL_ENEMIES.len() + 2 * ALL_WEAPONS.len() + ALL_PASSIVES.len() + ALL_SHRINE_EVENTS.len() + ALL_HEROES.len();
+        + p.unlocked.len()
+        + p.relics.len();
+    let total = ALL_ENEMIES.len() + 2 * ALL_WEAPONS.len() + ALL_PASSIVES.len() + ALL_SHRINE_EVENTS.len() + ALL_HEROES.len() + ALL_RELICS.len();
     (found, total)
 }
 
@@ -533,6 +629,12 @@ mod tests {
         p.time_played = 1234.5;
         p.hero_runs[1] = 7;
         p.hero_best[1] = 612.0;
+        p.cleared[1] = [true, true, false];
+        p.stage_best[1][1] = 1500.5;
+        p.stage_bosses[1] = 7;
+        p.relics = vec![Relic::WardKey];
+        p.stage = StageId::ShrineValley;
+        p.difficulty = Difficulty::Nightmare;
         assert_eq!(Profile::parse(&p.serialize()), p);
         assert_eq!(Profile::parse("garbage\nsen=abc\nrank.might=99"), Profile { ranks: { let mut r = [0; 11]; r[0] = 5; r }, ..Default::default() });
     }
@@ -571,5 +673,35 @@ mod tests {
         assert!(p.record_run(&w).unlocked.is_empty(), "surviving 12:00 as Riku unlocks nothing");
         w.great_oni_defeated = true;
         assert_eq!(p.record_run(&w).unlocked, vec![HeroId::Shun], "Great Oni as Riku unlocks Shun");
+    }
+}
+
+#[cfg(test)]
+mod campaign_tests {
+    use super::*;
+    use crate::WorldConfig;
+
+    #[test]
+    fn clears_open_stages_difficulties_and_relics() {
+        let mut p = Profile::default();
+        assert!(p.stage_open(StageId::Shotengai) && p.stage_open(StageId::ShrineValley));
+        assert!(!p.stage_open(StageId::EmberLeaf));
+        assert!(!p.difficulty_open(StageId::ShrineValley, Difficulty::Hard));
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        w.state = RunState::Won;
+        w.time = 1520.0;
+        let r = p.record_run(&w);
+        assert_eq!(r.first_clear, Some(Difficulty::Normal));
+        assert_eq!(r.stage_unlocked, Some(StageId::EmberLeaf));
+        assert_eq!(p.sen, Difficulty::Normal.first_clear_sen());
+        assert!(p.difficulty_open(StageId::ShrineValley, Difficulty::Hard));
+        assert!(p.record_run(&w).first_clear.is_none(), "only the first clear pays");
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, difficulty: Difficulty::Nightmare, ..Default::default() });
+        w.state = RunState::Won;
+        assert_eq!(p.record_run(&w).relic, Some(Relic::MoonveilBell));
+        assert!(p.bonus().area > 0.09);
+        // A world win is not a Night Lord.
+        assert_eq!(p.night_lords, 0);
+        assert_eq!(p.wins, 3);
     }
 }

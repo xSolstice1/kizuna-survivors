@@ -1,5 +1,6 @@
 //! The run simulation: player, weapons, spawn director, enemies, pickups.
 
+use crate::campaign::{Difficulty, Mechanic, StageDef, StageId};
 use crate::content::*;
 use crate::grid::Grid;
 use crate::meta::Bonus;
@@ -21,6 +22,8 @@ const ORB_RADIUS: f32 = 8.0;
 const ORB_ORBIT: f32 = 46.0;
 const FIELD_RADIUS: f32 = 44.0;
 const IFRAMES: f32 = 0.5;
+/// Move speed inside spirit pressure.
+const PRESSURE_SLOW: f32 = 0.6;
 
 /// Debug load test: fixed enemy count + extra radial projectiles, no damage, no level-ups.
 #[derive(Clone, Copy, Debug)]
@@ -38,11 +41,13 @@ pub struct WorldConfig {
     pub recycle_radius: f32,
     /// Permanent bonuses from the Shrine Shop.
     pub meta: Bonus,
+    pub stage: StageId,
+    pub difficulty: Difficulty,
 }
 
 impl Default for WorldConfig {
     fn default() -> Self {
-        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default() }
+        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default(), stage: StageId::Shotengai, difficulty: Difficulty::Normal }
     }
 }
 
@@ -69,7 +74,10 @@ pub enum Event {
     PlayerHurt,
     LevelUp,
     SpecialUsed { pos: Vec2 },
-    BossSpawned,
+    /// A mini-boss or boss arrived.
+    BossSpawned(EnemyKind),
+    /// The elite wave began.
+    EliteWave,
     /// The Great Oni is winding up a charge in `dir`.
     BossTelegraph,
     Awakened(WeaponKind),
@@ -81,7 +89,14 @@ pub enum Event {
     Impact { pos: Vec2, radius: f32 },
     ShrineAppeared,
     ShrineChosen(ShrineEvent),
-    NightLordSpawned,
+    /// The stage's final boss arrived.
+    NightLordSpawned(EnemyKind),
+    /// A boss crossed into a new phase.
+    BossPhase { pos: Vec2 },
+    /// A hazard went off: 0 blast/tag, 1 lightning, 2 domain opened.
+    Hazard { pos: Vec2, radius: f32, kind: u8 },
+    /// A danmaku curtain started sweeping in.
+    Curtain,
     /// The player went down but a Revival brought them back.
     Revived,
     SenPicked { amount: u32 },
@@ -227,6 +242,33 @@ pub struct Shot {
     pub pos: Vec2,
     pub vel: Vec2,
     pub life: f32,
+    /// Look: 0 fireball, otherwise the stage index (themed bullets).
+    pub style: u8,
+}
+
+/// A world hazard (see `Mechanic`) or a boss's telegraphed strike.
+#[derive(Clone, Copy, Debug)]
+pub struct Hazard {
+    pub pos: Vec2,
+    pub radius: f32,
+    /// Seconds of warning before it is live.
+    pub warn: f32,
+    /// Seconds it stays live after the warning (0 = one-shot).
+    pub life: f32,
+    pub kind: HazardKind,
+    tick: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HazardKind {
+    /// Explodes once; hurts the player and Otherworlders inside.
+    Blast { damage: f32 },
+    /// Strikes once from the sky.
+    Lightning { damage: f32 },
+    /// Drifts after the player; slows them inside.
+    Pressure,
+    /// Burns the player every second while they are inside.
+    Domain { damage: f32 },
 }
 
 /// Expanding Taiko shockwave ring.
@@ -295,6 +337,12 @@ pub struct Enemies {
     pub ai_dir: Vec<Vec2>,
     /// Ticks until a Taiko wave may hit this enemy again.
     pub wave_cd: Vec<u8>,
+    pub max_hp: Vec<f32>,
+    /// Boss phase reached (0-based).
+    pub phase: Vec<u8>,
+    /// Seconds left of a committed move (dash, charge); the move's direction.
+    pub ai_busy: Vec<f32>,
+    pub ai_aux: Vec<Vec2>,
 }
 
 impl Enemies {
@@ -323,6 +371,10 @@ impl Enemies {
         self.ai_timer.swap_remove(i);
         self.ai_dir.swap_remove(i);
         self.wave_cd.swap_remove(i);
+        self.max_hp.swap_remove(i);
+        self.phase.swap_remove(i);
+        self.ai_busy.swap_remove(i);
+        self.ai_aux.swap_remove(i);
     }
 }
 
@@ -606,6 +658,13 @@ pub struct World {
     /// True if the run ended because dawn arrived with the Night Lord alive.
     pub dawn_out: bool,
     night_lord_spawned: bool,
+    /// Bosses defeated this run: bit 0 mini-boss, bit 1 boss, bit 2 final boss.
+    pub bosses_down: u8,
+    second_boss_spawned: bool,
+    elite_wave_done: bool,
+    /// World hazards and boss strikes on the field.
+    pub hazards: Vec<Hazard>,
+    next_hazard: f32,
     pending_spawns: Vec<(EnemyKind, Vec2)>,
     /// A shrine waiting on the ground.
     pub shrine: Option<Vec2>,
@@ -706,6 +765,11 @@ impl World {
             specials_used: 0,
             dawn_out: false,
             night_lord_spawned: false,
+            bosses_down: 0,
+            second_boss_spawned: false,
+            elite_wave_done: false,
+            hazards: Vec::new(),
+            next_hazard: 45.0,
             pending_spawns: Vec::new(),
             shrine: None,
             shrine_offer: None,
@@ -737,8 +801,10 @@ impl World {
         self.time += DT;
         self.move_player(input);
         self.director();
+        self.update_mechanic();
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
         // Needs the fresh grid (queries index into the enemy arrays).
+        self.update_bosses();
         self.move_enemies();
         self.update_weapons();
         self.update_signatures();
@@ -756,6 +822,7 @@ impl World {
         }
         self.contact_damage();
         self.update_shots();
+        self.update_hazards();
         self.update_pickups();
         // Everything that reads the grid must run before this: removal reorders
         // the enemy arrays and invalidates the grid's indices.
@@ -763,7 +830,7 @@ impl World {
         self.collect_gems();
         self.collect_chests();
         self.collect_shrine();
-        if self.state == RunState::Playing && self.time >= DAWN_LIMIT {
+        if self.state == RunState::Playing && self.time >= self.stage().limit {
             self.dawn_out = true;
             self.state = RunState::Dead;
         }
@@ -866,15 +933,11 @@ impl World {
         out
     }
 
-    /// The living boss, if any (Night Lord first): (index, hp fraction, kind).
+    /// The living boss of the highest rank, if any: (index, hp fraction, kind).
     pub fn boss(&self) -> Option<(usize, f32, EnemyKind)> {
         let k = &self.enemies.kind;
-        let i = k.iter().position(|k| *k == EnemyKind::NightLord).or_else(|| k.iter().position(|k| *k == EnemyKind::GreatOni))?;
-        let max = match k[i] {
-            EnemyKind::NightLord => night_lord_hp(),
-            _ => enemy_def(EnemyKind::GreatOni).hp * hp_scale(MIDBOSS_AT),
-        };
-        Some((i, (self.enemies.hp[i] / max).clamp(0.0, 1.0), k[i]))
+        let i = (0..k.len()).filter(|&i| k[i].is_boss()).max_by_key(|&i| k[i].rank())?;
+        Some((i, (self.enemies.hp[i] / self.enemies.max_hp[i]).clamp(0.0, 1.0), k[i]))
     }
 
     // ───────────── Player ─────────────
@@ -931,8 +994,9 @@ impl World {
         if self.player.moving {
             self.player.facing = d;
         }
-        self.player.pos += d * (self.move_speed() * DT);
-        self.player.pos = stage::resolve(self.player.pos, PLAYER_RADIUS);
+        let pressure = if self.under_pressure() { PRESSURE_SLOW } else { 1.0 };
+        self.player.pos += d * (self.move_speed() * pressure * DT);
+        self.player.pos = stage::resolve(self.cfg.stage, self.player.pos, PLAYER_RADIUS);
     }
 
     fn contact_damage(&mut self) {
@@ -950,7 +1014,7 @@ impl World {
         self.grid.for_each_near(p, PLAYER_RADIUS + MAX_ENEMY_RADIUS, |j| {
             let j = j as usize;
             let r = PLAYER_RADIUS + enemies.radius[j];
-            let faded = (enemies.kind[j] == EnemyKind::Nopperabo && enemies.ai_state[j] != 0) || (frozen && !enemies.kind[j].is_boss());
+            let faded = (enemy_def(enemies.kind[j]).ai == Ai::Blink && enemies.ai_state[j] != 0) || (frozen && !enemies.kind[j].is_boss());
             if enemies.hp[j] > 0.0 && !faded && (enemies.pos[j] - p).length_sq() <= r * r {
                 worst = worst.max(enemies.damage[j]);
             }
@@ -967,11 +1031,41 @@ impl World {
         self.player.pos + Vec2::from_angle(a) * radius
     }
 
+    pub fn stage(&self) -> &'static StageDef {
+        self.cfg.stage.def()
+    }
+
+    /// Fodder/elite HP multiplier now: the stage's stretched curve, its tier and difficulty.
+    fn enemy_hp_scale(&self) -> f32 {
+        let st = self.stage();
+        let late = 1.0 + st.late_hp * (self.time / st.final_at).min(1.2).powi(2);
+        hp_scale(st.pace(self.time)) * late * st.tier * self.cfg.difficulty.hp()
+    }
+
+    /// Enemy damage multiplier now (contact, bullets, hazards).
+    pub fn enemy_damage_scale(&self) -> f32 {
+        damage_scale(self.stage().pace(self.time)) * self.cfg.difficulty.damage()
+    }
+
     fn spawn_enemy(&mut self, kind: EnemyKind, pos: Vec2) {
         if self.enemies.len() >= MAX_ENEMIES {
             return;
         }
         let d = enemy_def(kind);
+        let hp = if kind.is_boss() {
+            d.hp * self.stage().tier * self.cfg.difficulty.hp() * self.mods.enemy_hp
+        } else {
+            d.hp * self.enemy_hp_scale() * self.mods.enemy_hp
+        };
+        let damage = d.damage * self.enemy_damage_scale();
+        let timer = match d.ai {
+            Ai::Ranged { every, .. } => every * 0.4 + self.rng.range(0.0, every * 0.5),
+            Ai::Blink => 2.5 + self.rng.range(0.0, 2.0),
+            Ai::Dash => 1.5 + self.rng.range(0.0, 2.0),
+            Ai::Boss => 2.0,
+            _ => 3.0,
+        };
+        let speed = d.speed * self.rng.range(0.9, 1.1) * self.mods.enemy_speed;
         let e = &mut self.enemies;
         e.id.push(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
@@ -979,46 +1073,55 @@ impl World {
         e.pos.push(pos);
         e.vel.push(Vec2::ZERO);
         e.push.push(Vec2::ZERO);
-        e.hp.push(if kind == EnemyKind::NightLord { night_lord_hp() } else { d.hp * hp_scale(self.time) * self.mods.enemy_hp });
-        e.speed.push(d.speed * self.rng.range(0.9, 1.1) * self.mods.enemy_speed);
+        e.hp.push(hp);
+        e.max_hp.push(hp);
+        e.speed.push(speed);
         e.radius.push(d.radius);
-        e.damage.push(d.damage * damage_scale(self.time));
+        e.damage.push(damage);
         e.xp.push(d.xp);
         e.knock.push(d.knockback);
         e.flash.push(0);
         e.orb_cd.push(0);
         e.pierce_cd.push(0);
         e.ai_state.push(0);
-        e.ai_timer.push(match kind {
-            EnemyKind::Chochin => 1.5 + self.rng.range(0.0, 1.5),
-            EnemyKind::Nopperabo => 2.5 + self.rng.range(0.0, 2.0),
-            _ => 3.0,
-        });
+        e.ai_timer.push(timer);
         e.ai_dir.push(Vec2::ZERO);
         e.wave_cd.push(0);
+        e.phase.push(0);
+        e.ai_busy.push(0.0);
+        e.ai_aux.push(Vec2::ZERO);
+    }
+
+    fn spawn_boss(&mut self, kind: EnemyKind) {
+        let p = self.ring_point(self.cfg.spawn_radius * 0.8);
+        self.spawn_enemy(kind, p);
+        self.events.push(if kind.rank() == Rank::Final { Event::NightLordSpawned(kind) } else { Event::BossSpawned(kind) });
     }
 
     fn director(&mut self) {
+        let st = self.stage();
+        let pace = st.pace(self.time);
+        let density = self.cfg.difficulty.density() * if st.in_crisis(self.time) { 1.35 } else { 1.0 };
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
             None if self.night_lord_spawned => 0,
-            None => (min_alive(self.time) as f32 * self.mods.curse) as usize,
+            None => (min_alive(pace) as f32 * self.mods.curse * density) as usize,
         };
         // Refill is rate-limited (ramping over the run) so strong area weapons can't turn
         // the director into an endless XP fountain. Stress mode fills fast.
-        let per_tick = if self.cfg.stress.is_some() { 30 } else { refill_per_tick(self.time) };
+        let per_tick = if self.cfg.stress.is_some() { 30 } else { (refill_per_tick(pace) as f32 * density).ceil() as usize };
         let deficit = target.saturating_sub(self.enemies.len()).min(per_tick);
         for _ in 0..deficit {
             let r = self.rng.f32();
-            let (c, n) = (chochin_share(self.time), nopperabo_share(self.time));
+            let (c, n) = (chochin_share(pace) * st.ranged_mult, nopperabo_share(pace));
             let kind = if r < c {
-                EnemyKind::Chochin
+                st.ranged
             } else if r < c + n {
-                EnemyKind::Nopperabo
-            } else if self.rng.f32() < kasa_share(self.time) {
-                EnemyKind::Kasa
+                st.blinker
+            } else if self.rng.f32() < kasa_share(pace) {
+                st.fodder_b
             } else {
-                EnemyKind::Wisp
+                st.fodder
             };
             let r = self.cfg.spawn_radius + self.rng.range(0.0, 80.0);
             let p = self.ring_point(r);
@@ -1026,39 +1129,54 @@ impl World {
         }
 
         if self.cfg.stress.is_none() {
-            if !self.night_lord_spawned && self.time >= RUN_SECONDS {
+            if !self.night_lord_spawned && self.time >= st.final_at {
                 self.night_lord_spawned = true;
-                let p = self.ring_point(self.cfg.spawn_radius * 0.8);
-                self.spawn_enemy(EnemyKind::NightLord, p);
-                self.events.push(Event::NightLordSpawned);
+                self.spawn_boss(st.final_boss);
             }
             for (k, p) in std::mem::take(&mut self.pending_spawns) {
                 self.spawn_enemy(k, p);
             }
-            if !self.boss_spawned && self.time >= MIDBOSS_AT {
+            if !self.boss_spawned && self.time >= st.mini_at {
                 self.boss_spawned = true;
-                let p = self.ring_point(self.cfg.spawn_radius * 0.8);
-                self.spawn_enemy(EnemyKind::GreatOni, p);
-                self.events.push(Event::BossSpawned);
+                self.spawn_boss(st.mini);
             }
-            if self.shrines_done < SHRINE_TIMES.len() && self.time >= SHRINE_TIMES[self.shrines_done] {
+            if let Some((b, at)) = st.boss {
+                if !self.second_boss_spawned && self.time >= at {
+                    self.second_boss_spawned = true;
+                    self.spawn_boss(b);
+                }
+            }
+            if self.shrines_done < st.shrine_times.len() && self.time >= st.shrine_times[self.shrines_done] {
                 self.shrines_done += 1;
                 let a = self.rng.range(0.0, std::f32::consts::TAU);
-                self.shrine = Some(stage::resolve(self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
+                self.shrine = Some(stage::resolve(self.cfg.stage, self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
                 self.events.push(Event::ShrineAppeared);
             }
             if self.time >= self.next_elite {
-                self.next_elite += elite_interval(self.time);
+                self.next_elite += elite_interval(pace) * self.cfg.difficulty.elite_gap();
                 let p = self.ring_point(self.cfg.spawn_radius);
-                self.spawn_enemy(EnemyKind::Oni, p);
+                self.spawn_enemy(st.elite, p);
             }
-            if self.rings_done < SWARM_RING_TIMES.len() && self.time >= SWARM_RING_TIMES[self.rings_done] {
+            if let Some(at) = st.elite_wave_at {
+                if !self.elite_wave_done && self.time >= at {
+                    // The elite wave: a ring of elites closing in at once.
+                    self.elite_wave_done = true;
+                    let n = 4 + self.cfg.difficulty.index() * 2;
+                    for k in 0..n {
+                        let a = k as f32 / n as f32 * std::f32::consts::TAU;
+                        let p = self.player.pos + Vec2::from_angle(a) * self.cfg.spawn_radius;
+                        self.spawn_enemy(st.elite, p);
+                    }
+                    self.events.push(Event::EliteWave);
+                }
+            }
+            if self.rings_done < st.ring_times.len() && self.time >= st.ring_times[self.rings_done] {
                 self.rings_done += 1;
-                let n = 120;
+                let n = (120.0 * self.cfg.difficulty.density()) as usize;
                 for k in 0..n {
                     let a = k as f32 / n as f32 * std::f32::consts::TAU;
                     let p = self.player.pos + Vec2::from_angle(a) * 270.0;
-                    self.spawn_enemy(EnemyKind::Wisp, p);
+                    self.spawn_enemy(st.fodder, p);
                 }
             }
         }
@@ -1073,6 +1191,270 @@ impl World {
         }
     }
 
+    // ───────────── Bosses and hazards ─────────────
+
+    fn shot_style(&self) -> u8 {
+        if self.cfg.stage == StageId::Shotengai { 0 } else { self.cfg.stage.index() as u8 }
+    }
+
+    /// Generic bosses: phases by HP, a rotating spray, and a cycle of moves from their kit.
+    fn update_bosses(&mut self) {
+        let player = self.player.pos;
+        let extra = self.cfg.difficulty.extra_phases();
+        let style = self.shot_style();
+        let dmg = self.enemy_damage_scale();
+        let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some(self.domain_center);
+        let tau = std::f32::consts::TAU;
+        for i in 0..self.enemies.len() {
+            let kind = self.enemies.kind[i];
+            if enemy_def(kind).ai != Ai::Boss || self.enemies.hp[i] <= 0.0 {
+                continue;
+            }
+            let kit = boss_kit(kind);
+            let phases = boss_phases(kind, extra);
+            let e = &mut self.enemies;
+            let p = e.pos[i];
+            let to = player - p;
+            let base = to.y.atan2(to.x);
+            let slow = match domain {
+                Some(c) if (p - c).length_sq() < DOMAIN_RADIUS * DOMAIN_RADIUS => 0.15,
+                _ => 1.0,
+            };
+            // Phase changes: each equal slice of HP lost.
+            let frac = e.hp[i] / e.max_hp[i];
+            let want = (((1.0 - frac) * phases as f32) as u8).min(phases - 1);
+            if want > e.phase[i] {
+                e.phase[i] = want;
+                let n = 24 + 6 * want as usize;
+                for k in 0..n {
+                    let a = k as f32 / n as f32 * tau;
+                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(a) * 120.0, life: 6.0, style });
+                }
+                for k in 0..6 {
+                    let a = k as f32 / 6.0 * tau;
+                    self.pending_spawns.push((kit.minion, player + Vec2::from_angle(a) * 220.0));
+                }
+                e.ai_timer[i] = 1.2;
+                self.events.push(Event::BossPhase { pos: p });
+            }
+            let ph = e.phase[i] as f32;
+            let more = 1.0 + 0.25 * ph;
+            // A committed charge: 0.8s planted (telegraph), then 0.7s straight run.
+            if e.ai_busy[i] > 0.0 {
+                e.ai_busy[i] -= DT;
+                e.vel[i] = if e.ai_busy[i] > 0.7 { Vec2::ZERO } else { e.ai_aux[i] * (kit.charge_speed * slow) };
+                continue;
+            }
+            e.vel[i] = to.normalize_or_zero() * (e.speed[i] * (1.0 + 0.08 * ph) * slow);
+            if let Some(sp) = kit.spiral {
+                if e.phase[i] >= sp.from {
+                    e.ai_dir[i].x += DT * sp.turn * (1.0 + 0.15 * ph);
+                    e.ai_dir[i].y -= DT;
+                    if e.ai_dir[i].y <= 0.0 {
+                        e.ai_dir[i].y = sp.every;
+                        for k in 0..sp.arms {
+                            let a = e.ai_dir[i].x + k as f32 / sp.arms as f32 * tau;
+                            self.shots.push(Shot { pos: p, vel: Vec2::from_angle(a) * sp.speed, life: 7.0, style });
+                        }
+                    }
+                }
+            }
+            e.ai_timer[i] -= DT;
+            if e.ai_timer[i] > 0.0 {
+                continue;
+            }
+            e.ai_timer[i] = (kit.cycle * (1.0 - 0.12 * ph)).max(kit.cycle * 0.55);
+            let mv = kit.moves[e.ai_state[i] as usize % kit.moves.len()];
+            e.ai_state[i] = ((e.ai_state[i] as usize + 1) % kit.moves.len()) as u8;
+            match mv {
+                Move::Ring { n, layers, speed } => {
+                    let n = (n as f32 * more) as usize;
+                    for l in 0..layers {
+                        let off = l as f32 * 0.5 / n as f32 * tau;
+                        let v = speed * (1.0 + 0.2 * l as f32) * (1.0 + 0.08 * ph);
+                        for k in 0..n {
+                            let a = off + k as f32 / n as f32 * tau;
+                            self.shots.push(Shot { pos: p, vel: Vec2::from_angle(a) * v, life: 7.0, style });
+                        }
+                    }
+                }
+                Move::Fan { n, spread, speed } => {
+                    let n = n as usize + 2 * e.phase[i] as usize;
+                    for k in 0..n {
+                        let a = base + (k as f32 / (n - 1).max(1) as f32 - 0.5) * spread;
+                        self.shots.push(Shot { pos: p, vel: Vec2::from_angle(a) * (speed * (1.0 + 0.08 * ph)), life: 6.0, style });
+                    }
+                }
+                Move::Charge => {
+                    e.ai_busy[i] = 1.5;
+                    e.ai_aux[i] = to.normalize_or_zero();
+                    e.vel[i] = Vec2::ZERO;
+                    self.events.push(Event::BossTelegraph);
+                }
+                Move::Blink => {
+                    let a = self.rng.range(0.0, tau);
+                    let q = player + Vec2::from_angle(a) * 190.0;
+                    e.pos[i] = q;
+                    let n = 12 + 4 * e.phase[i] as usize;
+                    for k in 0..n {
+                        let b = k as f32 / n as f32 * tau;
+                        self.shots.push(Shot { pos: q, vel: Vec2::from_angle(b) * 90.0, life: 6.0, style });
+                    }
+                    self.events.push(Event::Blink { pos: q });
+                }
+                Move::Rain { n } => {
+                    let n = (n as f32 * more) as usize;
+                    for k in 0..n {
+                        let off = if k == 0 { Vec2::ZERO } else { Vec2::from_angle(self.rng.range(0.0, tau)) * self.rng.range(40.0, 170.0) };
+                        self.hazards.push(Hazard { pos: player + off, radius: 34.0, warn: 1.1 + k as f32 * 0.06, life: 0.0, kind: HazardKind::Blast { damage: 14.0 * dmg }, tick: 0.0 });
+                    }
+                }
+                Move::Summon { n } => {
+                    let n = (n as f32 * more) as usize;
+                    for k in 0..n {
+                        let a = k as f32 / n as f32 * tau;
+                        self.pending_spawns.push((kit.minion, player + Vec2::from_angle(a) * 210.0));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The stage's signature hazard (none in the prologue).
+    fn update_mechanic(&mut self) {
+        let st = self.stage();
+        if st.mechanic == Mechanic::None || self.cfg.stress.is_some() {
+            return;
+        }
+        self.next_hazard -= DT;
+        if self.next_hazard > 0.0 {
+            return;
+        }
+        let crisis = st.in_crisis(self.time);
+        let diff = self.cfg.difficulty.index() as f32;
+        let dmg = self.enemy_damage_scale();
+        let p = self.player.pos;
+        let tau = std::f32::consts::TAU;
+        let gap = |calm: f32, hot: f32| (if crisis { hot } else { calm }) * (1.0 - 0.12 * diff);
+        match st.mechanic {
+            Mechanic::None => {}
+            Mechanic::Curtains => {
+                self.next_hazard = gap(60.0, 32.0);
+                // A wall of bullets sweeps in from one side with two gaps to slip through.
+                let d = Vec2::from_angle(self.rng.range(0.0, tau));
+                let side = Vec2::new(-d.y, d.x);
+                let start = p - d * 380.0;
+                let gaps = [self.rng.range(-220.0, 0.0), self.rng.range(20.0, 220.0)];
+                let style = self.shot_style();
+                let mut x = -460.0;
+                while x <= 460.0 {
+                    if !gaps.iter().any(|g| (x - g).abs() < 42.0) {
+                        self.shots.push(Shot { pos: start + side * x, vel: d * 75.0, life: 11.0, style });
+                    }
+                    x += 18.0;
+                }
+                self.events.push(Event::Curtain);
+            }
+            Mechanic::Tags => {
+                self.next_hazard = gap(6.5, 3.5);
+                let n = 2 + diff as usize + crisis as usize;
+                for k in 0..n {
+                    let off = Vec2::from_angle(self.rng.range(0.0, tau)) * if k == 0 { self.rng.range(0.0, 30.0) } else { self.rng.range(50.0, 170.0) };
+                    self.hazards.push(Hazard { pos: p + off, radius: 44.0, warn: 1.3, life: 0.0, kind: HazardKind::Blast { damage: 12.0 * dmg }, tick: 0.0 });
+                }
+            }
+            Mechanic::Pressure => {
+                self.next_hazard = gap(15.0, 8.0);
+                let pos = p + Vec2::from_angle(self.rng.range(0.0, tau)) * 280.0;
+                self.hazards.push(Hazard { pos, radius: 85.0, warn: 1.0, life: 22.0, kind: HazardKind::Pressure, tick: 0.0 });
+            }
+            Mechanic::Downpour => {
+                self.next_hazard = gap(6.0, 3.0);
+                let lead = if self.player.moving { self.player.facing * 30.0 } else { Vec2::ZERO };
+                self.hazards.push(Hazard { pos: p + lead, radius: 36.0, warn: 1.2, life: 0.0, kind: HazardKind::Lightning { damage: 16.0 * dmg }, tick: 0.0 });
+            }
+            Mechanic::Domains => {
+                self.next_hazard = gap(100.0, 55.0);
+                let pos = p + Vec2::from_angle(self.rng.range(0.0, tau)) * self.rng.range(0.0, 80.0);
+                self.hazards.push(Hazard { pos, radius: 210.0, warn: 3.0, life: 14.0, kind: HazardKind::Domain { damage: 6.0 * dmg }, tick: 1.0 });
+            }
+        }
+    }
+
+    /// True while the player stands in live spirit pressure.
+    fn under_pressure(&self) -> bool {
+        let p = self.player.pos;
+        self.hazards.iter().any(|h| h.kind == HazardKind::Pressure && h.warn <= 0.0 && (h.pos - p).length_sq() < h.radius * h.radius)
+    }
+
+    /// Counts down hazards, fires blasts and lightning, burns inside domains. Reads the grid.
+    fn update_hazards(&mut self) {
+        if self.hazards.is_empty() {
+            return;
+        }
+        let p = self.player.pos;
+        let mut hurt = 0.0f32;
+        let mut fired: Vec<(Vec2, f32, u8)> = Vec::new();
+        for h in &mut self.hazards {
+            let inside = (h.pos - p).length_sq() <= (h.radius + PLAYER_RADIUS).powi(2);
+            if h.warn > 0.0 {
+                h.warn -= DT;
+                if h.warn <= 0.0 {
+                    match h.kind {
+                        HazardKind::Blast { damage } | HazardKind::Lightning { damage } => {
+                            if inside {
+                                hurt = hurt.max(damage);
+                            }
+                            fired.push((h.pos, h.radius, matches!(h.kind, HazardKind::Lightning { .. }) as u8));
+                            h.life = -1.0;
+                        }
+                        HazardKind::Domain { .. } => fired.push((h.pos, h.radius, 2)),
+                        HazardKind::Pressure => {}
+                    }
+                }
+                continue;
+            }
+            h.life -= DT;
+            match h.kind {
+                HazardKind::Pressure => {
+                    let d = p - h.pos;
+                    if d.length_sq() > 1.0 {
+                        h.pos += d.normalize_or_zero() * (24.0 * DT);
+                    }
+                }
+                HazardKind::Domain { damage } => {
+                    h.tick -= DT;
+                    if h.tick <= 0.0 {
+                        h.tick = 1.0;
+                        if inside {
+                            hurt = hurt.max(damage);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.hazards.retain(|h| h.warn > 0.0 || h.life > 0.0);
+        let blast = 60.0 * self.enemy_hp_scale();
+        for (pos, radius, kind) in fired {
+            self.events.push(Event::Hazard { pos, radius, kind });
+            if kind < 2 {
+                // Tags and lightning don't take sides.
+                self.query_circle(pos, radius);
+                for k in 0..self.scratch.len() {
+                    let j = self.scratch[k] as usize;
+                    if !self.enemies.kind[j].is_boss() {
+                        let dir = self.enemies.pos[j] - pos;
+                        self.hurt_enemy(j, blast, dir);
+                    }
+                }
+            }
+        }
+        if hurt > 0.0 && self.player.iframes <= 0.0 && self.cfg.stress.is_none() {
+            self.hurt_player(hurt);
+        }
+    }
+
     // ───────────── Enemies ─────────────
 
     fn move_enemies(&mut self) {
@@ -1082,6 +1464,7 @@ impl World {
         let decoys: Vec<Vec2> = self.clones.iter().map(|c| c.pos).collect();
         let stillness = self.cfg.hero == HeroId::Kuon;
         let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some(self.domain_center);
+        let style = if self.cfg.stage == StageId::Shotengai { 0 } else { self.cfg.stage.index() as u8 };
         let e = &mut self.enemies;
         let frozen = self.freeze > 0.0;
         // Pass 1: desired velocity = seek player + separation from grid neighbours.
@@ -1108,7 +1491,8 @@ impl World {
             if stillness && (e.pos[i] - player).length_sq() < STILLNESS_RADIUS * STILLNESS_RADIUS {
                 speed *= STILLNESS_SLOW;
             }
-            if e.kind[i] == EnemyKind::Kasa {
+            let ai = enemy_def(e.kind[i]).ai;
+            if ai == Ai::Hop {
                 // Hopping gait.
                 speed *= 0.45 + 0.75 * ((time * 7.0 + e.id[i] as f32 * 0.7).sin().abs());
             }
@@ -1124,9 +1508,11 @@ impl World {
                     }
                 }
             }
-            match e.kind[i] {
-                EnemyKind::Chochin => {
-                    // Hold a firing range, strafing; spit a fireball every ~2.5s.
+            match ai {
+                // Bosses are steered (and fire) in `update_bosses`.
+                Ai::Boss => continue,
+                Ai::Ranged { volley, every } => {
+                    // Hold a firing range, strafing; fire every `every` seconds.
                     let d = to_player.length();
                     let dir = to_player.normalize_or_zero();
                     let side = Vec2::new(-dir.y, dir.x) * if e.id[i] % 2 == 0 { 1.0 } else { -1.0 };
@@ -1134,13 +1520,44 @@ impl World {
                     e.vel[i] = mv * speed;
                     e.ai_timer[i] -= DT;
                     if e.ai_timer[i] <= 0.0 && d < 300.0 {
-                        e.ai_timer[i] = 4.5;
-                        self.shots.push(Shot { pos: p, vel: dir * 115.0, life: 4.0 });
+                        e.ai_timer[i] = every;
+                        let base = dir.y.atan2(dir.x);
+                        match volley {
+                            Volley::Single { speed } => self.shots.push(Shot { pos: p, vel: dir * speed, life: 4.0, style }),
+                            Volley::Fan3 { speed } => {
+                                for k in -1..=1 {
+                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(base + k as f32 * 0.28) * speed, life: 4.0, style });
+                                }
+                            }
+                            Volley::Ring6 { speed } => {
+                                for k in 0..6 {
+                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(base + k as f32 / 6.0 * std::f32::consts::TAU) * speed, life: 4.0, style });
+                                }
+                            }
+                        }
                         self.events.push(Event::EnemyShot);
                     }
                     continue;
                 }
-                EnemyKind::Nopperabo => {
+                Ai::Dash => {
+                    // Chase; then crouch (0.35s) and lunge (0.5s) along a locked line.
+                    if e.ai_busy[i] > 0.0 {
+                        e.ai_busy[i] -= DT;
+                        e.vel[i] = if e.ai_busy[i] > 0.5 { Vec2::ZERO } else { e.ai_aux[i] * (speed * 3.2) };
+                        if e.ai_busy[i] <= 0.0 {
+                            e.ai_timer[i] = 2.5 + self.rng.range(0.0, 2.0);
+                        }
+                        continue;
+                    }
+                    e.ai_timer[i] -= DT;
+                    if e.ai_timer[i] <= 0.0 && to_player.length_sq() < 240.0 * 240.0 {
+                        e.ai_busy[i] = 0.85;
+                        e.ai_aux[i] = to_player.normalize_or_zero();
+                        e.vel[i] = Vec2::ZERO;
+                        continue;
+                    }
+                }
+                Ai::Blink => {
                     // Walk -> fade out (0.5s) -> reappear 140px from the player and fade in (0.6s).
                     // While faded (states 1 and 2) it stands still and deals no contact damage.
                     e.ai_timer[i] -= DT;
@@ -1172,7 +1589,7 @@ impl World {
                     }
                     continue;
                 }
-                EnemyKind::NightLord => {
+                Ai::Daimyo => {
                     // Slow chase; a constant spiral; every 3s cycle burst -> aimed fan -> summon.
                     e.vel[i] = to_player.normalize_or_zero() * speed;
                     e.ai_dir[i].x += DT * 2.2;
@@ -1182,7 +1599,7 @@ impl World {
                         let a = e.ai_dir[i].x;
                         for k in 0..2 {
                             let b = a + k as f32 * std::f32::consts::PI;
-                            self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 95.0, life: 6.0 });
+                            self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 95.0, life: 6.0, style: 0 });
                         }
                     }
                     e.ai_timer[i] -= DT;
@@ -1192,14 +1609,14 @@ impl World {
                             0 => {
                                 for k in 0..24 {
                                     let b = k as f32 / 24.0 * std::f32::consts::TAU;
-                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 110.0, life: 6.0 });
+                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 110.0, life: 6.0, style: 0 });
                                 }
                             }
                             1 => {
                                 let base = to_player.y.atan2(to_player.x);
                                 for k in 0..9 {
                                     let b = base + (k as f32 - 4.0) * 0.12;
-                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 150.0, life: 5.0 });
+                                    self.shots.push(Shot { pos: p, vel: Vec2::from_angle(b) * 150.0, life: 5.0, style: 0 });
                                 }
                             }
                             _ => {
@@ -1213,37 +1630,39 @@ impl World {
                     }
                     continue;
                 }
-                _ => {}
-            }
-            if e.kind[i] == EnemyKind::GreatOni {
-                // Chase → telegraph (stand still, 0.8s) → charge (0.7s) → chase.
-                e.ai_timer[i] -= DT;
-                e.vel[i] = match e.ai_state[i] {
-                    0 => {
-                        if e.ai_timer[i] <= 0.0 && to_player.length_sq() < 380.0 * 380.0 {
-                            e.ai_state[i] = 1;
-                            e.ai_timer[i] = 0.8;
-                            e.ai_dir[i] = to_player.normalize_or_zero();
-                            self.events.push(Event::BossTelegraph);
+                Ai::Charger { speed: charge, rest } => {
+                    // Chase -> telegraph (stand still, 0.8s) -> charge (0.7s) -> chase.
+                    e.ai_timer[i] -= DT;
+                    e.vel[i] = match e.ai_state[i] {
+                        0 => {
+                            if e.ai_timer[i] <= 0.0 && to_player.length_sq() < 380.0 * 380.0 {
+                                e.ai_state[i] = 1;
+                                e.ai_timer[i] = 0.8;
+                                e.ai_dir[i] = to_player.normalize_or_zero();
+                                if e.kind[i].is_boss() {
+                                    self.events.push(Event::BossTelegraph);
+                                }
+                            }
+                            to_player.normalize_or_zero() * speed
                         }
-                        to_player.normalize_or_zero() * speed
-                    }
-                    1 => {
-                        if e.ai_timer[i] <= 0.0 {
-                            e.ai_state[i] = 2;
-                            e.ai_timer[i] = 0.7;
+                        1 => {
+                            if e.ai_timer[i] <= 0.0 {
+                                e.ai_state[i] = 2;
+                                e.ai_timer[i] = 0.7;
+                            }
+                            Vec2::ZERO
                         }
-                        Vec2::ZERO
-                    }
-                    _ => {
-                        if e.ai_timer[i] <= 0.0 {
-                            e.ai_state[i] = 0;
-                            e.ai_timer[i] = 5.0;
+                        _ => {
+                            if e.ai_timer[i] <= 0.0 {
+                                e.ai_state[i] = 0;
+                                e.ai_timer[i] = rest;
+                            }
+                            e.ai_dir[i] * charge
                         }
-                        e.ai_dir[i] * 290.0
-                    }
-                };
-                continue;
+                    };
+                    continue;
+                }
+                Ai::Chase | Ai::Hop => {}
             }
             let seek = to_player.normalize_or_zero() * speed;
             let mut sep = Vec2::ZERO;
@@ -1267,12 +1686,13 @@ impl World {
             e.vel[i] = seek + sep * 70.0;
         }
         // Pass 2: integrate, then slide around props (bosses smash straight through).
+        let stage_id = self.cfg.stage;
         for i in 0..e.pos.len() {
             let v = e.vel[i] + e.push[i];
             e.pos[i] += v * DT;
-            if !matches!(e.kind[i], EnemyKind::GreatOni | EnemyKind::NightLord) {
+            if !e.kind[i].is_boss() {
                 let before = e.pos[i];
-                let after = stage::resolve_local(before, e.radius[i]);
+                let after = stage::resolve_local(stage_id, before, e.radius[i]);
                 let n = after - before;
                 if n.length_sq() > 1e-8 {
                     // Blocked: step along the obstacle face, on the side closer to the player.
@@ -1736,7 +2156,7 @@ impl World {
             if self.pickups.len() < MAX_PICKUPS {
                 let a = self.rng.range(0.0, std::f32::consts::TAU);
                 let d = self.rng.range(220.0, 380.0);
-                let pos = stage::resolve(self.player.pos + Vec2::from_angle(a) * d, 12.0);
+                let pos = stage::resolve(self.cfg.stage, self.player.pos + Vec2::from_angle(a) * d, 12.0);
                 let k = PickupKind::roll(self.rng.f32());
                 self.pickups.push((pos, k));
                 self.events.push(Event::PickupSpawned { pos, kind: k });
@@ -1932,7 +2352,7 @@ impl World {
                 c.facing = to.normalize_or_zero();
                 c.pos += c.facing * (c.speed.min(dist / DT) * DT);
             }
-            c.pos = stage::resolve_local(c.pos, 6.0);
+            c.pos = stage::resolve_local(self.cfg.stage, c.pos, 6.0);
             if target.is_some() && !leash && dist < 22.0 && c.strike_cd <= 0.0 {
                 c.strike_cd = 0.45;
                 c.striking = 0.15;
@@ -1993,11 +2413,11 @@ impl World {
         let e = &self.enemies;
         let mut out = Vec::with_capacity(e.len() + 16);
         for i in 0..e.len() {
-            let kind = match e.kind[i] {
-                EnemyKind::NightLord => MarkerKind::Boss,
-                EnemyKind::GreatOni => MarkerKind::MiniBoss,
-                EnemyKind::Oni => MarkerKind::Elite,
-                _ => MarkerKind::Enemy,
+            let kind = match e.kind[i].rank() {
+                Rank::Final | Rank::Boss => MarkerKind::Boss,
+                Rank::Mini => MarkerKind::MiniBoss,
+                Rank::Elite => MarkerKind::Elite,
+                Rank::Fodder => MarkerKind::Enemy,
             };
             out.push(MapMarker { pos: e.pos[i], kind });
         }
@@ -2010,13 +2430,12 @@ impl World {
     /// Solid obstacles overlapping the area (min, max), as (min, max) boxes, for the current
     /// stage. The minimap only asks this, so new stages show up without UI changes.
     pub fn map_obstacles(&self, min: Vec2, max: Vec2) -> Vec<(Vec2, Vec2)> {
-        // Stage 1 (Neon Shotengai) is the only stage so far; future stages dispatch here.
         let (cx0, cy0) = stage::chunk_of(min);
         let (cx1, cy1) = stage::chunk_of(max);
         let mut out = Vec::new();
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
-                let (props, n) = stage::chunk_props(cx, cy);
+                let (props, n) = stage::chunk_props(self.cfg.stage, cx, cy);
                 out.extend(props[..n].iter().map(|p| p.footprint()));
             }
         }
@@ -2270,27 +2689,33 @@ impl World {
             self.events.push(Event::Kill { pos, kind });
             self.kills_by_kind[kind.index()] += 1;
             if self.cfg.stress.is_none() {
-                let coin = match kind {
-                    EnemyKind::NightLord => 150,
-                    EnemyKind::GreatOni => 50,
-                    EnemyKind::Oni => 5,
-                    _ if self.rng.f32() < 0.004 => 1,
-                    _ => 0,
+                let coin = match coin_drop(kind) {
+                    0 if self.rng.f32() < 0.004 => 1,
+                    c => c,
                 };
+                let coin = (coin as f32 * self.cfg.difficulty.greed()).round() as u32;
                 if coin > 0 {
                     self.coins.push((pos, coin));
                 }
             }
-            if kind == EnemyKind::Oni && self.cfg.stress.is_none() && self.rng.f32() < ONI_PICKUP_CHANCE && self.pickups.len() < MAX_PICKUPS {
+            if kind.rank() == Rank::Elite && self.cfg.stress.is_none() && self.rng.f32() < ONI_PICKUP_CHANCE && self.pickups.len() < MAX_PICKUPS {
                 let k = PickupKind::roll(self.rng.f32());
                 self.pickups.push((pos, k));
                 self.events.push(Event::PickupSpawned { pos, kind: k });
             }
-            if kind == EnemyKind::GreatOni {
-                self.great_oni_defeated = true;
-            }
-            if kind == EnemyKind::NightLord && self.state == RunState::Playing {
-                self.state = RunState::Won;
+            match kind.rank() {
+                Rank::Mini => {
+                    self.bosses_down |= 1;
+                    self.great_oni_defeated |= kind == EnemyKind::GreatOni;
+                }
+                Rank::Boss => self.bosses_down |= 2,
+                Rank::Final => {
+                    self.bosses_down |= 4;
+                    if self.state == RunState::Playing {
+                        self.state = RunState::Won;
+                    }
+                }
+                _ => {}
             }
             self.enemies.swap_remove(i);
             self.kills += 1;
@@ -2610,7 +3035,7 @@ impl World {
                 for _ in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU);
                     let d = self.rng.range(30.0, 110.0);
-                    let pos = stage::resolve(p + Vec2::from_angle(a) * d, 8.0);
+                    let pos = stage::resolve(self.cfg.stage, p + Vec2::from_angle(a) * d, 8.0);
                     self.lanterns.push(Lantern { pos, life, max_life: life, radius: 46.0 * area, tick: 0.2, damage: dmg, slows: w.awakened });
                 }
             }
@@ -2712,7 +3137,7 @@ impl World {
                 let n = s.amount;
                 for k in 0..n {
                     let slot = k as f32 / n as f32 * std::f32::consts::TAU;
-                    let pos = stage::resolve(p + Vec2::from_angle(slot) * 18.0, 6.0);
+                    let pos = stage::resolve(self.cfg.stage, p + Vec2::from_angle(slot) * 18.0, 6.0);
                     self.clones.push(MirageClone {
                         pos,
                         facing: self.player.facing,
@@ -3033,10 +3458,10 @@ impl World {
                     self.events.push(Event::BarrierBlock);
                     return;
                 }
-                self.hurt_player(SHOT_DAMAGE * damage_scale(self.time) * BARRIER_SHOT_DAMAGE);
+                self.hurt_player(SHOT_DAMAGE * self.enemy_damage_scale() * BARRIER_SHOT_DAMAGE);
                 return;
             }
-            self.hurt_player(SHOT_DAMAGE * damage_scale(self.time));
+            self.hurt_player(SHOT_DAMAGE * self.enemy_damage_scale());
         }
     }
 
@@ -3660,8 +4085,8 @@ mod tests {
     #[test]
     fn barrier_erases_fireballs() {
         let mut w = World::new(WorldConfig { hero: HeroId::Kaede, ..Default::default() });
-        w.shots.push(Shot { pos: Vec2::new(50.0, 0.0), vel: Vec2::ZERO, life: 5.0 });
-        w.shots.push(Shot { pos: Vec2::new(900.0, 0.0), vel: Vec2::ZERO, life: 5.0 });
+        w.shots.push(Shot { pos: Vec2::new(50.0, 0.0), vel: Vec2::ZERO, life: 5.0, style: 0 });
+        w.shots.push(Shot { pos: Vec2::new(900.0, 0.0), vel: Vec2::ZERO, life: 5.0, style: 0 });
         w.player.special = 1.0;
         w.use_special();
         assert_eq!(w.shots.len(), 1, "only the far fireball survives");
@@ -3713,7 +4138,7 @@ mod tests {
         let (prop, _) = (-30..30)
             .flat_map(|cy| (-30..30).map(move |cx| (cx, cy)))
             .find_map(|(cx, cy)| {
-                let (ps, n) = crate::stage::chunk_props(cx, cy);
+                let (ps, n) = crate::stage::chunk_props(StageId::Shotengai, cx, cy);
                 ps[..n].iter().find(|p| p.kind == crate::stage::PropKind::Stall).map(|p| (*p, ()))
             })
             .expect("a stall");
@@ -3992,7 +4417,7 @@ mod tests {
         let mut w = World::new(WorldConfig::default());
         assert_eq!(hero_def(HeroId::Ren).special, SpecialKind::Divine);
         let hp = w.player.hp;
-        w.shots.push(Shot { pos: w.player.pos, vel: Vec2::ZERO, life: 5.0 });
+        w.shots.push(Shot { pos: w.player.pos, vel: Vec2::ZERO, life: 5.0, style: 0 });
         w.step(Input::default());
         assert_eq!(w.player.hp, hp, "the barrier blocks the first fireball");
         assert!(w.barrier_cd > 0.0);
@@ -4053,7 +4478,9 @@ mod tests {
         for seed in 1..=seeds {
             let started = std::time::Instant::now();
             let hero = std::env::var("BALANCE_HERO").ok().and_then(|h| HeroId::from_key(&h)).unwrap_or(HeroId::Ren);
-            let mut w = World::new(WorldConfig { seed, hero, ..Default::default() });
+            let stage = std::env::var("BALANCE_STAGE").ok().and_then(|h| StageId::from_key(&h)).unwrap_or(StageId::Shotengai);
+            let difficulty = std::env::var("BALANCE_DIFF").ok().and_then(|h| Difficulty::from_key(&h)).unwrap_or(Difficulty::Normal);
+            let mut w = World::new(WorldConfig { seed, hero, stage, difficulty, ..Default::default() });
             while w.state == RunState::Playing {
                 if w.offer.is_some() {
                     w.choose(0);
@@ -4068,9 +4495,10 @@ mod tests {
                 w.step(input);
             }
             let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
-            let nl = w.boss().filter(|b| b.2 == EnemyKind::NightLord).map(|b| format!("{:.0}%", b.1 * 100.0)).unwrap_or("-".into());
+            let nl = w.boss().map(|b| format!("{} {:.0}%", b.2.short_name(), b.1 * 100.0)).unwrap_or("-".into());
             println!(
-                "seed {seed} [NightLord hp {nl}]: {:?} at {:>5.0}s  level {:>2}  kills {:>6}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                "seed {seed} [boss {nl}] bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  kills {:>6}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                w.bosses_down,
                 w.state,
                 w.time,
                 w.player.level,

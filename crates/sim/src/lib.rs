@@ -1,7 +1,9 @@
 //! Pure game simulation: no rendering, no platform code. Deterministic for a given seed.
 
 pub mod bot;
+pub mod campaign;
 pub mod content;
+pub mod enemies;
 pub mod grid;
 pub mod math;
 pub mod meta;
