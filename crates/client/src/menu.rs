@@ -874,7 +874,14 @@ fn row(x: f32, y: f32, w: f32, label: &str, value: &str, accent: Color) {
 }
 
 /// Returns true to go back.
-pub fn stats(profile: &Profile, assets: &Assets, time: f64) -> bool {
+/// Horizontal scroll of the Stats heroes strip.
+#[derive(Default)]
+pub struct StripScroll {
+    pub offset: f32,
+    drag: Option<f32>,
+}
+
+pub fn stats(profile: &Profile, assets: &Assets, scroll: &mut StripScroll, time: f64) -> bool {
     backdrop(time);
     let w = screen_width();
     kit::centered("STATS", w / 2.0, 62.0, 44.0, ACCENT);
@@ -960,13 +967,52 @@ pub fn stats(profile: &Profile, assets: &Assets, time: f64) -> bool {
         kit::text(&v, x + cw - pad - d.width, y + 27.0, 15.0, kit::DIM);
     }
 
-    // Heroes strip.
+    // Heroes strip: scrolls sideways (wheel, drag or the arrows) when it doesn't fit.
     let hy = cy + ch + 20.0;
     let heroes: Vec<_> = ALL_HEROES.iter().copied().filter(|h| profile.is_unlocked(*h)).collect();
-    let hw = 150.0;
-    let hx0 = (w - (heroes.len() as f32 * hw + (heroes.len() as f32 - 1.0) * 12.0)) / 2.0;
+    let (hw, hgap) = (150.0, 12.0);
+    let content = heroes.len() as f32 * (hw + hgap) - hgap;
+    let (vx, vw) = (60.0, w - 120.0);
+    let view = Rect::new(vx, hy - 4.0, vw, 104.0);
+    let max_scroll = (content - vw).max(0.0);
+    let mouse: Vec2 = mouse_position().into();
+    if max_scroll > 0.0 {
+        let (wx, wy) = mouse_wheel();
+        if view.contains(mouse) {
+            scroll.offset -= (if wx.abs() > wy.abs() { wx } else { wy }) * 0.6;
+        }
+        if is_mouse_button_pressed(MouseButton::Left) && view.contains(mouse) {
+            scroll.drag = Some(mouse.x);
+        }
+        if let Some(last) = scroll.drag {
+            if is_mouse_button_down(MouseButton::Left) {
+                scroll.offset -= mouse.x - last;
+                scroll.drag = Some(mouse.x);
+            } else {
+                scroll.drag = None;
+            }
+        }
+        if kit::button(Rect::new(14.0, hy + 28.0, 38.0, 40.0), "<", scroll.offset > 0.0, kit::Style::Secondary) {
+            scroll.offset -= hw + hgap;
+        }
+        if kit::button(Rect::new(w - 52.0, hy + 28.0, 38.0, 40.0), ">", scroll.offset < max_scroll, kit::Style::Secondary) {
+            scroll.offset += hw + hgap;
+        }
+        if is_key_pressed(KeyCode::Left) {
+            scroll.offset -= hw + hgap;
+        }
+        if is_key_pressed(KeyCode::Right) {
+            scroll.offset += hw + hgap;
+        }
+    }
+    scroll.offset = scroll.offset.clamp(0.0, max_scroll);
+    let hx0 = if max_scroll > 0.0 { vx - scroll.offset } else { (w - content) / 2.0 };
+    kit::clip(Some(view));
     for (i, h) in heroes.iter().enumerate() {
-        let x = hx0 + i as f32 * (hw + 12.0);
+        let x = hx0 + i as f32 * (hw + hgap);
+        if x + hw < vx - 10.0 || x > vx + vw + 10.0 {
+            continue;
+        }
         kit::panel(x, hy, hw, 96.0);
         let tex = &assets.hero(*h)[0];
         draw_texture_ex(tex, x + 10.0, hy + 14.0, WHITE, DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0, 18.0)), dest_size: Some(vec2(48.0, 36.0)), ..Default::default() });
@@ -979,6 +1025,15 @@ pub fn stats(profile: &Profile, assets: &Assets, time: f64) -> bool {
         let best = format!("best {}", fmt_time(profile.hero_best[hi]));
         let d = kit::measure(&best, 13);
         kit::text(&best, x + hw - 12.0 - d.width, hy + 74.0, 13.0, kit::SKY);
+    }
+    kit::clip(None);
+    if max_scroll > 0.0 {
+        // Scroll position bar.
+        let frac = vw / content;
+        let bw = vw * frac;
+        let bx = vx + (vw - bw) * (scroll.offset / max_scroll);
+        kit::rounded(vx, hy + 101.0, vw, 4.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.08));
+        kit::rounded(bx, hy + 101.0, bw, 4.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.35));
     }
 
     button(Rect::new((w - 200.0) / 2.0, hy + 112.0, 200.0, 46.0), "Back", true) || is_key_pressed(KeyCode::Escape)

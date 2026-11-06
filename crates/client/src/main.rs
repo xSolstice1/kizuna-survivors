@@ -100,6 +100,7 @@ async fn main() {
     let mut armory_state = armory::ArmoryState::default();
     let mut draw_state = armory::DrawState::default();
     let mut dev = devmenu::DevMenu::default();
+    let mut stats_scroll = menu::StripScroll::default();
     let mut dev_pending: Option<devmenu::DevAction> = None;
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
@@ -180,7 +181,7 @@ async fn main() {
                 }
             }
             Screen::Stats => {
-                if menu::stats(&profile, &assets, now) {
+                if menu::stats(&profile, &assets, &mut stats_scroll, now) {
                     screen = Screen::Menu;
                 }
             }

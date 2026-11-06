@@ -55,6 +55,14 @@ pub fn begin_ui() {
     set_camera(&Camera2D { target: vec2(w / 2.0, h / 2.0), zoom: vec2(2.0 / w, 2.0 / h), ..Default::default() });
 }
 
+/// Clips drawing to a rectangle in virtual UI coordinates (None = no clip).
+pub fn clip(r: Option<Rect>) {
+    let k = ui_scale() * screen_dpi_scale();
+    let mut gl = unsafe { get_internal_gl() };
+    gl.flush();
+    gl.quad_gl.scissor(r.map(|r| ((r.x * k) as i32, (r.y * k) as i32, (r.w * k).ceil() as i32, (r.h * k).ceil() as i32)));
+}
+
 thread_local! {
     static FONTS: RefCell<Option<(Font, Font)>> = const { RefCell::new(None) };
 }
