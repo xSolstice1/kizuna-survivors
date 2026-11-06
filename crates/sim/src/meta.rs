@@ -246,8 +246,6 @@ pub struct Profile {
     pub dust: u32,
     pub draw_pity: u32,
     pub next_item: u32,
-    /// Exotic Shards (100 forge an Exotic).
-    pub shards: u32,
     /// Settings (0..=1).
     pub music_volume: f32,
     pub sfx_volume: f32,
@@ -298,7 +296,6 @@ impl Default for Profile {
             dust: 0,
             draw_pity: 0,
             next_item: 1,
-            shards: 0,
             music_volume: 0.6,
             sfx_volume: 0.8,
         }
@@ -321,7 +318,6 @@ pub struct RunReport {
     pub gear: Vec<u32>,
     /// A new Ascension tier this clear opened.
     pub ascension_opened: Option<u32>,
-    pub shards: u32,
 }
 
 /// Bag size; drops beyond it are salvaged into Spirit Dust automatically.
@@ -433,21 +429,6 @@ impl Profile {
         true
     }
 
-    /// Forges an Exotic from Shards (its world must be cleared on Nightmare).
-    pub fn can_forge(&self, e: gear::Exotic) -> bool {
-        self.shards >= gear::FORGE_COST && self.cleared[e.home().index()][2]
-    }
-
-    pub fn forge(&mut self, e: gear::Exotic, seed: u64) -> u32 {
-        if !self.can_forge(e) {
-            return 0;
-        }
-        self.shards -= gear::FORGE_COST;
-        let mut rng = Rng::new(seed);
-        let it = gear::roll_exotic(&mut rng, e, self.draw_ilvl());
-        self.add_item(it)
-    }
-
     pub fn unequip(&mut self, hero: HeroId, pos: usize) {
         if pos < LOADOUT.len() {
             self.loadouts[hero.index()][pos] = 0;
@@ -538,12 +519,7 @@ impl Profile {
         for _ in 0..n {
             let r = gear::draw_rarity(&mut rng, self.draw_pity);
             self.draw_pity = if r >= Rarity::Legendary { 0 } else { self.draw_pity + 1 };
-            let it = if r == Rarity::Exotic {
-                let e = gear::ALL_EXOTICS[(rng.next_u32() as usize) % gear::ALL_EXOTICS.len()];
-                gear::roll_exotic(&mut rng, e, ilvl)
-            } else {
-                gear::roll_item(&mut rng, None, r, ilvl, None)
-            };
+            let it = gear::roll_item(&mut rng, None, r, ilvl, None);
             out.push(self.add_item(it));
         }
         out
@@ -602,12 +578,6 @@ impl Profile {
                 self.asc_open[si] = next;
                 report.ascension_opened = Some(next);
             }
-        }
-        // Exotic Shards for a Nightmare final boss.
-        if won && diff == Difficulty::Nightmare {
-            let n = 3 + w.cfg.ascension;
-            self.shards += n;
-            report.shards = n;
         }
         for it in &w.loot {
             let id = self.add_item(it.clone());
@@ -717,7 +687,7 @@ impl Profile {
         let relics: Vec<&str> = self.relics.iter().map(|r| r.key()).collect();
         s += &format!("relics={}\n", relics.join(","));
         let asc: Vec<String> = self.asc_open.iter().map(|a| a.to_string()).collect();
-        s += &format!("asc_open={}\nascension={}\ndust={}\ndraw_pity={}\nnext_item={}\nshards={}\n", asc.join(","), self.ascension, self.dust, self.draw_pity, self.next_item, self.shards);
+        s += &format!("asc_open={}\nascension={}\ndust={}\ndraw_pity={}\nnext_item={}\n", asc.join(","), self.ascension, self.dust, self.draw_pity, self.next_item);
         for it in &self.items {
             s += &format!("item={}\n", it.serialize());
         }
@@ -778,7 +748,6 @@ impl Profile {
                 }
                 "ascension" => p.ascension = v.parse().unwrap_or(0),
                 "dust" => p.dust = v.parse().unwrap_or(0),
-                "shards" => p.shards = v.parse().unwrap_or(0),
                 "draw_pity" => p.draw_pity = v.parse().unwrap_or(0),
                 "next_item" => p.next_item = v.parse().unwrap_or(1).max(1),
                 "item" => {
@@ -1066,11 +1035,6 @@ mod exotic_tests {
         let f = p.items.iter().find(|i| i.exotic == Some(Exotic::SovereignFinger)).unwrap().id;
         p.equip(h, p.slot_for(h, Slot::Omamori), f);
         assert_eq!(p.loadout(h).fingers, 3);
-        // Shards and forging.
-        p.shards = 100;
-        assert!(!p.can_forge(Exotic::Kusanagi), "needs Ember Leaf on Nightmare");
-        p.cleared[StageId::EmberLeaf.index()][2] = true;
-        assert!(p.forge(Exotic::Kusanagi, 1) != 0 && p.shards == 0);
         let back = Profile::parse(&p.serialize());
         assert_eq!(back.items.len(), p.items.len());
         // Exotic arts and effects run without panicking.

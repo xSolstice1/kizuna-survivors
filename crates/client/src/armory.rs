@@ -440,7 +440,6 @@ pub struct DrawState {
     pub results: Vec<u32>,
     pub at: f64,
     pub selected: Option<u32>,
-    pub forge: bool,
 }
 
 pub enum DrawAction {
@@ -463,10 +462,10 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
     let (ox, oy, ow, oh) = (24.0, 80.0, 300.0, 380.0);
     kit::panel(ox, oy, ow, oh);
     kit::panel_title("ODDS", ox + 16.0, oy + 30.0, 16.0, GOLD);
-    for (i, r) in gear::ALL_RARITIES.iter().enumerate() {
-        let y = oy + 56.0 + i as f32 * 27.0;
+    for (i, r) in gear::ALL_RARITIES.iter().take(6).enumerate() {
+        let y = oy + 60.0 + i as f32 * 30.0;
         kit::text(r.name(), ox + 20.0, y, 17.0, rarity_color(*r));
-        let p = if *r == Rarity::Exotic { format!("{}%", gear::DRAW_EXOTIC) } else { format!("{}%", gear::DRAW_ODDS[i]) };
+        let p = format!("{}%", gear::DRAW_ODDS[i]);
         let d = kit::measure(&p, 17);
         kit::text(&p, ox + ow - 20.0 - d.width, y, 17.0, INK);
     }
@@ -503,11 +502,8 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
         }
     }
 
-    // Exotic Forge.
-    let shards = format!("Exotic Shards: {} / {}", profile.shards, gear::FORGE_COST);
-    kit::text(&shards, ox, oy + oh + 148.0, 15.0, rarity_color(Rarity::Exotic));
-    if kit::button(Rect::new(ox + ow - 110.0, oy + oh + 132.0, 110.0, 26.0), if st.forge { "Close forge" } else { "Forge" }, true, Style::Secondary) {
-        st.forge = !st.forge;
+    for (k, l) in kit::wrap("Exotics can't be drawn: only a world's own bosses drop them, rarely.", ow, 13).iter().enumerate() {
+        kit::text(l, ox, oy + oh + 148.0 + k as f32 * 16.0, 13.0, rarity_color(Rarity::Exotic));
     }
 
     // Results with a staggered reveal.
@@ -517,32 +513,8 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
     if st.results.is_empty() {
         kit::text("Offer Sen to the shrine and draw a fortune.", rx + 20.0, ry + 40.0, 16.0, DIM);
     }
-    if st.forge {
-        crate::kit::panel(rx, ry, rw, 520.0);
-        kit::text("EXOTIC FORGE", rx + 20.0, ry + 30.0, 18.0, rarity_color(Rarity::Exotic));
-        kit::text("Nightmare final bosses give Shards. Forge an Exotic from a world cleared on Nightmare.", rx + 20.0, ry + 50.0, 12.0, DIM);
-        for (k, e) in gear::ALL_EXOTICS.iter().enumerate() {
-            let (col, row) = (k % 2, k / 2);
-            let x = rx + 20.0 + col as f32 * 220.0;
-            let y = ry + 66.0 + row as f32 * 63.0;
-            let ok = profile.can_forge(*e);
-            draw_texture_ex(assets.gear_icon_named(e.key()), x, y + 4.0, if profile.cleared[e.home().index()][2] { WHITE } else { Color::new(0.2, 0.2, 0.25, 1.0) }, DrawTextureParams { dest_size: Some(vec2(36.0, 36.0)), ..Default::default() });
-            kit::text_fit(e.name(), x + 42.0, y + 16.0, 166.0, 13.0, INK);
-            kit::text_fit(e.home().def().name, x + 42.0, y + 31.0, 100.0, 11.0, FAINT);
-            if kit::button(Rect::new(x + 146.0, y + 22.0, 62.0, 24.0), "Forge", ok, Style::Primary) {
-                let id = profile.forge(*e, (get_time() * 1e6) as u64);
-                if id != 0 {
-                    st.results = vec![id];
-                    st.at = time;
-                    st.selected = Some(id);
-                    st.forge = false;
-                    action = Some(DrawAction::Drew(Rarity::Exotic));
-                }
-            }
-        }
-    }
     let cs = 80.0;
-    for (k, id) in st.results.iter().enumerate().filter(|_| !st.forge) {
+    for (k, id) in st.results.iter().enumerate() {
         let x = rx + 20.0 + (k % 5) as f32 * (cs + 10.0);
         let y = ry + 30.0 + (k / 5) as f32 * (cs + 60.0);
         let shown = time - st.at > k as f64 * 0.12;

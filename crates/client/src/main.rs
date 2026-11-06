@@ -147,7 +147,7 @@ async fn main() {
             save::store(&profile);
             audio.play(synth::Sfx::Buy);
         }
-        // Dev (remove before release): F9 in the Armory adds every Exotic and Arsenal art, Dust and Shards.
+        // Dev (remove before release): F9 in the Armory adds every Exotic and Arsenal art, and Dust.
         if screen == Screen::Armory && is_key_pressed(KeyCode::F9) {
             let mut rng = sim::rng::Rng::new((get_time() * 1000.0) as u64);
             for e in sim::gear::ALL_EXOTICS {
@@ -159,7 +159,6 @@ async fn main() {
                 profile.add_item(it);
             }
             profile.dust += 5000;
-            profile.shards += 100;
             save::store(&profile);
             audio.play(synth::Sfx::Buy);
         }

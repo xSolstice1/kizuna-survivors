@@ -575,10 +575,6 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
             centered(&format!("RELIC EARNED: {} ({})", rel.name(), rel.describe()), y, 18.0, Color::new(0.75, 0.9, 1.0, 1.0));
             y += 26.0;
         }
-        if r.shards > 0 {
-            centered(&format!("+{} Exotic Shards", r.shards), y, 17.0, crate::armory::rarity_color(sim::gear::Rarity::Exotic));
-            y += 24.0;
-        }
         if let Some(n) = r.ascension_opened {
             centered(&format!("NIGHTMARE+{n} OPEN"), y, 18.0, Color::new(1.0, 0.5, 0.6, 1.0));
             y += 26.0;

@@ -465,8 +465,14 @@ pub const ALL_EXOTICS: [Exotic; 14] = [
 
 /// Fingers count from the whole bag, up to this many.
 pub const MAX_FINGERS: u32 = 10;
-/// Exotic Shards needed to forge an Exotic.
-pub const FORGE_COST: u32 = 100;
+/// Chance a world's boss drops one of that world's Exotics, by boss rank
+/// (mini-boss, boss, final boss), before the difficulty multiplier.
+pub const EXOTIC_CHANCE: [f32; 3] = [0.0005, 0.001, 0.0025];
+
+/// Exotic drop multiplier by difficulty (Normal, Hard, Nightmare); Ascension adds 10% per tier.
+pub fn exotic_mult(difficulty: usize, ascension: u32) -> f32 {
+    [1.0, 2.0, 4.0][difficulty.min(2)] * (1.0 + 0.1 * ascension as f32)
+}
 
 impl Exotic {
     pub fn index(self) -> usize {
@@ -525,7 +531,7 @@ impl Exotic {
             Exotic::Yasakani => Slot::Charm,
         }
     }
-    /// The world that drops it (and must be cleared on Nightmare to forge it).
+    /// The world whose bosses drop it (the only way to get it).
     pub fn home(self) -> StageId {
         match self {
             Exotic::LanternHeart => StageId::Shotengai,
@@ -868,13 +874,7 @@ pub const DRAW_PITY: u32 = 50;
 /// Shrine Draw odds (percent), in rarity order.
 pub const DRAW_ODDS: [f32; 6] = [40.0, 30.0, 18.0, 9.0, 2.7, 0.3];
 
-/// Shrine Draw chance of an Exotic (percent).
-pub const DRAW_EXOTIC: f32 = 0.02;
-
 pub fn draw_rarity(rng: &mut Rng, pity: u32) -> Rarity {
-    if rng.f32() * 100.0 < DRAW_EXOTIC {
-        return Rarity::Exotic;
-    }
     if pity + 1 >= DRAW_PITY {
         return if rng.f32() < 0.1 { Rarity::Mythic } else { Rarity::Legendary };
     }
