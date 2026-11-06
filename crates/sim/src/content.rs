@@ -177,6 +177,26 @@ pub const HANNYA_FINALE_DAMAGE: f32 = 220.0;
 pub const HANNYA_DAMAGE_TAKEN: f32 = 0.7;
 pub const HANNYA_MOVE_SPEED: f32 = 1.15;
 
+// ───────────────────────── Toya's special: Hundred-Leg Rampage ─────────────────────────
+
+pub const MUKADE_DURATION: f32 = 8.0;
+/// Thousand-Leg Burst: the opening radial spike explosion.
+pub const MUKADE_BURST_RADIUS: f32 = 220.0;
+pub const MUKADE_BURST_DAMAGE: f32 = 110.0;
+/// Tendril barrage: lashes this often, at this many enemies.
+pub const MUKADE_LASH_EVERY: f32 = 0.18;
+pub const MUKADE_LASHES: u32 = 3;
+pub const MUKADE_LASH_REACH: f32 = 170.0;
+pub const MUKADE_LASH_DAMAGE: f32 = 22.0;
+/// Centipede eruptions: a ring of spines bursting from the ground.
+pub const MUKADE_ERUPT_EVERY: f32 = 1.0;
+pub const MUKADE_ERUPT_DAMAGE: f32 = 50.0;
+pub const MUKADE_REGEN: f32 = 4.0;
+pub const MUKADE_MOVE_SPEED: f32 = 1.3;
+/// Weapon cooldowns are multiplied by this while the form lasts.
+pub const MUKADE_HASTE: f32 = 0.7;
+pub const MUKADE_DAMAGE_TAKEN: f32 = 0.75;
+
 /// Enemies within this distance of a Fox Mirage clone chase it instead of the player.
 pub const DECOY_RADIUS: f32 = 110.0;
 /// Earliest time a chest may Awaken a weapon.
@@ -218,9 +238,17 @@ pub enum WeaponKind {
     LanternVigil,
     /// A lightning quick-draw that cuts a long straight line.
     IaiFlash,
+    /// Crimson tendrils lash through the nearest enemies (Toya's signature).
+    CrimsonTendrils,
+    /// Segmented spines erupt from the ground under enemies.
+    MukadeSpines,
+    /// A hungry pulse that drains enemies around you and heals you.
+    Devour,
+    /// Venomous fangs that home in and burst.
+    VenomFang,
 }
 
-pub const ALL_WEAPONS: [WeaponKind; 16] = [
+pub const ALL_WEAPONS: [WeaponKind; 20] = [
     WeaponKind::Ofuda,
     WeaponKind::MoonOrbs,
     WeaponKind::SakuraField,
@@ -237,6 +265,10 @@ pub const ALL_WEAPONS: [WeaponKind; 16] = [
     WeaponKind::SoulTether,
     WeaponKind::LanternVigil,
     WeaponKind::IaiFlash,
+    WeaponKind::CrimsonTendrils,
+    WeaponKind::MukadeSpines,
+    WeaponKind::Devour,
+    WeaponKind::VenomFang,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -376,6 +408,35 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             duration: 4.0 + 0.3 * k,
             ..base
         },
+        WeaponKind::CrimsonTendrils => WeaponStats {
+            damage: 13.0 + 3.5 * k,
+            cooldown: 0.9 - 0.03 * k,
+            amount: 4 + at(l, 4) + at(l, 7), // tendrils (targets)
+            area: 1.0 + 0.07 * k, // reach
+            ..base
+        },
+        WeaponKind::MukadeSpines => WeaponStats {
+            damage: 18.0 + 5.0 * k,
+            cooldown: 1.7 - 0.06 * k,
+            amount: 3 + at(l, 3) + at(l, 5) + at(l, 7),
+            area: 1.0 + 0.08 * k,
+            ..base
+        },
+        WeaponKind::Devour => WeaponStats {
+            damage: 8.0 + 2.5 * k,
+            cooldown: 1.5 - 0.05 * k,
+            amount: 1,
+            area: 1.0 + 0.10 * k,
+            ..base
+        },
+        WeaponKind::VenomFang => WeaponStats {
+            damage: 10.0 + 3.0 * k,
+            cooldown: 1.2 - 0.04 * k,
+            amount: 2 + at(l, 3) + at(l, 6) + at(l, 8),
+            area: 1.0 + 0.06 * k,
+            speed: 260.0,
+            ..base
+        },
         WeaponKind::IaiFlash => WeaponStats {
             damage: 30.0 + 8.0 * k,
             cooldown: 2.2 - 0.08 * k,
@@ -402,6 +463,8 @@ pub enum Tag {
     Fox,
     /// Shun's grave-spirit arts.
     Spirit,
+    /// Toya's Omukade curse.
+    Curse,
     Shared,
 }
 
@@ -434,6 +497,10 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
         WeaponKind::SoulTether => (&[Spirit], (P::Vitality, 1)),
         WeaponKind::LanternVigil => (&[Spirit], (P::Expanse, 1)),
         WeaponKind::IaiFlash => (&[Spirit], (P::Swiftness, 1)),
+        WeaponKind::CrimsonTendrils => (&[Curse], (P::Might, 1)),
+        WeaponKind::MukadeSpines => (&[Curse], (P::Expanse, 1)),
+        WeaponKind::Devour => (&[Curse], (P::Vitality, 1)),
+        WeaponKind::VenomFang => (&[Curse], (P::Haste, 1)),
     };
     WeaponDef { tags, complement }
 }
@@ -455,9 +522,10 @@ pub enum HeroId {
     Yuzu,
     Riku,
     Shun,
+    Toya,
 }
 
-pub const ALL_HEROES: [HeroId; 8] = [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
+pub const ALL_HEROES: [HeroId; 9] = [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Toya, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
 
 /// What Space does when the meter is full.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -468,6 +536,8 @@ pub enum SpecialKind {
     NineTails,
     /// Hannya Unbound: a timed berserk form (beams, crescent waves, shadow steps, finale blast).
     Hannya,
+    /// Hundred-Leg Rampage: a timed predator form (tendril barrage, eruptions, regeneration).
+    Mukade,
 }
 
 impl SpecialKind {
@@ -477,6 +547,7 @@ impl SpecialKind {
             SpecialKind::Barrier => 0.0,
             SpecialKind::NineTails => FOX_DURATION,
             SpecialKind::Hannya => HANNYA_DURATION,
+            SpecialKind::Mukade => MUKADE_DURATION,
         }
     }
 }
@@ -493,6 +564,7 @@ impl HeroId {
             HeroId::Yuzu => "yuzu",
             HeroId::Riku => "riku",
             HeroId::Shun => "shun",
+            HeroId::Toya => "toya",
         }
     }
     pub fn index(self) -> usize {
@@ -534,12 +606,14 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Nanami => ("Nanami Kiri", "Alchemist", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::FlamePool, &[Fire, Festival, Nature, Celestial], false),
         HeroId::Yuzu => ("Yuzu Momose", "Idol", "+10% experience", Bonus { growth: 0.10, ..b }, WeaponKind::Taiko, &[Festival, Celestial, Nature, Talisman], false),
         HeroId::Riku => ("Riku Kazamine", "Fox-spirit shinobi", "+5% move speed, +5% damage", Bonus { move_speed: 0.05, might: 0.05, ..b }, WeaponKind::FoxfireOrb, &[Fox, Thunder, Blade, Fire], true),
+        HeroId::Toya => ("Toya Hyakuashi", "Cursed youth", "Regenerate 0.3 HP/s, +5% move speed", Bonus { recovery: 0.3, move_speed: 0.05, ..b }, WeaponKind::CrimsonTendrils, &[Curse, Blade, Fire, Thunder], true),
         HeroId::Shun => ("Shun Yamikiri", "Spirit ferryman", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::GraveCleaver, &[Spirit, Blade, Thunder, Fire], true),
     };
     let (special, special_name) = match id {
         HeroId::Ren => (SpecialKind::Barrier, "Purify"),
         HeroId::Riku => (SpecialKind::NineTails, "Ninefold Foxfire"),
         HeroId::Shun => (SpecialKind::Hannya, "Hannya Unbound"),
+        HeroId::Toya => (SpecialKind::Mukade, "Hundred-Leg Rampage"),
         _ => (SpecialKind::Barrier, "Barrier"),
     };
     HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
@@ -574,6 +648,10 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::SoulTether => "River of Souls",
         WeaponKind::LanternVigil => "Thousand Lantern Vigil",
         WeaponKind::IaiFlash => "Moonsever",
+        WeaponKind::CrimsonTendrils => "Hundred Tendrils",
+        WeaponKind::MukadeSpines => "Centipede Spine",
+        WeaponKind::Devour => "Gluttony",
+        WeaponKind::VenomFang => "Venom Rain",
     }
 }
 
@@ -596,6 +674,10 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::SoulTether => "Endless River: twice the chains; when a chained enemy dies the chain leaps to the next and heals you.",
         WeaponKind::LanternVigil => "Lantern Volley: more, wider lanterns that slow enemies and fire spirit bolts at them.",
         WeaponKind::IaiFlash => "Thousand Cuts: longer cuts that leave scars, and a radial storm of twelve cuts every few seconds.",
+        WeaponKind::CrimsonTendrils => "Hundred Tendrils: more tendrils, and a storm of twelve lashes tears through everything around you.",
+        WeaponKind::MukadeSpines => "Centipede Spine: a marching line of spines crawls out across the ground every few seconds.",
+        WeaponKind::Devour => "Gluttony: a wider pulse that heals twice as much, and a great feeding wave every few seconds.",
+        WeaponKind::VenomFang => "Venom Rain: more fangs, and a ring of venom fangs bursts out every few seconds.",
     }
 }
 
@@ -667,6 +749,10 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
             s.area *= 1.5;
             s.damage *= 1.4;
         }
+        WeaponKind::CrimsonTendrils => s.amount += 2,
+        WeaponKind::MukadeSpines => s.amount += 2,
+        WeaponKind::Devour => s.area *= 1.3,
+        WeaponKind::VenomFang => s.amount += 2,
     }
     // Every Awakening is a real power spike on top of its own changes (and its signature).
     s.damage *= AWAKEN_DAMAGE;
@@ -695,6 +781,10 @@ pub fn signature_every(kind: WeaponKind) -> f32 {
         WeaponKind::SoulTether => 0.0, // chains jump on kills
         WeaponKind::LanternVigil => 0.5,
         WeaponKind::IaiFlash => 4.0,
+        WeaponKind::CrimsonTendrils => 0.8,
+        WeaponKind::MukadeSpines => 2.0,
+        WeaponKind::Devour => 2.5,
+        WeaponKind::VenomFang => 2.2,
     }
 }
 
@@ -717,6 +807,10 @@ pub fn signature_name(kind: WeaponKind) -> &'static str {
         WeaponKind::SoulTether => "Endless River",
         WeaponKind::LanternVigil => "Lantern Volley",
         WeaponKind::IaiFlash => "Thousand Cuts",
+        WeaponKind::CrimsonTendrils => "Hundred Lashes",
+        WeaponKind::MukadeSpines => "Marching Spine",
+        WeaponKind::Devour => "Feeding Wave",
+        WeaponKind::VenomFang => "Fang Ring",
     }
 }
 
@@ -787,6 +881,10 @@ impl Upgrade {
             Upgrade::Weapon(WeaponKind::SoulTether) => "Soul Tether",
             Upgrade::Weapon(WeaponKind::LanternVigil) => "Lantern Vigil",
             Upgrade::Weapon(WeaponKind::IaiFlash) => "Iai Flash",
+            Upgrade::Weapon(WeaponKind::CrimsonTendrils) => "Crimson Tendrils",
+            Upgrade::Weapon(WeaponKind::MukadeSpines) => "Mukade Spines",
+            Upgrade::Weapon(WeaponKind::Devour) => "Devour",
+            Upgrade::Weapon(WeaponKind::VenomFang) => "Venom Fang",
             Upgrade::Passive(PassiveKind::Might) => "Might",
             Upgrade::Passive(PassiveKind::Haste) => "Haste",
             Upgrade::Passive(PassiveKind::Expanse) => "Expanse",
@@ -828,6 +926,10 @@ impl Upgrade {
                 WeaponKind::SoulTether => "Spectral chains latch onto nearby enemies, draining them and dragging them closer.",
                 WeaponKind::LanternVigil => "Sets soul-lanterns on the ground that pulse spirit fire at anything nearby.",
                 WeaponKind::IaiFlash => "A lightning quick-draw that cuts a long straight line through the horde.",
+                WeaponKind::CrimsonTendrils => "Crimson tendrils lash out and pierce straight through the nearest enemies.",
+                WeaponKind::MukadeSpines => "Segmented spines erupt from the ground beneath nearby enemies.",
+                WeaponKind::Devour => "A hungry pulse drains everything around you and heals you for each enemy caught.",
+                WeaponKind::VenomFang => "Venomous fangs home in on enemies and burst on impact.",
             }
             .into(),
             Upgrade::Weapon(k) => {
@@ -851,6 +953,10 @@ impl Upgrade {
                         WeaponKind::SoulTether => "chain",
                         WeaponKind::LanternVigil => "lantern",
                         WeaponKind::IaiFlash => "cut",
+                        WeaponKind::CrimsonTendrils => "tendril",
+                        WeaponKind::MukadeSpines => "spine",
+                        WeaponKind::Devour => "",
+                        WeaponKind::VenomFang => "fang",
                         WeaponKind::SakuraField => "",
                     };
                     parts.push(format!("+{} {unit}", b.amount - a.amount));

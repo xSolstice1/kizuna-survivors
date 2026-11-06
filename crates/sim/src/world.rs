@@ -118,6 +118,12 @@ pub enum Event {
     FinaleBlast { pos: Vec2, radius: f32 },
     /// An Iai Flash cut along a line.
     Iai { from: Vec2, to: Vec2 },
+    /// A crimson tendril lashed from `from` to `to`.
+    Lash { from: Vec2, to: Vec2 },
+    /// Devour's draining pulse.
+    Devour { pos: Vec2, radius: f32 },
+    /// Hundred-Leg Rampage began (with the Thousand-Leg Burst).
+    MukadeAwakened { pos: Vec2 },
     /// A soul-lantern pulsed.
     LanternPulse { pos: Vec2, radius: f32 },
 }
@@ -300,6 +306,8 @@ pub enum ProjKind {
     Petal,
     /// Lantern Volley spirit bolt.
     SpiritBolt,
+    /// Venom Fang: homes in and bursts.
+    Fang,
 }
 
 /// Burst / blast looks (shared by the sim events and the renderer).
@@ -311,6 +319,10 @@ pub mod style {
     pub const SKYBOLT: u8 = 9;
     pub const COMET: u8 = 10;
     pub const QUAKE: u8 = 11;
+    pub const SPINE: u8 = 12;
+    pub const VENOM: u8 = 13;
+    /// Thousand-Leg Burst.
+    pub const FRENZY: u8 = 14;
     /// Beam styles.
     pub const CRIMSON: u8 = 0;
     pub const MOON: u8 = 1;
@@ -635,6 +647,7 @@ impl World {
         self.update_signatures();
         self.update_fox();
         self.update_hannya();
+        self.update_mukade();
         self.update_clones();
         self.update_spirit_arts();
         self.update_effects();
@@ -671,7 +684,8 @@ impl World {
         (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage
     }
     fn haste(&self) -> f32 {
-        1.0 - 0.08 * self.passive_level(PassiveKind::Haste) as f32 - self.bonus.cooldown
+        let frenzy = if self.form_kind() == Some(SpecialKind::Mukade) { MUKADE_HASTE } else { 1.0 };
+        (1.0 - 0.08 * self.passive_level(PassiveKind::Haste) as f32 - self.bonus.cooldown) * frenzy
     }
     pub fn area_mult(&self) -> f32 {
         1.0 + 0.10 * self.passive_level(PassiveKind::Expanse) as f32 + self.bonus.area
@@ -680,6 +694,7 @@ impl World {
         let fox = match self.form_kind() {
             Some(SpecialKind::NineTails) => FOX_MOVE_SPEED,
             Some(SpecialKind::Hannya) => HANNYA_MOVE_SPEED,
+            Some(SpecialKind::Mukade) => MUKADE_MOVE_SPEED,
             _ => 1.0,
         };
         110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32 + self.bonus.move_speed) * self.mods.move_speed * fox
@@ -755,6 +770,7 @@ impl World {
         let raw = match self.form_kind() {
             Some(SpecialKind::NineTails) => raw * FOX_DAMAGE_TAKEN,
             Some(SpecialKind::Hannya) => raw * HANNYA_DAMAGE_TAKEN,
+            Some(SpecialKind::Mukade) => raw * MUKADE_DAMAGE_TAKEN,
             _ => raw,
         };
         let dmg = (raw - self.armor()).max(1.0);
@@ -1137,6 +1153,7 @@ impl World {
         let st = match kind {
             ProjKind::Seal => style::SEAL,
             ProjKind::Familiar => style::FOX,
+            ProjKind::Fang => style::VENOM,
             _ => style::FOXFIRE,
         };
         self.events.push(Event::Burst { pos: c, radius: r, style: st });
@@ -1259,6 +1276,40 @@ impl World {
                         }
                     }
                 }
+                WeaponKind::CrimsonTendrils => {
+                    // Hundred Lashes: twelve tendrils tear through everything around.
+                    self.lash_targets(p, 160.0 * area, 12, dmg * 1.2);
+                }
+                WeaponKind::MukadeSpines => {
+                    // Marching Spine: a line of spines crawls out along the aim.
+                    let d = self.aim_dir();
+                    for k in 0..9 {
+                        let pos = p + d * (40.0 + 34.0 * k as f32);
+                        let delay = 0.12 + 0.07 * k as f32;
+                        self.blasts.push(Blast { pos, delay, max_delay: delay, radius: 34.0 * area, damage: dmg * 1.5, style: style::SPINE, burns: false });
+                    }
+                }
+                WeaponKind::Devour => {
+                    // Feeding Wave: a great draining shockwave that heals.
+                    self.query_circle(p, 200.0 * area);
+                    let n = self.scratch.len();
+                    for idx in 0..n {
+                        let j = self.scratch[idx] as usize;
+                        let dir = p - self.enemies.pos[j];
+                        self.hurt_enemy(j, dmg * 2.0, dir * 0.5);
+                    }
+                    self.heal((n as f32 * 0.5).min(15.0));
+                    self.events.push(Event::Devour { pos: p, radius: 200.0 * area });
+                }
+                WeaponKind::VenomFang => {
+                    // Fang Ring: a ring of homing fangs.
+                    for k in 0..12 {
+                        let a = k as f32 / 12.0 * std::f32::consts::TAU;
+                        self.projectiles.push_kind(ProjKind::Fang, 6.0, p, Vec2::from_angle(a) * 280.0, 1.6, dmg, 1, 7.0);
+                        let last = self.projectiles.len() - 1;
+                        self.projectiles.burst[last] = 26.0 * area;
+                    }
+                }
                 WeaponKind::IaiFlash => {
                     // Thousand Cuts: a radial storm of twelve cuts.
                     for k in 0..12 {
@@ -1293,6 +1344,78 @@ impl World {
                 self.pools.push(Pool { pos: b.pos, radius: b.radius * 0.6, life: 3.0, max_life: 3.0, tick: 0.0, damage: b.damage * 0.08 });
             }
             self.events.push(Event::Burst { pos: b.pos, radius: b.radius, style: b.style });
+        }
+    }
+
+    /// Lashes up to `n` distinct nearby enemies with tendrils that pierce along the line.
+    fn lash_targets(&mut self, from: Vec2, reach: f32, n: u32, dmg: f32) {
+        let mut taken: Vec<u32> = Vec::new();
+        for _ in 0..n {
+            let Some(j) = self.nearest_index(from, reach, &taken) else { break };
+            taken.push(self.enemies.id[j]);
+            let to = self.enemies.pos[j];
+            // Reach a little past the target so the lash pierces whatever is behind it.
+            let tip = from + (to - from).normalize_or_zero() * ((to - from).length() + 20.0);
+            self.hurt_along(from, tip, 8.0, dmg);
+            self.events.push(Event::Lash { from, to: tip });
+        }
+    }
+
+    fn start_mukade(&mut self) {
+        let p = self.player.pos;
+        self.player.form = MUKADE_DURATION;
+        self.player.iframes = BARRIER_IFRAMES;
+        self.fox_tick = 0.0;
+        self.hannya_beam = 0.4; // eruption timer
+        let dmg = MUKADE_BURST_DAMAGE * self.fox_power();
+        self.query_circle(p, MUKADE_BURST_RADIUS);
+        for idx in 0..self.scratch.len() {
+            let j = self.scratch[idx] as usize;
+            let dir = self.enemies.pos[j] - p;
+            self.hurt_enemy(j, dmg, dir);
+            self.enemies.push[j] += dir.normalize_or_zero() * (400.0 * self.enemies.knock[j]);
+        }
+        let r2 = MUKADE_BURST_RADIUS * MUKADE_BURST_RADIUS;
+        self.shots.retain(|s| (s.pos - p).length_sq() > r2);
+        self.events.push(Event::MukadeAwakened { pos: p });
+        self.events.push(Event::Burst { pos: p, radius: MUKADE_BURST_RADIUS, style: style::FRENZY });
+    }
+
+    fn update_mukade(&mut self) {
+        if self.form_kind() != Some(SpecialKind::Mukade) {
+            return;
+        }
+        self.player.form -= DT;
+        let power = self.fox_power();
+        let p = self.player.pos;
+        self.heal(MUKADE_REGEN * DT);
+        // Tendril barrage.
+        self.fox_tick -= DT;
+        if self.fox_tick <= 0.0 {
+            self.fox_tick = MUKADE_LASH_EVERY;
+            let picks = self.random_targets(MUKADE_LASH_REACH, MUKADE_LASHES);
+            for t in picks {
+                let tip = p + (t - p).normalize_or_zero() * ((t - p).length() + 20.0);
+                self.hurt_along(p, tip, 9.0, MUKADE_LASH_DAMAGE * power);
+                self.events.push(Event::Lash { from: p, to: tip });
+            }
+        }
+        // Centipede eruptions: a ring of segmented spines bursting from the ground.
+        self.hannya_beam -= DT;
+        if self.hannya_beam <= 0.0 {
+            self.hannya_beam = MUKADE_ERUPT_EVERY;
+            let rot = self.rng.range(0.0, std::f32::consts::TAU);
+            for k in 0..8 {
+                let a = rot + k as f32 / 8.0 * std::f32::consts::TAU;
+                let r = 90.0 + 70.0 * (k % 2) as f32;
+                let pos = p + Vec2::from_angle(a) * r;
+                let d = 0.15 + 0.04 * k as f32;
+                self.blasts.push(Blast { pos, delay: d, max_delay: d, radius: 48.0, damage: MUKADE_ERUPT_DAMAGE * power, style: style::SPINE, burns: false });
+            }
+        }
+        if self.player.form <= 0.0 {
+            self.player.form = 0.0;
+            self.events.push(Event::FoxFaded);
         }
     }
 
@@ -1820,7 +1943,11 @@ impl World {
                 | WeaponKind::GraveCleaver
                 | WeaponKind::SoulTether
                 | WeaponKind::LanternVigil
-                | WeaponKind::IaiFlash => {
+                | WeaponKind::IaiFlash
+                | WeaponKind::CrimsonTendrils
+                | WeaponKind::MukadeSpines
+                | WeaponKind::Devour
+                | WeaponKind::VenomFang => {
                     let timer = w.timer - DT;
                     if timer <= 0.0 {
                         self.weapons[wi].timer = s.cooldown * haste;
@@ -2045,6 +2172,42 @@ impl World {
                     if w.awakened {
                         self.scars.push(Scar { from: p, to, life: 1.5, tick: 0.3, damage: dmg * 0.25 });
                     }
+                }
+            }
+            WeaponKind::CrimsonTendrils => {
+                self.events.push(Event::Fired(WeaponKind::CrimsonTendrils));
+                let reach = 120.0 * area;
+                self.lash_targets(p, reach, s.amount, dmg);
+            }
+            WeaponKind::MukadeSpines => {
+                self.events.push(Event::Fired(WeaponKind::MukadeSpines));
+                for (k, t) in self.random_targets(240.0, s.amount).into_iter().enumerate() {
+                    let d = 0.3 + 0.06 * k as f32;
+                    self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 30.0 * area, damage: dmg, style: style::SPINE, burns: false });
+                }
+            }
+            WeaponKind::Devour => {
+                let r = 70.0 * area;
+                self.query_circle(p, r);
+                let n = self.scratch.len();
+                for idx in 0..n {
+                    let j = self.scratch[idx] as usize;
+                    let dir = p - self.enemies.pos[j];
+                    self.hurt_enemy(j, dmg, dir * 0.3);
+                }
+                let per = if w.awakened { 1.0 } else { 0.5 };
+                self.heal((n as f32 * per).min(8.0));
+                self.events.push(Event::Devour { pos: p, radius: r });
+            }
+            WeaponKind::VenomFang => {
+                self.events.push(Event::Fired(WeaponKind::VenomFang));
+                let d = self.aim_dir();
+                let n = s.amount as f32;
+                for k in 0..s.amount {
+                    let a = d.y.atan2(d.x) + (k as f32 - (n - 1.0) / 2.0) * 0.35;
+                    self.projectiles.push_kind(ProjKind::Fang, 6.0, p, Vec2::from_angle(a) * s.speed, 1.6, dmg, 1, 7.0);
+                    let last = self.projectiles.len() - 1;
+                    self.projectiles.burst[last] = 26.0 * area;
                 }
             }
             WeaponKind::FoxMirage => {
@@ -2419,6 +2582,7 @@ impl World {
         match hero_def(self.cfg.hero).special {
             SpecialKind::NineTails => return self.start_fox(),
             SpecialKind::Hannya => return self.start_hannya(),
+            SpecialKind::Mukade => return self.start_mukade(),
             SpecialKind::Barrier => {}
         }
         self.player.iframes = BARRIER_IFRAMES;
@@ -3166,6 +3330,39 @@ mod tests {
         assert!(w.player.pos.length() < 5.0, "the form must not teleport the player, ended at {:?}", w.player.pos);
         assert_eq!(w.form_kind(), None);
         assert!(w.kills >= 15, "should tear through the ring, killed {}", w.kills);
+    }
+
+    #[test]
+    fn hundred_leg_rampage_lashes_erupts_and_regenerates() {
+        let mut w = World::new(WorldConfig { hero: HeroId::Toya, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        assert_eq!(w.weapons[0].kind, WeaponKind::CrimsonTendrils);
+        w.weapons.clear();
+        for k in 0..36 {
+            let a = k as f32 / 36.0 * std::f32::consts::TAU;
+            w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * (70.0 + (k % 4) as f32 * 40.0));
+        }
+        w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        w.player.hp = 40.0;
+        w.player.special = 1.0;
+        let speed = w.move_speed();
+        w.step(Input { special: true, ..Default::default() });
+        assert!(w.events.iter().any(|e| matches!(e, Event::MukadeAwakened { .. })));
+        assert!(w.move_speed() > speed, "predator speed");
+        let (mut lashes, mut spines) = (0, 0);
+        for _ in 0..60 * 9 {
+            w.step(Input::default());
+            for e in &w.events {
+                match e {
+                    Event::Lash { .. } => lashes += 1,
+                    Event::Burst { style: s, .. } if *s == style::SPINE => spines += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(lashes >= 60 && spines >= 30, "lashes {lashes}, spines {spines}");
+        assert!(w.player.hp > 60.0, "should regenerate, hp {}", w.player.hp);
+        assert_eq!(w.form_kind(), None);
+        assert!(w.kills >= 15, "killed {}", w.kills);
     }
 
     fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {

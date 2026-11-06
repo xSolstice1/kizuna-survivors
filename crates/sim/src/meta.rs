@@ -169,6 +169,7 @@ pub fn unlock_text(h: HeroId) -> &'static str {
         HeroId::Yuzu => "Defeat the Night Lord.",
         HeroId::Riku => "Defeat 2,000 Otherworlders in a single night.",
         HeroId::Shun => "Defeat the Great Oni twice (across any nights).",
+        HeroId::Toya => "Survive 12:00 in a single night.",
     }
 }
 
@@ -365,6 +366,7 @@ impl Profile {
                 HeroId::Yuzu => night_lord,
                 HeroId::Riku => w.kills >= 2_000,
                 HeroId::Shun => self.great_onis >= 2,
+                HeroId::Toya => w.time >= 720.0,
             };
             if earned && !self.is_unlocked(h) {
                 self.unlocked.push(h);
