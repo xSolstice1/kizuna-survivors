@@ -177,6 +177,97 @@ pub const HANNYA_FINALE_DAMAGE: f32 = 220.0;
 pub const HANNYA_DAMAGE_TAKEN: f32 = 0.7;
 pub const HANNYA_MOVE_SPEED: f32 = 1.15;
 
+// ───────────────────────── Floor pickups ─────────────────────────
+
+/// Rare pickups that appear on the ground (and from Oni elites).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickupKind {
+    /// Heals 35% of max HP.
+    Feast,
+    /// +40% move speed for a while.
+    SwiftGeta,
+    /// +50% damage for a while.
+    OniSake,
+    /// Pulls every gem on the map to the player.
+    ShrineBell,
+    /// Freezes non-boss enemies.
+    Hourglass,
+    /// Wipes every non-boss enemy on screen.
+    ExorcismSeal,
+    /// A purse of Sen.
+    SenPurse,
+}
+
+pub const ALL_PICKUPS: [PickupKind; 7] = [
+    PickupKind::Feast,
+    PickupKind::SwiftGeta,
+    PickupKind::OniSake,
+    PickupKind::ShrineBell,
+    PickupKind::Hourglass,
+    PickupKind::ExorcismSeal,
+    PickupKind::SenPurse,
+];
+
+impl PickupKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            PickupKind::Feast => "Onigiri Feast",
+            PickupKind::SwiftGeta => "Swift Geta",
+            PickupKind::OniSake => "Oni Sake",
+            PickupKind::ShrineBell => "Shrine Bell",
+            PickupKind::Hourglass => "Frozen Hourglass",
+            PickupKind::ExorcismSeal => "Exorcism Seal",
+            PickupKind::SenPurse => "Sen Purse",
+        }
+    }
+    pub fn describe(self) -> &'static str {
+        match self {
+            PickupKind::Feast => "Heal 35% HP",
+            PickupKind::SwiftGeta => "+40% speed for 12s",
+            PickupKind::OniSake => "+50% damage for 12s",
+            PickupKind::ShrineBell => "Every gem flies to you",
+            PickupKind::Hourglass => "Enemies frozen for 5s",
+            PickupKind::ExorcismSeal => "Banishes every enemy on screen",
+            PickupKind::SenPurse => "+40 Sen",
+        }
+    }
+    /// Spawn weight.
+    fn weight(self) -> f32 {
+        match self {
+            PickupKind::Feast => 25.0,
+            PickupKind::SwiftGeta | PickupKind::OniSake | PickupKind::ShrineBell => 15.0,
+            PickupKind::SenPurse => 12.0,
+            PickupKind::Hourglass => 10.0,
+            PickupKind::ExorcismSeal => 8.0,
+        }
+    }
+    /// Weighted pick from a uniform roll in 0..1.
+    pub fn roll(r: f32) -> PickupKind {
+        let total: f32 = ALL_PICKUPS.iter().map(|p| p.weight()).sum();
+        let mut x = r * total;
+        for p in ALL_PICKUPS {
+            if x < p.weight() {
+                return p;
+            }
+            x -= p.weight();
+        }
+        PickupKind::Feast
+    }
+}
+
+pub const BUFF_SECONDS: f32 = 12.0;
+pub const FREEZE_SECONDS: f32 = 5.0;
+pub const VACUUM_SECONDS: f32 = 3.0;
+pub const SPEED_BUFF: f32 = 1.4;
+pub const DAMAGE_BUFF: f32 = 1.5;
+/// Seconds between ground pickups (random within the range); the first comes at 30s.
+pub const PICKUP_EVERY: (f32, f32) = (35.0, 55.0);
+pub const MAX_PICKUPS: usize = 4;
+/// Chance an Oni elite drops a pickup.
+pub const ONI_PICKUP_CHANCE: f32 = 0.25;
+/// Radius the Exorcism Seal clears (about a screen).
+pub const EXORCISM_RADIUS: f32 = 420.0;
+
 // ───────────────────────── Toya's special: Hundred-Leg Rampage ─────────────────────────
 
 pub const MUKADE_DURATION: f32 = 8.0;

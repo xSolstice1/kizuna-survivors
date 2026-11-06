@@ -124,6 +124,9 @@ pub enum Event {
     Devour { pos: Vec2, radius: f32 },
     /// Hundred-Leg Rampage began (with the Thousand-Leg Burst).
     MukadeAwakened { pos: Vec2 },
+    /// A floor pickup appeared / was taken.
+    PickupSpawned { pos: Vec2, kind: PickupKind },
+    PickupTaken { pos: Vec2, kind: PickupKind },
     /// A soul-lantern pulsed.
     LanternPulse { pos: Vec2, radius: f32 },
 }
@@ -508,6 +511,14 @@ pub struct World {
     pub coins: Vec<(Vec2, u32)>,
     pub clones: Vec<MirageClone>,
     pub tethers: Vec<Tether>,
+    /// Floor pickups waiting on the ground.
+    pub pickups: Vec<(Vec2, PickupKind)>,
+    next_pickup: f32,
+    /// Seconds left on pickup buffs.
+    pub speed_buff: f32,
+    pub damage_buff: f32,
+    pub freeze: f32,
+    pub vacuum: f32,
     pub blasts: Vec<Blast>,
     /// Per-weapon signature timers, indexed like `ALL_WEAPONS`.
     sig_timers: [f32; ALL_WEAPONS.len()],
@@ -598,6 +609,12 @@ impl World {
             coins: Vec::new(),
             clones: Vec::new(),
             tethers: Vec::new(),
+            pickups: Vec::new(),
+            next_pickup: 30.0,
+            speed_buff: 0.0,
+            damage_buff: 0.0,
+            freeze: 0.0,
+            vacuum: 0.0,
             blasts: Vec::new(),
             sig_timers: [0.0; ALL_WEAPONS.len()],
             lanterns: Vec::new(),
@@ -657,6 +674,7 @@ impl World {
         }
         self.contact_damage();
         self.update_shots();
+        self.update_pickups();
         // Everything that reads the grid must run before this: removal reorders
         // the enemy arrays and invalidates the grid's indices.
         self.remove_dead_enemies();
@@ -681,7 +699,8 @@ impl World {
         self.weapons.iter().find(|w| w.kind == kind).map_or(0, |w| w.level)
     }
     fn might(&self) -> f32 {
-        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage
+        let sake = if self.damage_buff > 0.0 { DAMAGE_BUFF } else { 1.0 };
+        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake
     }
     fn haste(&self) -> f32 {
         let frenzy = if self.form_kind() == Some(SpecialKind::Mukade) { MUKADE_HASTE } else { 1.0 };
@@ -696,7 +715,7 @@ impl World {
             Some(SpecialKind::Hannya) => HANNYA_MOVE_SPEED,
             Some(SpecialKind::Mukade) => MUKADE_MOVE_SPEED,
             _ => 1.0,
-        };
+        } * if self.speed_buff > 0.0 { SPEED_BUFF } else { 1.0 };
         110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32 + self.bonus.move_speed) * self.mods.move_speed * fox
     }
     pub fn magnet(&self) -> f32 {
@@ -815,12 +834,13 @@ impl World {
             return;
         }
         let p = self.player.pos;
+        let frozen = self.freeze > 0.0;
         let mut worst = 0.0f32;
         let enemies = &self.enemies;
         self.grid.for_each_near(p, PLAYER_RADIUS + MAX_ENEMY_RADIUS, |j| {
             let j = j as usize;
             let r = PLAYER_RADIUS + enemies.radius[j];
-            let faded = enemies.kind[j] == EnemyKind::Nopperabo && enemies.ai_state[j] != 0;
+            let faded = (enemies.kind[j] == EnemyKind::Nopperabo && enemies.ai_state[j] != 0) || (frozen && !enemies.kind[j].is_boss());
             if enemies.hp[j] > 0.0 && !faded && (enemies.pos[j] - p).length_sq() <= r * r {
                 worst = worst.max(enemies.damage[j]);
             }
@@ -951,8 +971,13 @@ impl World {
         // Fox Mirage decoys: nearby enemies chase a clone instead of the player.
         let decoys: Vec<Vec2> = self.clones.iter().map(|c| c.pos).collect();
         let e = &mut self.enemies;
+        let frozen = self.freeze > 0.0;
         // Pass 1: desired velocity = seek player + separation from grid neighbours.
         for i in 0..e.pos.len() {
+            if frozen && !e.kind[i].is_boss() {
+                e.vel[i] = Vec2::ZERO;
+                continue;
+            }
             let p = e.pos[i];
             let ri = e.radius[i];
             let mut speed = e.speed[i];
@@ -1419,6 +1444,55 @@ impl World {
         }
     }
 
+    /// Spawns floor pickups over time, ticks buffs, and applies a pickup when touched.
+    fn update_pickups(&mut self) {
+        for t in [&mut self.speed_buff, &mut self.damage_buff, &mut self.freeze, &mut self.vacuum] {
+            *t = (*t - DT).max(0.0);
+        }
+        if self.cfg.stress.is_some() {
+            return;
+        }
+        if self.time >= self.next_pickup {
+            self.next_pickup = self.time + self.rng.range(PICKUP_EVERY.0, PICKUP_EVERY.1);
+            if self.pickups.len() < MAX_PICKUPS {
+                let a = self.rng.range(0.0, std::f32::consts::TAU);
+                let d = self.rng.range(220.0, 380.0);
+                let pos = stage::resolve(self.player.pos + Vec2::from_angle(a) * d, 12.0);
+                let k = PickupKind::roll(self.rng.f32());
+                self.pickups.push((pos, k));
+                self.events.push(Event::PickupSpawned { pos, kind: k });
+            }
+        }
+        let p = self.player.pos;
+        let grab = PLAYER_RADIUS + 12.0;
+        let Some(i) = self.pickups.iter().position(|(c, _)| (*c - p).length_sq() < grab * grab) else { return };
+        let (pos, kind) = self.pickups.swap_remove(i);
+        match kind {
+            PickupKind::Feast => {
+                let amount = self.player.max_hp * 0.35;
+                self.player.hp = (self.player.hp + amount).min(self.player.max_hp);
+            }
+            PickupKind::SwiftGeta => self.speed_buff = BUFF_SECONDS,
+            PickupKind::OniSake => self.damage_buff = BUFF_SECONDS,
+            PickupKind::ShrineBell => self.vacuum = VACUUM_SECONDS,
+            PickupKind::Hourglass => self.freeze = FREEZE_SECONDS,
+            PickupKind::ExorcismSeal => {
+                self.query_circle(p, EXORCISM_RADIUS);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    if !self.enemies.kind[j].is_boss() {
+                        let dir = self.enemies.pos[j] - p;
+                        let hp = self.enemies.hp[j];
+                        self.hurt_enemy(j, hp + 1.0, dir);
+                    }
+                }
+                self.shots.clear();
+            }
+            PickupKind::SenPurse => self.gain_sen(40),
+        }
+        self.events.push(Event::PickupTaken { pos, kind });
+    }
+
     fn update_spirit_arts(&mut self) {
         let p = self.player.pos;
         // Soul Tether: drain and drag.
@@ -1853,6 +1927,11 @@ impl World {
                 if coin > 0 {
                     self.coins.push((pos, coin));
                 }
+            }
+            if kind == EnemyKind::Oni && self.cfg.stress.is_none() && self.rng.f32() < ONI_PICKUP_CHANCE && self.pickups.len() < MAX_PICKUPS {
+                let k = PickupKind::roll(self.rng.f32());
+                self.pickups.push((pos, k));
+                self.events.push(Event::PickupSpawned { pos, kind: k });
             }
             if kind == EnemyKind::GreatOni {
                 self.great_oni_defeated = true;
@@ -2463,7 +2542,9 @@ impl World {
                 self.gems.value.swap_remove(i);
                 continue;
             }
-            if d2 < magnet * magnet {
+            if self.vacuum > 0.0 {
+                self.gems.pos[i] += d.normalize_or_zero() * ((560.0 * DT).min(d2.sqrt()));
+            } else if d2 < magnet * magnet {
                 self.gems.pos[i] += d.normalize_or_zero() * (280.0 * DT);
             }
             i += 1;
@@ -3363,6 +3444,43 @@ mod tests {
         assert!(w.player.hp > 60.0, "should regenerate, hp {}", w.player.hp);
         assert_eq!(w.form_kind(), None);
         assert!(w.kills >= 15, "killed {}", w.kills);
+    }
+
+    #[test]
+    fn pickups_spawn_and_apply() {
+        let mut w = World::new(WorldConfig::default());
+        w.player.iframes = 1e9;
+        for _ in 0..60 * 31 {
+            w.step(Input::default());
+            if w.offer.is_some() {
+                w.choose(0);
+            }
+        }
+        assert!(!w.pickups.is_empty(), "a pickup should appear by 30s");
+        // Each kind does its thing.
+        for k in ALL_PICKUPS {
+            let mut w = World::new(WorldConfig::default());
+            w.player.hp = 20.0;
+            for n in 0..20 {
+                w.spawn_enemy(EnemyKind::Wisp, Vec2::from_angle(n as f32) * 150.0);
+            }
+            w.step(Input::default());
+            w.pickups.push((w.player.pos, k));
+            w.step(Input::default());
+            assert!(w.events.iter().any(|e| matches!(e, Event::PickupTaken { .. })), "{k:?} not taken");
+            match k {
+                PickupKind::Feast => assert!(w.player.hp > 50.0),
+                PickupKind::SwiftGeta => assert!(w.speed_buff > 0.0),
+                PickupKind::OniSake => assert!(w.damage_buff > 0.0),
+                PickupKind::ShrineBell => assert!(w.vacuum > 0.0),
+                PickupKind::Hourglass => assert!(w.freeze > 0.0),
+                PickupKind::SenPurse => assert!(w.sen >= 40),
+                PickupKind::ExorcismSeal => {
+                    w.step(Input::default());
+                    assert!(w.kills >= 20, "seal should banish the ring, killed {}", w.kills);
+                }
+            }
+        }
     }
 
     fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {
