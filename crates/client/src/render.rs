@@ -22,6 +22,8 @@ pub struct Assets {
     shun_hannya: [Texture2D; 3],
     cleaver: Texture2D,
     cleaver_hannya: Texture2D,
+    cleaver_rest: Texture2D,
+    cleaver_rest_hannya: Texture2D,
     familiar: Texture2D,
     shuriken: Texture2D,
     pub coin: Texture2D,
@@ -63,6 +65,8 @@ impl Assets {
             shun_hannya: frames(sprites::parse(include_str!("../../../art/src/shun_hannya.px"))),
             cleaver: sprites::texture(include_str!("../../../art/src/cleaver.px")),
             cleaver_hannya: sprites::texture(include_str!("../../../art/src/cleaver_hannya.px")),
+            cleaver_rest: sprites::texture(include_str!("../../../art/src/cleaver_rest.px")),
+            cleaver_rest_hannya: sprites::texture(include_str!("../../../art/src/cleaver_rest_hannya.px")),
             familiar: sprites::texture(include_str!("../../../art/src/familiar.px")),
             shuriken: sprites::texture(include_str!("../../../art/src/shuriken.px")),
             coin: sprites::texture(include_str!("../../../art/src/coin.px")),
@@ -1151,28 +1155,35 @@ fn burst_life(st: u8) -> f32 {
     }
 }
 
-/// Shun's oversized nodachi, pivoting at his right hand. `swing`: (time left, direction).
+/// Shun's oversized nodachi in his right hand. At rest it's a pre-drawn 45-degree sprite
+/// (pixel-clean, no rotation) snapped to whole pixels; mid-swing the straight blade rotates.
 fn draw_blade(a: &Assets, p: sim::Vec2, flip: bool, hannya: bool, swing: Option<(f32, Vec2)>) {
-    let tex = if hannya { &a.cleaver_hannya } else { &a.cleaver };
-    let side = if flip { -1.0 } else { 1.0 };
-    let hand = vec2(p.x + 8.0 * side, p.y - 6.0);
-    let rot = match swing {
-        // Sweep the blade through ~150 degrees around the swing direction.
+    // Same origin the body sprite uses, so the grip lines up with his hand pixel.
+    let (sx, sy) = ((p.x - 12.0).round(), (p.y - 26.0).round());
+    let hand = vec2(if flip { sx + 4.0 } else { sx + 19.0 }, sy + 21.0);
+    match swing {
+        None => {
+            let tex = if hannya { &a.cleaver_rest_hannya } else { &a.cleaver_rest };
+            // Grip anchor inside the 30x30 sprite is (5, 23); mirror it when facing left.
+            let x = if flip { hand.x - 24.0 } else { hand.x - 5.0 };
+            draw_texture_ex(tex, x, hand.y - 23.0, WHITE, DrawTextureParams { flip_x: flip, ..Default::default() });
+        }
         Some((left, dir)) => {
+            let tex = if hannya { &a.cleaver_hannya } else { &a.cleaver };
+            let side = if flip { -1.0 } else { 1.0 };
             let k = 1.0 - left / 0.2;
             let d = if dir == Vec2::ZERO { vec2(side, 0.0) } else { dir };
-            d.y.atan2(d.x) + std::f32::consts::FRAC_PI_2 - 1.3 + 2.6 * k
+            // Sweep the blade through ~150 degrees around the swing direction.
+            let rot = d.y.atan2(d.x) + std::f32::consts::FRAC_PI_2 - 1.3 + 2.6 * k;
+            draw_texture_ex(
+                tex,
+                hand.x - 4.5,
+                hand.y - 35.0,
+                WHITE,
+                DrawTextureParams { rotation: rot, pivot: Some(hand), flip_x: flip, ..Default::default() },
+            );
         }
-        // Resting over the shoulder.
-        None => 0.55 * side,
-    };
-    draw_texture_ex(
-        tex,
-        hand.x - 4.5,
-        hand.y - 35.0,
-        WHITE,
-        DrawTextureParams { rotation: rot, pivot: Some(hand), flip_x: flip, ..Default::default() },
-    );
+    }
 }
 
 /// Hannya Unbound: a pulsing crimson-black aura with dark flames licking upward.

@@ -149,6 +149,33 @@ def sword(hannya):
     c.save("cleaver_hannya" if hannya else "cleaver", "Shun's nodachi" + (" (Hannya)" if hannya else ""), outline=True)
 
 
+def sword_rest(hannya):
+    """The nodachi held at rest, drawn at exactly 45 degrees so it needs no rotation.
+    Grip at the bottom-left (hand anchor = pixel (4, 25)), tip at the top-right."""
+    pal = {"W": "#f2ece0", "w": "#b8b0a0", "e": "#ffffff", "C": "#c42a3a", "c": "#7e1828", "g": "#c9a040"}
+    if hannya:
+        pal.update({"W": "#1a1418", "w": "#2e2630", "e": "#e0203c"})
+    c = Canvas(30, 30, pal)
+    # Blade: a 3-pixel-wide diagonal band from just above the guard to the tip.
+    for t in range(8, 27):
+        x, y = 1 + t, 28 - t
+        c.px(x - 1, y, "w")          # shaded back
+        c.px(x, y, "W")
+        c.px(x + 1, y, "e")          # bright cutting edge
+        if hannya and t % 3 == 0:
+            c.px(x + 2, y, "e")      # jagged crimson teeth
+    c.px(28, 1, "e")                  # tip
+    # Guard: perpendicular bar.
+    for k in range(-2, 3):
+        c.px(8 + k, 20 + k, "g")
+    # Grip: wrapped hilt running down-left from the guard.
+    for t in range(1, 7):
+        x, y = 8 - t, 20 + t
+        c.px(x, y, "C")
+        c.px(x - 1, y, "c" if t % 2 else "C")
+    c.save("cleaver_rest_hannya" if hannya else "cleaver_rest", "Shun's nodachi at rest" + (" (Hannya)" if hannya else ""), outline=True)
+
+
 def icon():
     from gen_icons import Icon
     i = Icon({"W": "#f2ece0", "w": "#b8b0a0", "C": "#c42a3a", "g": "#c9a040", "V": "#b08aff"})
@@ -201,6 +228,8 @@ def main():
         c.save(name, "Shun Yamikiri, Hannya Unbound" if hannya else "Shun Yamikiri (spirit ferryman)", outline=True)
     sword(False)
     sword(True)
+    sword_rest(False)
+    sword_rest(True)
     icon()
     print("wrote shun.px, shun_hannya.px, cleaver*.px, icons/grave_cleaver.px")
 
