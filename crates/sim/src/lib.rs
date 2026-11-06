@@ -10,4 +10,4 @@ pub mod stage;
 pub mod world;
 
 pub use math::Vec2;
-pub use world::{Event, Input, RunState, Stress, World, WorldConfig};
+pub use world::{Event, Input, MapMarker, MarkerKind, RunState, Stress, World, WorldConfig};

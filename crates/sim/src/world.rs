@@ -164,6 +164,27 @@ pub struct Scar {
     damage: f32,
 }
 
+/// Something the minimap should show. Stages and modes add markers here; the UI draws
+/// whatever it gets, so new content needs no minimap changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MarkerKind {
+    /// Ordinary enemy (drawn as a faint dot).
+    Enemy,
+    Elite,
+    Boss,
+    Chest { tier: u8 },
+    Shrine,
+    Pickup(PickupKind),
+    /// Future objectives (escort targets, exits, ...): drawn as a pulsing star.
+    Objective,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MapMarker {
+    pub pos: Vec2,
+    pub kind: MarkerKind,
+}
+
 /// A Fox Mirage clone: fights near the player, draws enemies, pops in damaging smoke.
 #[derive(Clone, Copy, Debug)]
 pub struct MirageClone {
@@ -1673,6 +1694,29 @@ impl World {
         let r2 = FOX_BLAST_RADIUS * FOX_BLAST_RADIUS;
         self.shots.retain(|s| (s.pos - p).length_sq() > r2);
         self.events.push(Event::FoxAwakened { pos: p });
+    }
+
+    /// Everything the minimap should show, nearest-first not guaranteed.
+    pub fn map_markers(&self) -> Vec<MapMarker> {
+        let e = &self.enemies;
+        let mut out = Vec::with_capacity(e.len() + 16);
+        for i in 0..e.len() {
+            let kind = match e.kind[i] {
+                k if k.is_boss() => MarkerKind::Boss,
+                EnemyKind::Oni => MarkerKind::Elite,
+                _ => MarkerKind::Enemy,
+            };
+            out.push(MapMarker { pos: e.pos[i], kind });
+        }
+        out.extend(self.chests.iter().map(|(p, t)| MapMarker { pos: *p, kind: MarkerKind::Chest { tier: *t } }));
+        out.extend(self.shrine.map(|p| MapMarker { pos: p, kind: MarkerKind::Shrine }));
+        out.extend(self.pickups.iter().map(|(p, k)| MapMarker { pos: *p, kind: MarkerKind::Pickup(*k) }));
+        out
+    }
+
+    /// Playable area for bounded stages (min, max); None = endless (stage 1 streets).
+    pub fn map_bounds(&self) -> Option<(Vec2, Vec2)> {
+        None
     }
 
     /// The active transformation, if any.
@@ -3481,6 +3525,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn map_markers_cover_everything_on_the_field() {
+        let mut w = World::new(WorldConfig::default());
+        w.spawn_enemy(EnemyKind::Wisp, Vec2::new(50.0, 0.0));
+        w.spawn_enemy(EnemyKind::Oni, Vec2::new(80.0, 0.0));
+        w.spawn_enemy(EnemyKind::GreatOni, Vec2::new(120.0, 0.0));
+        w.chests.push((Vec2::new(10.0, 10.0), 3));
+        w.shrine = Some(Vec2::new(-40.0, 0.0));
+        w.pickups.push((Vec2::new(0.0, 60.0), PickupKind::OniSake));
+        let m = w.map_markers();
+        let has = |k: MarkerKind| m.iter().any(|x| x.kind == k);
+        assert!(has(MarkerKind::Enemy) && has(MarkerKind::Elite) && has(MarkerKind::Boss));
+        assert!(has(MarkerKind::Chest { tier: 3 }) && has(MarkerKind::Shrine) && has(MarkerKind::Pickup(PickupKind::OniSake)));
     }
 
     fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {
