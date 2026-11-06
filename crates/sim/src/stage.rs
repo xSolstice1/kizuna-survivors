@@ -45,15 +45,17 @@ impl Prop {
     /// Solid footprint (the base of the sprite) as (min, max).
     pub fn footprint(&self) -> (Vec2, Vec2) {
         let (half_w, depth) = match self.kind {
-            PropKind::Lantern => (3.0, 4.0),
-            PropKind::Vending => (8.0, 10.0),
-            PropKind::Stall => (16.0, 12.0),
-            PropKind::NeonSign => (13.0, 6.0),
-            PropKind::Crates => (7.0, 8.0),
-            PropKind::A => (4.0, 4.0),
-            PropKind::B => (12.0, 9.0),
-            PropKind::C => (20.0, 10.0),
-            PropKind::D => (8.0, 7.0),
+            // Most of each sprite is solid, so crowds visibly go around props
+            // instead of walking over their upper half.
+            PropKind::Lantern => (4.0, 6.0),
+            PropKind::Vending => (8.0, 18.0),
+            PropKind::Stall => (16.0, 16.0),
+            PropKind::NeonSign => (13.0, 8.0),
+            PropKind::Crates => (7.0, 10.0),
+            PropKind::A => (4.0, 7.0),
+            PropKind::B => (13.0, 20.0),
+            PropKind::C => (22.0, 17.0),
+            PropKind::D => (10.0, 14.0),
         };
         let bottom = self.pos.y + 6.0;
         (Vec2::new(self.pos.x - half_w, bottom - depth), Vec2::new(self.pos.x + half_w, bottom))
@@ -71,7 +73,7 @@ pub fn chunk_props(stage: StageId, cx: i32, cy: i32) -> ([Prop; 2], usize) {
         // Campaign props include a wider shape, so they keep further from the chunk edge.
         let (span, inset) = if stage == StageId::Shotengai { (160, 16.0) } else { (148, 22.0) };
         let px = cx as f32 * CHUNK + (hk % span) as f32 + inset;
-        let py = cy as f32 * CHUNK + ((hk >> 8) % 160) as f32 + 16.0;
+        let py = if stage == StageId::Shotengai { cy as f32 * CHUNK + ((hk >> 8) % 160) as f32 + 16.0 } else { cy as f32 * CHUNK + ((hk >> 8) % 146) as f32 + 30.0 };
         let path_x = ((px / (TILE * PATH_EVERY as f32)).round() * TILE * PATH_EVERY as f32) + TILE / 2.0;
         if (px - path_x).abs() < 40.0 || out[..n].iter().any(|q| (q.pos - Vec2::new(px, py)).length() < 56.0) {
             continue;
@@ -129,13 +131,19 @@ fn push_out_box(c: Vec2, r: f32, (min, max): (Vec2, Vec2)) -> Vec2 {
     }
 }
 
-/// Resolves a circle against props in its own chunk only (cheap; for crowds).
+/// Resolves a circle against props in the chunks its bounds touch (usually one; for crowds).
+/// Footprints never cross chunk bounds, so this is exact.
 pub fn resolve_local(stage: StageId, c: Vec2, r: f32) -> Vec2 {
-    let (cx, cy) = chunk_of(c);
-    let (props, n) = chunk_props(stage, cx, cy);
+    let (x0, y0) = chunk_of(Vec2::new(c.x - r, c.y - r));
+    let (x1, y1) = chunk_of(Vec2::new(c.x + r, c.y + r));
     let mut c = c;
-    for p in &props[..n] {
-        c += push_out_box(c, r, p.footprint());
+    for cy in y0..=y1 {
+        for cx in x0..=x1 {
+            let (props, n) = chunk_props(stage, cx, cy);
+            for p in &props[..n] {
+                c += push_out_box(c, r, p.footprint());
+            }
+        }
     }
     c
 }

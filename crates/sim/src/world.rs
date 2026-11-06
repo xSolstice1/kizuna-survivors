@@ -5060,6 +5060,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn crowds_walk_around_props_in_every_stage() {
+        for stage in crate::campaign::ALL_STAGES {
+            // A wide prop to walk around.
+            let mut found = None;
+            'outer: for cy in 0..40 {
+                for cx in 0..40 {
+                    let (ps, n) = crate::stage::chunk_props(stage, cx, cy);
+                    for p in &ps[..n] {
+                        if matches!(p.kind, crate::stage::PropKind::C | crate::stage::PropKind::Stall) {
+                            found = Some(*p);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            let prop = found.expect("a wide prop");
+            let mut w = World::new(WorldConfig { stage, stress: None, ..Default::default() });
+            w.weapons.clear();
+            w.player.pos = prop.pos + Vec2::new(0.0, 70.0);
+            w.player.hp = 1e9;
+            w.player.max_hp = 1e9;
+            for k in 0..30 {
+                let kind = w.stage().fodder;
+                w.spawn_enemy(kind, prop.pos + Vec2::new(-30.0 + k as f32 * 2.0, -60.0));
+            }
+            let (min, max) = prop.footprint();
+            let mut worst = 0.0f32;
+            for _ in 0..600 {
+                w.time = 1.0;
+                w.step(Input::default());
+                for i in 0..w.enemies.len() {
+                    let c = w.enemies.pos[i];
+                    let q = Vec2::new(c.x.clamp(min.x, max.x), c.y.clamp(min.y, max.y));
+                    let pen = w.enemies.radius[i] - (c - q).length();
+                    worst = worst.max(pen);
+                }
+            }
+            assert!(worst < 2.5, "{stage:?}: enemies sank {worst:.1}px into a prop");
+        }
+    }
+
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
     #[test]
     #[ignore]
