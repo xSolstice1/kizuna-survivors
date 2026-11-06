@@ -171,6 +171,9 @@ pub enum MarkerKind {
     /// Ordinary enemy (drawn as a faint dot).
     Enemy,
     Elite,
+    /// A mid-run boss (the Great Oni).
+    MiniBoss,
+    /// The stage boss (the Night Lord).
     Boss,
     Chest { tier: u8 },
     Shrine,
@@ -1702,7 +1705,8 @@ impl World {
         let mut out = Vec::with_capacity(e.len() + 16);
         for i in 0..e.len() {
             let kind = match e.kind[i] {
-                k if k.is_boss() => MarkerKind::Boss,
+                EnemyKind::NightLord => MarkerKind::Boss,
+                EnemyKind::GreatOni => MarkerKind::MiniBoss,
                 EnemyKind::Oni => MarkerKind::Elite,
                 _ => MarkerKind::Enemy,
             };
@@ -1711,6 +1715,22 @@ impl World {
         out.extend(self.chests.iter().map(|(p, t)| MapMarker { pos: *p, kind: MarkerKind::Chest { tier: *t } }));
         out.extend(self.shrine.map(|p| MapMarker { pos: p, kind: MarkerKind::Shrine }));
         out.extend(self.pickups.iter().map(|(p, k)| MapMarker { pos: *p, kind: MarkerKind::Pickup(*k) }));
+        out
+    }
+
+    /// Solid obstacles overlapping the area (min, max), as (min, max) boxes, for the current
+    /// stage. The minimap only asks this, so new stages show up without UI changes.
+    pub fn map_obstacles(&self, min: Vec2, max: Vec2) -> Vec<(Vec2, Vec2)> {
+        // Stage 1 (Neon Shotengai) is the only stage so far; future stages dispatch here.
+        let (cx0, cy0) = stage::chunk_of(min);
+        let (cx1, cy1) = stage::chunk_of(max);
+        let mut out = Vec::new();
+        for cy in cy0..=cy1 {
+            for cx in cx0..=cx1 {
+                let (props, n) = stage::chunk_props(cx, cy);
+                out.extend(props[..n].iter().map(|p| p.footprint()));
+            }
+        }
         out
     }
 
@@ -3538,8 +3558,10 @@ mod tests {
         w.pickups.push((Vec2::new(0.0, 60.0), PickupKind::OniSake));
         let m = w.map_markers();
         let has = |k: MarkerKind| m.iter().any(|x| x.kind == k);
-        assert!(has(MarkerKind::Enemy) && has(MarkerKind::Elite) && has(MarkerKind::Boss));
+        assert!(has(MarkerKind::Enemy) && has(MarkerKind::Elite) && has(MarkerKind::MiniBoss));
         assert!(has(MarkerKind::Chest { tier: 3 }) && has(MarkerKind::Shrine) && has(MarkerKind::Pickup(PickupKind::OniSake)));
+        let obstacles = w.map_obstacles(Vec2::new(-2000.0, -2000.0), Vec2::new(2000.0, 2000.0));
+        assert!(!obstacles.is_empty(), "the stage's props should be reported to the map");
     }
 
     fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {
