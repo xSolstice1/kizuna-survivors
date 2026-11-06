@@ -61,11 +61,16 @@ pub fn hud(world: &World, assets: &Assets) {
     let full = p.special >= 1.0;
     let glow = if full { 0.75 + 0.25 * (get_time() * 6.0).sin() as f32 } else { 1.0 };
     draw_rectangle(16.0, 42.0, 200.0, 8.0, Color::from_rgba(30, 30, 50, 230));
-    if p.fox > 0.0 {
-        let f = p.fox / sim::content::FOX_DURATION;
+    if let Some(kind) = world.form_kind() {
+        let f = p.form / kind.duration();
         let flick = 0.8 + 0.2 * (get_time() * 14.0).sin() as f32;
-        draw_rectangle(16.0, 42.0, 200.0 * f, 8.0, Color::new(1.0, 0.6 * flick, 0.15, 1.0));
-        draw_text(&format!("NINEFOLD FOXFIRE  {:.0}s", p.fox.ceil()), 222.0, 51.0, 18.0, Color::new(1.0, 0.75, 0.3, flick));
+        let (bar, txt) = match kind {
+            sim::content::SpecialKind::Hannya => (Color::new(0.85 * flick, 0.05, 0.12, 1.0), Color::new(1.0, 0.35, 0.35, flick)),
+            _ => (Color::new(1.0, 0.6 * flick, 0.15, 1.0), Color::new(1.0, 0.75, 0.3, flick)),
+        };
+        draw_rectangle(16.0, 42.0, 200.0 * f, 8.0, bar);
+        let name = hero_def(world.cfg.hero).special_name.to_uppercase();
+        draw_text(&format!("{name}  {:.0}s", p.form.ceil()), 222.0, 51.0, 18.0, txt);
     } else {
         draw_rectangle(16.0, 42.0, 200.0 * p.special, 8.0, Color::new(1.0 * glow, 0.85 * glow, 0.45 * glow, 1.0));
         if full {

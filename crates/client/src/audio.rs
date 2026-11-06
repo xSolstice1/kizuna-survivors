@@ -59,6 +59,12 @@ fn tuning(s: Sfx) -> (f32, f64) {
         Sfx::Spin => (0.3, 0.2),
         Sfx::Volley => (0.45, 0.2),
         Sfx::Poof => (0.4, 0.08),
+        Sfx::Cleave => (0.45, 0.08),
+        Sfx::Chain => (0.35, 0.15),
+        Sfx::IaiSfx => (0.45, 0.1),
+        Sfx::Pulse => (0.25, 0.12),
+        Sfx::BeamSfx => (0.4, 0.12),
+        Sfx::DarkBurst => (0.45, 0.08),
         Sfx::Warble => (0.35, 0.12),
         Sfx::Hurt => (0.6, 0.12),
         Sfx::Click => (0.5, 0.03),
@@ -172,6 +178,9 @@ impl Audio {
                 Event::Fired(WeaponKind::FoxfireOrb) => Sfx::Charge,
                 Event::Fired(WeaponKind::Familiars) => Sfx::Yip,
                 Event::Fired(WeaponKind::GaleShuriken) => Sfx::Spin,
+                Event::Fired(WeaponKind::GraveCleaver) => Sfx::Cleave,
+                Event::Fired(WeaponKind::SoulTether) => Sfx::Chain,
+                Event::Fired(WeaponKind::IaiFlash) => Sfx::IaiSfx,
                 Event::Fired(_) => continue,
                 Event::Burst { .. } => Sfx::FoxBurst,
                 Event::FoxAwakened { .. } => Sfx::FoxAwaken,
@@ -179,6 +188,14 @@ impl Audio {
                 Event::FoxFaded => Sfx::FoxFade,
                 Event::CloneSummoned { .. } | Event::ClonePopped { .. } => Sfx::Poof,
                 Event::CloneStrike { .. } => Sfx::Whoosh,
+                Event::HannyaAwakened { .. } => Sfx::Roar,
+                Event::Beam { .. } => Sfx::BeamSfx,
+                Event::ShadowStep { .. } => Sfx::Step,
+                Event::AfterimageBlast { .. } => Sfx::DarkBurst,
+                Event::FinaleCharge { .. } => Sfx::Charge,
+                Event::FinaleBlast { .. } => Sfx::Boom,
+                Event::Iai { .. } => continue, // the Fired cue covers the cut
+                Event::LanternPulse { .. } => Sfx::Pulse,
             };
             self.play(s);
         }

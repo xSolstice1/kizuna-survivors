@@ -187,9 +187,17 @@ pub enum Sfx {
     Spin,
     FoxFade,
     Poof,
+    Cleave,
+    BeamSfx,
+    Step,
+    DarkBurst,
+    Roar,
+    Chain,
+    IaiSfx,
+    Pulse,
 }
 
-pub const ALL_SFX: [Sfx; 40] = [
+pub const ALL_SFX: [Sfx; 48] = [
     Sfx::Hit,
     Sfx::Pop,
     Sfx::BigPop,
@@ -230,6 +238,14 @@ pub const ALL_SFX: [Sfx; 40] = [
     Sfx::Spin,
     Sfx::FoxFade,
     Sfx::Poof,
+    Sfx::Cleave,
+    Sfx::BeamSfx,
+    Sfx::Step,
+    Sfx::DarkBurst,
+    Sfx::Roar,
+    Sfx::Chain,
+    Sfx::IaiSfx,
+    Sfx::Pulse,
 ];
 
 /// Bell-like tone: inharmonic sine partials.
@@ -473,6 +489,58 @@ pub fn sfx(s: Sfx) -> Buf {
                 b.add(k as f32 * 0.07, Note::new(Noise, 1.0, 0.07, 0.25).lp(4500.0).env(0.02, 1.5));
             }
             b.add(0.0, Note::new(Sine, 700.0, 0.45, 0.08).vib(0.2, 14.0));
+        }
+        Sfx::Cleave => {
+            // A heavy blade through the air: low swish plus a ringing edge.
+            b = Buf::new(0.35);
+            b.add(0.0, Note::new(Noise, 1.0, 0.25, 0.55).lp(1800.0).env(0.03, 1.8));
+            b.add(0.0, Note::new(Saw, 180.0, 0.22, 0.12).slide(90.0).lp(900.0));
+            b.add(0.05, Note::new(Sine, 2200.0, 0.25, 0.06).env(0.001, 3.0));
+        }
+        Sfx::BeamSfx => {
+            b = Buf::new(0.45);
+            b.add(0.0, Note::new(Saw, 110.0, 0.4, 0.3).slide(55.0).lp(1600.0).vib(0.04, 25.0));
+            b.add(0.0, Note::new(Noise, 1.0, 0.35, 0.3).lp(3000.0).env(0.005, 1.5));
+            b.add(0.0, Note::new(Square(0.5), 880.0, 0.2, 0.08).slide(220.0).lp(4000.0));
+        }
+        Sfx::Step => {
+            b = Buf::new(0.2);
+            b.add(0.0, Note::new(Noise, 1.0, 0.15, 0.4).lp(6000.0).env(0.001, 3.0));
+            b.add(0.0, Note::new(Sine, 1400.0, 0.12, 0.15).slide(300.0));
+        }
+        Sfx::DarkBurst => {
+            b = Buf::new(0.5);
+            b.add(0.0, Note::new(Noise, 1.0, 0.45, 0.55).lp(1300.0).env(0.001, 2.0));
+            b.add(0.0, Note::new(Sine, 140.0, 0.4, 0.4).slide(45.0));
+        }
+        Sfx::Roar => {
+            // A distorted growl rising out of a deep hit.
+            b = Buf::new(2.0);
+            b.add(0.0, Note::new(Sine, 60.0, 1.2, 0.6).slide(30.0).env(0.002, 1.8));
+            b.add(0.0, Note::new(Noise, 1.0, 0.9, 0.5).lp(700.0).env(0.002, 1.5));
+            for (f, v) in [(92.0, 0.22), (138.0, 0.16), (185.0, 0.1)] {
+                b.add(0.1, Note::new(Saw, f, 1.6, v).slide(f * 1.4).lp(1200.0).env(0.2, 1.2).vib(0.06, 9.0));
+            }
+        }
+        Sfx::Chain => {
+            // Rattling links.
+            b = Buf::new(0.35);
+            for k in 0..7 {
+                b.add(k as f32 * 0.045, Note::new(Square(0.5), 2400.0 + 300.0 * (k % 3) as f32, 0.03, 0.12).lp(7000.0).env(0.001, 3.0));
+            }
+            b.add(0.0, Note::new(Sine, 300.0, 0.3, 0.1).vib(0.1, 12.0));
+        }
+        Sfx::IaiSfx => {
+            // Schwing: a sharp rising ring with a hiss.
+            b = Buf::new(0.4);
+            b.add(0.0, Note::new(Noise, 1.0, 0.12, 0.45).lp(8000.0).env(0.001, 2.5));
+            b.add(0.02, Note::new(Sine, 1800.0, 0.35, 0.2).slide(3200.0).env(0.002, 2.0));
+            b.add(0.02, Note::new(Tri, 3600.0, 0.2, 0.06));
+        }
+        Sfx::Pulse => {
+            b = Buf::new(0.4);
+            b.add(0.0, Note::new(Sine, 660.0, 0.35, 0.2).env(0.005, 2.5));
+            b.add(0.0, Note::new(Sine, 990.0, 0.25, 0.08).env(0.005, 3.0));
         }
         Sfx::Poof => {
             // Smoke puff: soft noise burst with a dropping pitch.

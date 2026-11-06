@@ -1,7 +1,7 @@
 //! Draws the world: ground, pickups, enemies, player, weapons, effects.
 
 use macroquad::prelude::*;
-use sim::content::{EnemyKind, HeroId, PassiveKind, Upgrade, WeaponKind, ALL_HEROES};
+use sim::content::{EnemyKind, HeroId, PassiveKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES};
 use sim::world::ProjKind;
 use sim::{Event, World};
 
@@ -16,6 +16,10 @@ pub struct Assets {
     heroes: Vec<[Texture2D; 3]>,
     /// Riku in Ninefold Foxfire form (idle, walk A, walk B).
     riku_fox: [Texture2D; 3],
+    /// Shun in Hannya Unbound form, and his blade in both forms.
+    shun_hannya: [Texture2D; 3],
+    cleaver: Texture2D,
+    cleaver_hannya: Texture2D,
     familiar: Texture2D,
     shuriken: Texture2D,
     pub coin: Texture2D,
@@ -47,12 +51,16 @@ impl Assets {
             .iter()
             .map(|h| match h {
                 HeroId::Riku => frames(sprites::parse(include_str!("../../../art/src/riku.px"))),
+                HeroId::Shun => frames(sprites::parse(include_str!("../../../art/src/shun.px"))),
                 _ => frames(sprites::parse(&sprites::recolor(base, hero_palette(*h)))),
             })
             .collect();
         Assets {
             heroes,
             riku_fox: frames(sprites::parse(include_str!("../../../art/src/riku_fox.px"))),
+            shun_hannya: frames(sprites::parse(include_str!("../../../art/src/shun_hannya.px"))),
+            cleaver: sprites::texture(include_str!("../../../art/src/cleaver.px")),
+            cleaver_hannya: sprites::texture(include_str!("../../../art/src/cleaver_hannya.px")),
             familiar: sprites::texture(include_str!("../../../art/src/familiar.px")),
             shuriken: sprites::texture(include_str!("../../../art/src/shuriken.px")),
             coin: sprites::texture(include_str!("../../../art/src/coin.px")),
@@ -77,6 +85,10 @@ impl Assets {
             ("familiars", sprites::texture(include_str!("../../../art/src/icons/familiars.px"))),
             ("gale_shuriken", sprites::texture(include_str!("../../../art/src/icons/gale_shuriken.px"))),
             ("fox_mirage", sprites::texture(include_str!("../../../art/src/icons/fox_mirage.px"))),
+            ("grave_cleaver", sprites::texture(include_str!("../../../art/src/icons/grave_cleaver.px"))),
+            ("soul_tether", sprites::texture(include_str!("../../../art/src/icons/soul_tether.px"))),
+            ("lantern_vigil", sprites::texture(include_str!("../../../art/src/icons/lantern_vigil.px"))),
+            ("iai_flash", sprites::texture(include_str!("../../../art/src/icons/iai_flash.px"))),
             ("guard", sprites::texture(include_str!("../../../art/src/icons/guard.px"))),
             ("haste", sprites::texture(include_str!("../../../art/src/icons/haste.px"))),
             ("magnetism", sprites::texture(include_str!("../../../art/src/icons/magnetism.px"))),
@@ -119,6 +131,10 @@ impl Assets {
                 WeaponKind::Familiars => "familiars",
                 WeaponKind::GaleShuriken => "gale_shuriken",
                 WeaponKind::FoxMirage => "fox_mirage",
+                WeaponKind::GraveCleaver => "grave_cleaver",
+                WeaponKind::SoulTether => "soul_tether",
+                WeaponKind::LanternVigil => "lantern_vigil",
+                WeaponKind::IaiFlash => "iai_flash",
             },
             Upgrade::Passive(p) => match p {
                 PassiveKind::Might => "might",
@@ -142,7 +158,7 @@ impl Assets {
 /// Palette chars: H/h/L hair, C/c outfit, I eyes, R ribbon.
 fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
     match h {
-        HeroId::Ren | HeroId::Riku => &[],
+        HeroId::Ren | HeroId::Riku | HeroId::Shun => &[],
         HeroId::Kaede => &[('H', "#33334a"), ('h', "#1c1c2a"), ('L', "#5a5a7a"), ('C', "#2f5a3a"), ('c', "#1d3a25"), ('I', "#e84a4a"), ('R', "#c9a040")],
         HeroId::Mika => &[('H', "#ffd45a"), ('h', "#d49a2a"), ('L', "#fff0a0"), ('C', "#e88ac8"), ('c', "#b0609a"), ('I', "#4ac0ff"), ('R', "#ff5aa0")],
         HeroId::Haru => &[('H', "#c8cde0"), ('h', "#8890aa"), ('L', "#ffffff"), ('C', "#3a3a8a"), ('c', "#24245a"), ('I', "#6a7cff"), ('R', "#e83a3a")],
@@ -178,8 +194,19 @@ pub struct Fx {
     slashes: Vec<(Vec2, Vec2, f32, bool, f32)>,
     /// Star Fall impacts: (pos, radius, age).
     impacts: Vec<(Vec2, f32, f32)>,
-    /// Foxfire bursts and the transformation blast: (pos, radius, age, gold?).
-    bursts: Vec<(Vec2, f32, f32, bool)>,
+    /// Bursts: (pos, radius, age, style). Style: 0 foxfire blue, 1 gold blast, 2 crimson, 3 finale.
+    bursts: Vec<(Vec2, f32, f32, u8)>,
+    /// Rending Beams: (from, to, age).
+    beams: Vec<(Vec2, Vec2, f32)>,
+    /// Iai Flash cuts: (from, to, age).
+    iai: Vec<(Vec2, Vec2, f32)>,
+    /// Lantern pulse rings: (pos, radius, age).
+    pulses: Vec<(Vec2, f32, f32)>,
+    /// Shadow Step streaks: (from, to, age).
+    steps: Vec<(Vec2, Vec2, f32)>,
+    /// Sword swing: seconds left and direction.
+    pub swing: (f32, Vec2),
+
     /// Smoke puffs from Fox Mirage clones appearing / popping: (pos, radius, age).
     smokes: Vec<(Vec2, f32, f32)>,
     pub shake: f32,
@@ -210,6 +237,10 @@ impl Fx {
         self.impacts.clear();
         self.bursts.clear();
         self.smokes.clear();
+        self.beams.clear();
+        self.steps.clear();
+        self.iai.clear();
+        self.pulses.clear();
         self.shake = 0.0;
         self.banner = None;
         self.leveled_once = false;
@@ -317,14 +348,43 @@ impl Fx {
                     self.shake = self.shake.max(0.3);
                 }
                 Event::Bolt { from, to } => self.bolts.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
-                Event::Slash { pos, dir, radius, full } => self.slashes.push((vec2(pos.x, pos.y), vec2(dir.x, dir.y), radius, full, 0.0)),
+                Event::Slash { pos, dir, radius, full } => {
+                    self.slashes.push((vec2(pos.x, pos.y), vec2(dir.x, dir.y), radius, full, 0.0));
+                    if self.swing.0 > 0.0 {
+                        self.swing.1 = vec2(dir.x, dir.y);
+                    }
+                }
                 Event::Impact { pos, radius } => {
                     self.impacts.push((vec2(pos.x, pos.y), radius, 0.0));
                     self.shake = self.shake.max(0.04);
                 }
-                Event::Burst { pos, radius } => self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, false)),
+                Event::Burst { pos, radius } => self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, 0)),
+                Event::HannyaAwakened { pos } => {
+                    self.bursts.push((vec2(pos.x, pos.y), sim::content::HANNYA_ONSET_RADIUS, 0.0, 2));
+                    self.announce("HANNYA UNBOUND".into());
+                    self.say(self.lines().special);
+                    self.shake = self.shake.max(0.5);
+                }
+                Event::Beam { from, to } => self.beams.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
+                Event::Iai { from, to } => {
+                    self.iai.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0));
+                    self.shake = self.shake.max(0.05);
+                }
+                Event::LanternPulse { pos, radius } => self.pulses.push((vec2(pos.x, pos.y), radius, 0.0)),
+                Event::ShadowStep { from, to } => self.steps.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
+                Event::AfterimageBlast { pos, radius } => {
+                    self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, 2));
+                    self.shake = self.shake.max(0.08);
+                }
+                Event::FinaleCharge { .. } => self.say("This ends now!"),
+                Event::FinaleBlast { pos, radius } => {
+                    self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, 3));
+                    self.announce("HANNYA'S WRATH".into());
+                    self.shake = self.shake.max(0.8);
+                }
+                Event::Fired(WeaponKind::GraveCleaver) => self.swing = (0.2, Vec2::ZERO),
                 Event::FoxAwakened { pos } => {
-                    self.bursts.push((vec2(pos.x, pos.y), sim::content::FOX_BLAST_RADIUS, 0.0, true));
+                    self.bursts.push((vec2(pos.x, pos.y), sim::content::FOX_BLAST_RADIUS, 0.0, 1));
                     self.announce("NINEFOLD FOXFIRE".into());
                     self.say(self.lines().special);
                     self.shake = self.shake.max(0.5);
@@ -364,7 +424,17 @@ impl Fx {
         self.impacts.iter_mut().for_each(|i| i.2 += dt);
         self.impacts.retain(|i| i.2 < 0.3);
         self.bursts.iter_mut().for_each(|b| b.2 += dt);
-        self.bursts.retain(|b| b.2 < if b.3 { 0.7 } else { 0.35 });
+        self.bursts.retain(|b| b.2 < burst_life(b.3));
+        self.beams.iter_mut().for_each(|b| b.2 += dt);
+        self.beams.retain(|b| b.2 < 0.3);
+        self.iai.iter_mut().for_each(|b| b.2 += dt);
+        self.iai.retain(|b| b.2 < 0.25);
+        self.pulses.iter_mut().for_each(|b| b.2 += dt);
+        self.pulses.retain(|b| b.2 < 0.4);
+        self.steps.iter_mut().for_each(|b| b.2 += dt);
+        self.steps.retain(|b| b.2 < 0.3);
+        self.swing.0 = (self.swing.0 - dt).max(0.0);
+
         self.smokes.iter_mut().for_each(|s| s.2 += dt);
         self.smokes.retain(|s| s.2 < 0.5);
         self.shake = (self.shake - dt).max(0.0);
@@ -465,6 +535,18 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
         );
     }
+    for l in &world.lanterns {
+        let fade = (l.life / 0.4).min(1.0) * ((l.max_life - l.life) / 0.3).min(1.0);
+        let bob = ((time * 3.0 + l.pos.x as f64).sin() * 2.0) as f32;
+        draw_circle(l.pos.x, l.pos.y, l.radius, Color::new(0.5, 0.75, 1.0, 0.06 * fade));
+        draw_circle_lines(l.pos.x, l.pos.y, l.radius, 1.0, Color::new(0.7, 0.85, 1.0, 0.35 * fade));
+        let (x, y) = (l.pos.x, l.pos.y - 12.0 + bob);
+        draw_circle(x, y, 10.0, Color::new(0.55, 0.8, 1.0, 0.18 * fade));
+        draw_rectangle(x - 2.0, y - 8.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
+        draw_ellipse(x, y, 5.0, 6.0, 0.0, Color::new(0.95, 0.92, 0.86, fade));
+        draw_circle(x, y, 2.5, Color::new(0.55, 0.82, 1.0, fade));
+        draw_rectangle(x - 2.0, y + 6.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
+    }
     for (c, v) in &world.coins {
         let size = if *v >= 50 { 16.0 } else if *v >= 5 { 12.0 } else { 10.0 };
         let bob = ((time * 4.0 + c.x as f64).sin() * 1.0) as f32;
@@ -538,12 +620,28 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Player: walk cycle while moving, blink during i-frames.
     let pl = &world.player;
     let frame = if pl.moving { 1 + ((time * 8.0) as usize % 2) } else { 0 };
-    let fox = pl.fox > 0.0;
-    let blink = !fox && pl.iframes > 0.0 && ((time * 20.0) as i32) % 2 == 0;
+    let form = world.form_kind();
+    let fox = form == Some(SpecialKind::NineTails);
+    let hannya = form == Some(SpecialKind::Hannya);
+    let blink = form.is_none() && pl.iframes > 0.0 && ((time * 20.0) as i32) % 2 == 0;
     let tint = if blink { Color::new(1.0, 1.0, 1.0, 0.35) } else { WHITE };
     let t = time as f32;
     if fox {
         draw_fox_aura_and_tails(world, t);
+    }
+    if hannya {
+        draw_hannya_aura(world, t);
+    }
+    // Shadow Step afterimages (explode shortly) and streaks.
+    for (c, left) in &world.afterimages {
+        let k = left / 0.35;
+        draw_circle(c.x, c.y - 10.0, 18.0 * (1.5 - k), Color::new(0.6, 0.05, 0.1, 0.25 * (1.0 - k) + 0.1));
+        draw_texture_ex(&a.shun_hannya[0], (c.x - 12.0).round(), (c.y - 26.0).round(), Color::new(0.9, 0.15, 0.2, 0.55 * k + 0.2), DrawTextureParams::default());
+    }
+    for (from, to, age) in &fx.steps {
+        let k = 1.0 - age / 0.3;
+        draw_line(from.x, from.y - 10.0, to.x, to.y - 10.0, 6.0 * k, Color::new(0.5, 0.0, 0.08, 0.6 * k));
+        draw_line(from.x, from.y - 10.0, to.x, to.y - 10.0, 2.0 * k, Color::new(1.0, 0.4, 0.4, 0.8 * k));
     }
     // Fox Mirage clones: translucent, blue-shifted copies of Riku (gold while he's transformed).
     for c in &world.clones {
@@ -572,19 +670,38 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     }
     draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
-    let tex = if fox { &a.riku_fox[frame] } else { &a.hero(world.cfg.hero)[frame] };
+    let tex = if fox {
+        &a.riku_fox[frame]
+    } else if hannya {
+        &a.shun_hannya[frame]
+    } else {
+        &a.hero(world.cfg.hero)[frame]
+    };
     let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
     let params = DrawTextureParams { flip_x: pl.facing.x < 0.0, ..Default::default() };
-    if fox {
-        // Flaring chakra-cloak outline: the sprite tinted gold, offset in four directions.
+    if fox || hannya {
+        // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread), offset around.
         let flare = 0.45 + 0.25 * (t * 9.0).sin();
+        let glow = if fox { Color::new(1.0, 0.75, 0.2, flare) } else { Color::new(0.75, 0.0, 0.1, flare + 0.2) };
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
-            draw_texture_ex(tex, x + dx, y + dy, Color::new(1.0, 0.75, 0.2, flare), params.clone());
+            draw_texture_ex(tex, x + dx, y + dy, glow, params.clone());
         }
     }
+    let shun = world.cfg.hero == HeroId::Shun;
+    let flip = pl.facing.x < 0.0;
+    // Shun's blade sits behind him at rest; mid-swing it's drawn in front.
+    let swinging = fx.swing.0 > 0.0;
+    if shun && !swinging {
+        draw_blade(a, p, flip, hannya, None);
+    }
     draw_texture_ex(tex, x, y, tint, params);
-    if world.cfg.hero == HeroId::Riku {
-        draw_spirit_motes(p, t, fox);
+    if shun && swinging {
+        draw_blade(a, p, flip, hannya, Some(fx.swing));
+    }
+    match world.cfg.hero {
+        HeroId::Riku => draw_spirit_motes(p, t, fox),
+        HeroId::Shun => draw_reaper_wisps(p, t, hannya),
+        _ => {}
     }
     // Small HP bar under the player.
     let frac = pl.hp / pl.max_hp;
@@ -714,6 +831,24 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 }
                 draw_texture_ex(&a.familiar, (q.x - 6.0).round(), (q.y - 5.0).round(), WHITE, DrawTextureParams { flip_x: v.x < 0.0, ..Default::default() });
             }
+            ProjKind::CrescentWave => {
+                let hannya = world.form_kind() == Some(SpecialKind::Hannya);
+                let r = pr.radius[i] * 1.6;
+                let base = v.y.atan2(v.x);
+                let life = pr.life[i] / pr.max_life[i];
+                let (outer, inner) = if hannya {
+                    (Color::new(0.55, 0.0, 0.08, 0.8 * life + 0.2), Color::new(1.0, 0.35, 0.35, life))
+                } else {
+                    (Color::new(0.45, 0.35, 0.9, 0.7 * life + 0.2), Color::new(0.9, 0.9, 1.0, life))
+                };
+                for s in 0..10 {
+                    let a0 = base - 1.2 + s as f32 * 0.24;
+                    let a1 = a0 + 0.24;
+                    let thick = 6.0 * (1.0 - ((s as f32 - 4.5).abs() / 5.0));
+                    draw_line(q.x + a0.cos() * r, q.y + a0.sin() * r, q.x + a1.cos() * r, q.y + a1.sin() * r, thick + 2.0, outer);
+                    draw_line(q.x + a0.cos() * r, q.y + a0.sin() * r, q.x + a1.cos() * r, q.y + a1.sin() * r, thick * 0.5, inner);
+                }
+            }
             ProjKind::Shuriken => {
                 let size = pr.radius[i] * 2.2;
                 draw_circle(q.x, q.y, size * 0.55, Color::new(0.8, 0.9, 1.0, 0.12));
@@ -736,17 +871,59 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             draw_circle(c.x + a.cos() * d, c.y - 6.0 + a.sin() * d * 0.7 - k * 6.0, pr, Color::new(0.85, 0.88, 0.95, 0.45 * (1.0 - k)));
         }
     }
-    for (c, r, age, gold) in &fx.bursts {
-        let life = if *gold { 0.7 } else { 0.35 };
-        let k = age / life;
+    for t in &world.tethers {
+        if let Some(j) = world.enemies.id.iter().position(|id| *id == t.enemy) {
+            let e = world.enemies.pos[j];
+            let from = vec2(p.x, p.y - 8.0);
+            let to = vec2(e.x, e.y - 4.0);
+            let d = to - from;
+            let links = (d.length() / 7.0).max(2.0) as usize;
+            let sag = vec2(-d.y, d.x).normalize_or_zero() * (6.0 * (time as f32 * 4.0 + e.x * 0.05).sin());
+            for k in 0..=links {
+                let u = k as f32 / links as f32;
+                let c = from + d * u + sag * (4.0 * u * (1.0 - u));
+                let col = if k % 2 == 0 { Color::new(0.7, 0.55, 1.0, 0.9) } else { Color::new(0.4, 0.28, 0.8, 0.9) };
+                draw_circle_lines(c.x, c.y, 2.2, 1.2, col);
+            }
+            draw_circle(to.x, to.y, 6.0, Color::new(0.6, 0.45, 1.0, 0.25));
+        }
+    }
+    for s in &world.scars {
+        let k = (s.life / 1.5).min(1.0);
+        draw_line(s.from.x, s.from.y - 6.0, s.to.x, s.to.y - 6.0, 4.0, Color::new(0.55, 0.4, 1.0, 0.35 * k));
+        draw_line(s.from.x, s.from.y - 6.0, s.to.x, s.to.y - 6.0, 1.5, Color::new(1.0, 1.0, 1.0, 0.6 * k));
+    }
+    for (from, to, age) in &fx.iai {
+        let k = 1.0 - age / 0.25;
+        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 10.0 * k, Color::new(0.55, 0.45, 1.0, 0.5 * k));
+        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0, Color::new(1.0, 1.0, 1.0, k));
+    }
+    for (c, r, age) in &fx.pulses {
+        let k = age / 0.4;
+        draw_circle_lines(c.x, c.y, r * (0.4 + 0.6 * k), 2.5, Color::new(0.6, 0.85, 1.0, 0.8 * (1.0 - k)));
+    }
+    for (from, to, age) in &fx.beams {
+        let k = 1.0 - age / 0.3;
+        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 16.0 * k, Color::new(0.35, 0.0, 0.05, 0.55 * k));
+        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 9.0 * k, Color::new(0.9, 0.05, 0.15, 0.85 * k));
+        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0 * k, Color::new(1.0, 0.75, 0.75, k));
+    }
+    for (c, r, age, style) in &fx.bursts {
+        let k = age / burst_life(*style);
         let rr = r * (0.3 + 0.7 * k.sqrt());
-        let (fill, edge) = if *gold {
-            (Color::new(1.0, 0.7, 0.2, 0.35 * (1.0 - k)), Color::new(1.0, 0.9, 0.5, 0.9 * (1.0 - k)))
-        } else {
-            (Color::new(0.3, 0.65, 1.0, 0.35 * (1.0 - k)), Color::new(0.8, 0.95, 1.0, 0.9 * (1.0 - k)))
+        let fade = 1.0 - k;
+        let (fill, edge, width) = match style {
+            1 => (Color::new(1.0, 0.7, 0.2, 0.35 * fade), Color::new(1.0, 0.9, 0.5, 0.9 * fade), 5.0),
+            2 => (Color::new(0.6, 0.0, 0.1, 0.4 * fade), Color::new(1.0, 0.3, 0.3, 0.9 * fade), 3.0),
+            3 => (Color::new(0.25, 0.0, 0.05, 0.55 * fade), Color::new(1.0, 0.15, 0.2, fade), 8.0),
+            _ => (Color::new(0.3, 0.65, 1.0, 0.35 * fade), Color::new(0.8, 0.95, 1.0, 0.9 * fade), 2.0),
         };
         draw_circle(c.x, c.y, rr, fill);
-        draw_circle_lines(c.x, c.y, rr, if *gold { 5.0 } else { 2.0 }, edge);
+        if *style == 3 {
+            draw_circle(c.x, c.y, rr * 0.6, Color::new(0.05, 0.0, 0.02, 0.5 * fade));
+            draw_circle_lines(c.x, c.y, rr * 0.8, 4.0, Color::new(0.9, 0.05, 0.1, 0.7 * fade));
+        }
+        draw_circle_lines(c.x, c.y, rr, width, edge);
     }
 
     // Enemy fireballs: drawn above everything so they always read as danger.
@@ -846,5 +1023,86 @@ fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
         let a = (1.0 - phase) * if fox { 0.95 } else { 0.55 };
         let s = if fox && k % 3 == 0 { 2.0 } else { 1.0 };
         draw_rectangle(x, y, s, s, Color::new(1.0, 0.85, 0.35, a));
+    }
+}
+
+fn burst_life(style: u8) -> f32 {
+    match style {
+        1 => 0.7,
+        2 => 0.4,
+        3 => 1.0,
+        _ => 0.35,
+    }
+}
+
+/// Shun's oversized nodachi, pivoting at his right hand. `swing`: (time left, direction).
+fn draw_blade(a: &Assets, p: sim::Vec2, flip: bool, hannya: bool, swing: Option<(f32, Vec2)>) {
+    let tex = if hannya { &a.cleaver_hannya } else { &a.cleaver };
+    let side = if flip { -1.0 } else { 1.0 };
+    let hand = vec2(p.x + 8.0 * side, p.y - 6.0);
+    let rot = match swing {
+        // Sweep the blade through ~150 degrees around the swing direction.
+        Some((left, dir)) => {
+            let k = 1.0 - left / 0.2;
+            let d = if dir == Vec2::ZERO { vec2(side, 0.0) } else { dir };
+            d.y.atan2(d.x) + std::f32::consts::FRAC_PI_2 - 1.3 + 2.6 * k
+        }
+        // Resting over the shoulder.
+        None => 0.55 * side,
+    };
+    draw_texture_ex(
+        tex,
+        hand.x - 4.5,
+        hand.y - 35.0,
+        WHITE,
+        DrawTextureParams { rotation: rot, pivot: Some(hand), flip_x: flip, ..Default::default() },
+    );
+}
+
+/// Hannya Unbound: a pulsing crimson-black aura with dark flames licking upward.
+fn draw_hannya_aura(world: &World, t: f32) {
+    let p = world.player.pos;
+    let pulse = 0.5 + 0.5 * (t * 7.0).sin();
+    let r = sim::content::HANNYA_AURA_RADIUS;
+    draw_circle(p.x, p.y - 6.0, r * 1.3, Color::new(0.3, 0.0, 0.05, 0.16 + 0.06 * pulse));
+    draw_circle(p.x, p.y - 6.0, r, Color::new(0.55, 0.0, 0.08, 0.14 + 0.06 * pulse));
+    draw_circle_lines(p.x, p.y - 6.0, r * (0.95 + 0.05 * pulse), 2.0, Color::new(1.0, 0.2, 0.25, 0.6));
+    for k in 0..18 {
+        let kf = k as f32;
+        let ph = (t * 1.6 + kf * 0.29).fract();
+        let a = kf * 2.39;
+        let rr = 10.0 + (k % 5) as f32 * 9.0;
+        let x = p.x + a.cos() * rr;
+        let y = p.y - 4.0 + a.sin() * rr * 0.5 - ph * 40.0;
+        let c = if k % 3 == 0 { Color::new(0.05, 0.0, 0.02, 0.8 * (1.0 - ph)) } else { Color::new(0.95, 0.1, 0.15, 0.85 * (1.0 - ph)) };
+        draw_rectangle(x, y, 2.0, 3.0, c);
+    }
+    // Hannya's Wrath charging: a ring of dread collapsing inward.
+    if world.player.form <= sim::content::HANNYA_FINALE_CHARGE {
+        let k = 1.0 - world.player.form / sim::content::HANNYA_FINALE_CHARGE;
+        let rr = sim::content::HANNYA_FINALE_RADIUS * (1.0 - k * 0.8);
+        draw_circle_lines(p.x, p.y - 6.0, rr, 4.0, Color::new(1.0, 0.1, 0.15, 0.4 + 0.5 * k));
+        draw_circle(p.x, p.y - 30.0, 6.0 + 16.0 * k, Color::new(0.1, 0.0, 0.03, 0.9));
+        draw_circle_lines(p.x, p.y - 30.0, 6.0 + 16.0 * k, 2.0, Color::new(1.0, 0.2, 0.25, 1.0));
+    }
+}
+
+/// Spirit wisps around Shun: pale violet in base form, crimson and black when unbound.
+fn draw_reaper_wisps(p: sim::Vec2, t: f32, hannya: bool) {
+    let n = if hannya { 10 } else { 7 };
+    for k in 0..n {
+        let kf = k as f32;
+        let a = t * (0.9 + 0.1 * (k % 3) as f32) + kf * std::f32::consts::TAU / n as f32;
+        let r = 13.0 + 3.0 * (t * 2.0 + kf).sin();
+        let x = p.x + a.cos() * r;
+        let y = p.y - 10.0 + a.sin() * r * 0.6;
+        let c = if hannya {
+            if k % 2 == 0 { Color::new(0.9, 0.1, 0.15, 0.8) } else { Color::new(0.05, 0.0, 0.03, 0.8) }
+        } else if k % 3 == 0 {
+            Color::new(0.2, 0.15, 0.3, 0.6)
+        } else {
+            Color::new(0.75, 0.7, 1.0, 0.55)
+        };
+        draw_rectangle(x, y, 2.0, 2.0, c);
     }
 }
