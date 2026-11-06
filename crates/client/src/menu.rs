@@ -160,6 +160,12 @@ pub fn char_select(profile: &mut Profile, assets: &Assets, cursor: &mut usize, t
         draw_text(&format!("Innate: {}", def.innate_text), px + 20.0, py + 142.0, 22.0, Color::new(0.6, 1.0, 0.7, 1.0));
         if !def.finished {
             draw_text("Placeholder: own sprite and special move coming later.", px + 20.0, py + 178.0, 18.0, DIM);
+        } else {
+            let what = match def.special {
+                sim::content::SpecialKind::Barrier => "a purifying ring that erases fireballs",
+                sim::content::SpecialKind::NineTails => "8s transformation: nine tails, aura, golden orb volleys",
+            };
+            draw_text(&format!("Special: {} ({what})", def.special_name), px + 20.0, py + 178.0, 18.0, Color::new(1.0, 0.8, 0.45, 1.0));
         }
     } else {
         draw_text("LOCKED", px + 20.0, py + 44.0, 32.0, DIM);

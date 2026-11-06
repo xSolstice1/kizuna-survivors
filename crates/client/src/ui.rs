@@ -57,14 +57,21 @@ pub fn hud(world: &World, assets: &Assets) {
     draw_rectangle(16.0, 24.0, 200.0, 14.0, Color::from_rgba(40, 20, 30, 230));
     draw_rectangle(16.0, 24.0, 200.0 * (p.hp / p.max_hp), 14.0, Color::from_rgba(255, 80, 110, 255));
     draw_text(&format!("{:.0} / {:.0}", p.hp, p.max_hp), 22.0, 36.0, 16.0, WHITE);
-    // Special meter.
+    // Special meter (or, while transformed, the time left in Ninefold Foxfire).
     let full = p.special >= 1.0;
     let glow = if full { 0.75 + 0.25 * (get_time() * 6.0).sin() as f32 } else { 1.0 };
     draw_rectangle(16.0, 42.0, 200.0, 8.0, Color::from_rgba(30, 30, 50, 230));
-    draw_rectangle(16.0, 42.0, 200.0 * p.special, 8.0, Color::new(1.0 * glow, 0.85 * glow, 0.45 * glow, 1.0));
-    if full {
-        let name = if world.cfg.hero == sim::content::HeroId::Ren { "PURIFY" } else { "BARRIER" };
-        draw_text(&format!("{name}  [Space]"), 222.0, 51.0, 18.0, Color::new(1.0, 0.9, 0.5, glow));
+    if p.fox > 0.0 {
+        let f = p.fox / sim::content::FOX_DURATION;
+        let flick = 0.8 + 0.2 * (get_time() * 14.0).sin() as f32;
+        draw_rectangle(16.0, 42.0, 200.0 * f, 8.0, Color::new(1.0, 0.6 * flick, 0.15, 1.0));
+        draw_text(&format!("NINEFOLD FOXFIRE  {:.0}s", p.fox.ceil()), 222.0, 51.0, 18.0, Color::new(1.0, 0.75, 0.3, flick));
+    } else {
+        draw_rectangle(16.0, 42.0, 200.0 * p.special, 8.0, Color::new(1.0 * glow, 0.85 * glow, 0.45 * glow, 1.0));
+        if full {
+            let name = hero_def(world.cfg.hero).special_name.to_uppercase();
+            draw_text(&format!("{name}  [Space]"), 222.0, 51.0, 18.0, Color::new(1.0, 0.9, 0.5, glow));
+        }
     }
     let hero = hero_def(world.cfg.hero);
     let dim = Color::new(1.0, 1.0, 1.0, 0.5);

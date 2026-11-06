@@ -53,6 +53,11 @@ fn tuning(s: Sfx) -> (f32, f64) {
         Sfx::Thud => (0.4, 0.06),
         Sfx::Drum => (0.45, 0.12),
         Sfx::Fwoosh => (0.3, 0.15),
+        Sfx::Charge => (0.3, 0.15),
+        Sfx::FoxBurst => (0.4, 0.06),
+        Sfx::Yip => (0.3, 0.1),
+        Sfx::Spin => (0.3, 0.2),
+        Sfx::Volley => (0.45, 0.2),
         Sfx::Warble => (0.35, 0.12),
         Sfx::Hurt => (0.6, 0.12),
         Sfx::Click => (0.5, 0.03),
@@ -163,7 +168,14 @@ impl Audio {
                 Event::Fired(WeaponKind::Ofuda) => Sfx::Paper,
                 Event::Fired(WeaponKind::Taiko) => Sfx::Drum,
                 Event::Fired(WeaponKind::FlamePool) => Sfx::Fwoosh,
+                Event::Fired(WeaponKind::FoxfireOrb) => Sfx::Charge,
+                Event::Fired(WeaponKind::Familiars) => Sfx::Yip,
+                Event::Fired(WeaponKind::GaleShuriken) => Sfx::Spin,
                 Event::Fired(_) => continue,
+                Event::Burst { .. } => Sfx::FoxBurst,
+                Event::FoxAwakened { .. } => Sfx::FoxAwaken,
+                Event::FoxVolley => Sfx::Volley,
+                Event::FoxFaded => Sfx::FoxFade,
             };
             self.play(s);
         }

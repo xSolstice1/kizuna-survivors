@@ -2,6 +2,7 @@
 
 use macroquad::prelude::*;
 use sim::content::{EnemyKind, HeroId, PassiveKind, Upgrade, WeaponKind, ALL_HEROES};
+use sim::world::ProjKind;
 use sim::{Event, World};
 
 use crate::sprites;
@@ -13,6 +14,10 @@ pub const SCALE: f32 = 2.0;
 pub struct Assets {
     /// Per hero (in `ALL_HEROES` order): idle, walk A, walk B.
     heroes: Vec<[Texture2D; 3]>,
+    /// Riku in Ninefold Foxfire form (idle, walk A, walk B).
+    riku_fox: [Texture2D; 3],
+    familiar: Texture2D,
+    shuriken: Texture2D,
     pub coin: Texture2D,
     pub wisp: Texture2D,
     pub kasa: Texture2D,
@@ -32,18 +37,24 @@ pub struct Assets {
 impl Assets {
     pub fn load() -> Self {
         let base = include_str!("../../../art/src/heroine.px");
+        // Legs occupy rows 27..32; left leg columns 5..10, right leg 14..19 (Riku matches this frame).
+        let frames = |hero: sprites::Sprite| {
+            let walk_a = hero.lift(5..10, 27..32);
+            let walk_b = hero.lift(14..19, 27..32);
+            [hero.texture(), walk_a.texture(), walk_b.texture()]
+        };
         let heroes = ALL_HEROES
             .iter()
-            .map(|h| {
-                let hero = sprites::parse(&sprites::recolor(base, hero_palette(*h)));
-                // Legs occupy rows 27..32; left leg columns 5..10, right leg 14..19.
-                let walk_a = hero.lift(5..10, 27..32);
-                let walk_b = hero.lift(14..19, 27..32);
-                [hero.texture(), walk_a.texture(), walk_b.texture()]
+            .map(|h| match h {
+                HeroId::Riku => frames(sprites::parse(include_str!("../../../art/src/riku.px"))),
+                _ => frames(sprites::parse(&sprites::recolor(base, hero_palette(*h)))),
             })
             .collect();
         Assets {
             heroes,
+            riku_fox: frames(sprites::parse(include_str!("../../../art/src/riku_fox.px"))),
+            familiar: sprites::texture(include_str!("../../../art/src/familiar.px")),
+            shuriken: sprites::texture(include_str!("../../../art/src/shuriken.px")),
             coin: sprites::texture(include_str!("../../../art/src/coin.px")),
             wisp: sprites::texture(include_str!("../../../art/src/wisp.px")),
             kasa: sprites::texture(include_str!("../../../art/src/kasa.px")),
@@ -62,6 +73,9 @@ impl Assets {
             ("crescent", sprites::texture(include_str!("../../../art/src/icons/crescent.px"))),
             ("expanse", sprites::texture(include_str!("../../../art/src/icons/expanse.px"))),
             ("flame_pool", sprites::texture(include_str!("../../../art/src/icons/flame_pool.px"))),
+            ("foxfire_orb", sprites::texture(include_str!("../../../art/src/icons/foxfire_orb.px"))),
+            ("familiars", sprites::texture(include_str!("../../../art/src/icons/familiars.px"))),
+            ("gale_shuriken", sprites::texture(include_str!("../../../art/src/icons/gale_shuriken.px"))),
             ("guard", sprites::texture(include_str!("../../../art/src/icons/guard.px"))),
             ("haste", sprites::texture(include_str!("../../../art/src/icons/haste.px"))),
             ("magnetism", sprites::texture(include_str!("../../../art/src/icons/magnetism.px"))),
@@ -100,6 +114,9 @@ impl Assets {
                 WeaponKind::StarFall => "star_fall",
                 WeaponKind::Crescent => "crescent",
                 WeaponKind::FlamePool => "flame_pool",
+                WeaponKind::FoxfireOrb => "foxfire_orb",
+                WeaponKind::Familiars => "familiars",
+                WeaponKind::GaleShuriken => "gale_shuriken",
             },
             Upgrade::Passive(p) => match p {
                 PassiveKind::Might => "might",
@@ -123,7 +140,7 @@ impl Assets {
 /// Palette chars: H/h/L hair, C/c outfit, I eyes, R ribbon.
 fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
     match h {
-        HeroId::Ren => &[],
+        HeroId::Ren | HeroId::Riku => &[],
         HeroId::Kaede => &[('H', "#33334a"), ('h', "#1c1c2a"), ('L', "#5a5a7a"), ('C', "#2f5a3a"), ('c', "#1d3a25"), ('I', "#e84a4a"), ('R', "#c9a040")],
         HeroId::Mika => &[('H', "#ffd45a"), ('h', "#d49a2a"), ('L', "#fff0a0"), ('C', "#e88ac8"), ('c', "#b0609a"), ('I', "#4ac0ff"), ('R', "#ff5aa0")],
         HeroId::Haru => &[('H', "#c8cde0"), ('h', "#8890aa"), ('L', "#ffffff"), ('C', "#3a3a8a"), ('c', "#24245a"), ('I', "#6a7cff"), ('R', "#e83a3a")],
@@ -159,6 +176,8 @@ pub struct Fx {
     slashes: Vec<(Vec2, Vec2, f32, bool, f32)>,
     /// Star Fall impacts: (pos, radius, age).
     impacts: Vec<(Vec2, f32, f32)>,
+    /// Foxfire bursts and the transformation blast: (pos, radius, age, gold?).
+    bursts: Vec<(Vec2, f32, f32, bool)>,
     pub shake: f32,
     pub show_numbers: bool,
     /// Short line spoken by the hero, shown above her head.
@@ -185,6 +204,7 @@ impl Fx {
         self.bolts.clear();
         self.slashes.clear();
         self.impacts.clear();
+        self.bursts.clear();
         self.shake = 0.0;
         self.banner = None;
         self.leveled_once = false;
@@ -297,6 +317,14 @@ impl Fx {
                     self.impacts.push((vec2(pos.x, pos.y), radius, 0.0));
                     self.shake = self.shake.max(0.04);
                 }
+                Event::Burst { pos, radius } => self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, false)),
+                Event::FoxAwakened { pos } => {
+                    self.bursts.push((vec2(pos.x, pos.y), sim::content::FOX_BLAST_RADIUS, 0.0, true));
+                    self.announce("NINEFOLD FOXFIRE".into());
+                    self.say(self.lines().special);
+                    self.shake = self.shake.max(0.5);
+                }
+                Event::FoxFaded => self.say("Phew... the foxfire's cooling."),
                 Event::Awakened(k) => {
                     self.announce(format!("AWAKENING: {}", sim::content::awakened_name(k)));
                     self.say(self.lines().awaken);
@@ -328,6 +356,8 @@ impl Fx {
         self.slashes.retain(|s| s.4 < 0.2);
         self.impacts.iter_mut().for_each(|i| i.2 += dt);
         self.impacts.retain(|i| i.2 < 0.3);
+        self.bursts.iter_mut().for_each(|b| b.2 += dt);
+        self.bursts.retain(|b| b.2 < if b.3 { 0.7 } else { 0.35 });
         self.shake = (self.shake - dt).max(0.0);
         for t in [&mut self.bark, &mut self.banner] {
             if let Some((_, left)) = t {
@@ -499,16 +529,28 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Player: walk cycle while moving, blink during i-frames.
     let pl = &world.player;
     let frame = if pl.moving { 1 + ((time * 8.0) as usize % 2) } else { 0 };
-    let blink = pl.iframes > 0.0 && ((time * 20.0) as i32) % 2 == 0;
+    let fox = pl.fox > 0.0;
+    let blink = !fox && pl.iframes > 0.0 && ((time * 20.0) as i32) % 2 == 0;
     let tint = if blink { Color::new(1.0, 1.0, 1.0, 0.35) } else { WHITE };
+    let t = time as f32;
+    if fox {
+        draw_fox_aura_and_tails(world, t);
+    }
     draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
-    draw_texture_ex(
-        &a.hero(world.cfg.hero)[frame],
-        (p.x - 12.0).round(),
-        (p.y - 26.0).round(),
-        tint,
-        DrawTextureParams { flip_x: pl.facing.x < 0.0, ..Default::default() },
-    );
+    let tex = if fox { &a.riku_fox[frame] } else { &a.hero(world.cfg.hero)[frame] };
+    let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
+    let params = DrawTextureParams { flip_x: pl.facing.x < 0.0, ..Default::default() };
+    if fox {
+        // Flaring chakra-cloak outline: the sprite tinted gold, offset in four directions.
+        let flare = 0.45 + 0.25 * (t * 9.0).sin();
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+            draw_texture_ex(tex, x + dx, y + dy, Color::new(1.0, 0.75, 0.2, flare), params.clone());
+        }
+    }
+    draw_texture_ex(tex, x, y, tint, params);
+    if world.cfg.hero == HeroId::Riku {
+        draw_spirit_motes(p, t, fox);
+    }
     // Small HP bar under the player.
     let frac = pl.hp / pl.max_hp;
     draw_rectangle(p.x - 10.0, p.y + 9.0, 20.0, 2.0, Color::from_rgba(40, 20, 30, 255));
@@ -571,15 +613,96 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let gold = world.weapons.iter().any(|w| w.kind == WeaponKind::Ofuda && w.awakened);
     let ink = if gold { Color::new(1.0, 0.85, 0.35, 1.0) } else { WHITE };
     let pr = &world.projectiles;
+    let t = time as f32;
     for i in 0..pr.len() {
         let (q, v) = (pr.pos[i], pr.vel[i]);
-        draw_texture_ex(
-            &a.talisman,
-            q.x - 3.0,
-            q.y - 5.0,
-            ink,
-            DrawTextureParams { rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() },
-        );
+        match pr.kind[i] {
+            ProjKind::Talisman => draw_texture_ex(
+                &a.talisman,
+                q.x - 3.0,
+                q.y - 5.0,
+                ink,
+                DrawTextureParams { rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() },
+            ),
+            ProjKind::Foxfire | ProjKind::Comet => {
+                let comet = pr.kind[i] == ProjKind::Comet;
+                // While charging the orb swells and sparks spiral into it.
+                let grow = if pr.charge[i] > 0.0 { 1.0 - (pr.charge[i] / 0.55).min(1.0) } else { 1.0 };
+                let r = 3.0 + 5.0 * grow;
+                if pr.charge[i] > 0.0 {
+                    for k in 0..5 {
+                        let a = t * 9.0 + k as f32 * 1.256;
+                        let d = 14.0 * (1.0 - ((t * 2.5 + k as f32 * 0.2) % 1.0));
+                        draw_rectangle(q.x + a.cos() * d - 1.0, q.y + a.sin() * d - 1.0, 2.0, 2.0, Color::new(0.75, 0.95, 1.0, 0.9));
+                    }
+                } else {
+                    let back = v.normalize_or_zero() * -1.0;
+                    for k in 1..4 {
+                        let c = q + back * (k as f32 * 4.0);
+                        draw_circle(c.x, c.y, r * (1.0 - k as f32 * 0.22), Color::new(0.25, 0.6, 1.0, 0.35 / k as f32));
+                    }
+                }
+                let (outer, mid) = if comet {
+                    (Color::new(0.55, 0.45, 1.0, 0.35), Color::new(0.5, 0.75, 1.0, 1.0))
+                } else {
+                    (Color::new(0.2, 0.55, 1.0, 0.3), Color::new(0.25, 0.65, 1.0, 1.0))
+                };
+                draw_circle(q.x, q.y, r * 1.8, outer);
+                draw_circle(q.x, q.y, r, mid);
+                draw_circle(q.x, q.y, r * 0.55, Color::new(0.85, 0.97, 1.0, 1.0));
+                // Swirl: two bright arcs rotating around the core.
+                for k in 0..2 {
+                    let a = t * 14.0 + k as f32 * std::f32::consts::PI;
+                    draw_circle(q.x + a.cos() * r * 0.7, q.y + a.sin() * r * 0.7, r * 0.22, WHITE);
+                }
+            }
+            ProjKind::Spark => {
+                draw_circle(q.x, q.y, 5.0, Color::new(0.4, 0.7, 1.0, 0.35));
+                draw_circle(q.x, q.y, 2.5, Color::new(0.85, 0.97, 1.0, 1.0));
+            }
+            ProjKind::GoldenOrb => {
+                let r = 13.0;
+                draw_circle(q.x, q.y, r * 1.7, Color::new(1.0, 0.55, 0.1, 0.22));
+                draw_circle(q.x, q.y, r, Color::new(1.0, 0.65, 0.15, 0.95));
+                draw_circle(q.x, q.y, r * 0.65, Color::new(1.0, 0.88, 0.4, 1.0));
+                draw_circle(q.x, q.y, r * 0.3, WHITE);
+                for k in 0..4 {
+                    let a = t * 16.0 + k as f32 * std::f32::consts::FRAC_PI_2;
+                    draw_line(q.x + a.cos() * r * 0.3, q.y + a.sin() * r * 0.3, q.x + (a + 0.9).cos() * r * 0.95, q.y + (a + 0.9).sin() * r * 0.95, 2.0, Color::new(1.0, 1.0, 0.85, 0.9));
+                }
+            }
+            ProjKind::Familiar => {
+                let back = v.normalize_or_zero() * -1.0;
+                for k in 1..4 {
+                    let c = q + back * (k as f32 * 3.5);
+                    draw_rectangle(c.x - 1.0, c.y - 1.0, 2.0, 2.0, Color::new(1.0, 0.75, 0.3, 0.8 - k as f32 * 0.2));
+                }
+                draw_texture_ex(&a.familiar, (q.x - 6.0).round(), (q.y - 5.0).round(), WHITE, DrawTextureParams { flip_x: v.x < 0.0, ..Default::default() });
+            }
+            ProjKind::Shuriken => {
+                let size = pr.radius[i] * 2.2;
+                draw_circle(q.x, q.y, size * 0.55, Color::new(0.8, 0.9, 1.0, 0.12));
+                draw_texture_ex(
+                    &a.shuriken,
+                    q.x - size / 2.0,
+                    q.y - size / 2.0,
+                    WHITE,
+                    DrawTextureParams { dest_size: Some(vec2(size, size)), rotation: t * 22.0, ..Default::default() },
+                );
+            }
+        }
+    }
+    for (c, r, age, gold) in &fx.bursts {
+        let life = if *gold { 0.7 } else { 0.35 };
+        let k = age / life;
+        let rr = r * (0.3 + 0.7 * k.sqrt());
+        let (fill, edge) = if *gold {
+            (Color::new(1.0, 0.7, 0.2, 0.35 * (1.0 - k)), Color::new(1.0, 0.9, 0.5, 0.9 * (1.0 - k)))
+        } else {
+            (Color::new(0.3, 0.65, 1.0, 0.35 * (1.0 - k)), Color::new(0.8, 0.95, 1.0, 0.9 * (1.0 - k)))
+        };
+        draw_circle(c.x, c.y, rr, fill);
+        draw_circle_lines(c.x, c.y, rr, if *gold { 5.0 } else { 2.0 }, edge);
     }
 
     // Enemy fireballs: drawn above everything so they always read as danger.
@@ -636,5 +759,48 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let alpha = left.min(0.4) / 0.4;
         draw_rectangle(s.x - d.width / 2.0 - 8.0, s.y - 20.0, d.width + 16.0, 28.0, Color::new(0.05, 0.03, 0.1, 0.8 * alpha));
         draw_text(line, s.x - d.width / 2.0, s.y, 20.0, Color::new(1.0, 0.9, 0.95, alpha));
+    }
+}
+
+/// Ninefold Foxfire: golden aura and nine lashing foxfire tails behind the player.
+fn draw_fox_aura_and_tails(world: &World, t: f32) {
+    let p = world.player.pos;
+    let pulse = 0.5 + 0.5 * (t * 6.0).sin();
+    let ar = sim::content::FOX_AURA_RADIUS;
+    draw_circle(p.x, p.y - 6.0, ar * 1.25, Color::new(1.0, 0.55, 0.1, 0.07 + 0.04 * pulse));
+    draw_circle(p.x, p.y - 6.0, ar, Color::new(1.0, 0.7, 0.2, 0.10 + 0.05 * pulse));
+    draw_circle_lines(p.x, p.y - 6.0, ar, 1.5, Color::new(1.0, 0.85, 0.4, 0.5));
+    for (k, (root, tip)) in world.fox_tails().iter().enumerate() {
+        let d = *tip - *root;
+        let n = vec2(-d.y, d.x).normalize_or_zero();
+        // A curved, tapering flame: bend the midpoint sideways, wave along the length.
+        let bend = (t * 6.0 + k as f32 * 1.3).sin() * 14.0;
+        let steps = 22;
+        for i in 0..=steps {
+            let u = i as f32 / steps as f32;
+            let base = vec2(root.x, root.y) + vec2(d.x, d.y) * u;
+            let off = n * (bend * 4.0 * u * (1.0 - u) + (t * 11.0 - u * 6.0 + k as f32).sin() * 2.0 * u);
+            let c = base + off;
+            let r = 7.5 * (1.0 - u * 0.7);
+            draw_circle(c.x, c.y, r * 1.5, Color::new(1.0, 0.45, 0.05, 0.12));
+            draw_circle(c.x, c.y, r, Color::new(1.0, 0.62, 0.12, 0.55));
+            draw_circle(c.x, c.y, r * 0.5, Color::new(1.0, 0.92, 0.55, 0.75));
+        }
+    }
+}
+
+/// Golden spirit motes around Riku: a few in base form, a storm while transformed.
+fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
+    let n = if fox { 28 } else { 6 };
+    for k in 0..n {
+        let kf = k as f32;
+        let phase = (t * (0.5 + (k % 5) as f32 * 0.08) + kf * 0.37).fract();
+        let ang = kf * 2.399;
+        let rad = if fox { 14.0 + (k % 7) as f32 * 7.0 } else { 9.0 + (k % 3) as f32 * 3.0 };
+        let x = p.x + ang.cos() * rad;
+        let y = p.y - 8.0 + ang.sin() * rad * 0.5 - phase * if fox { 46.0 } else { 18.0 };
+        let a = (1.0 - phase) * if fox { 0.95 } else { 0.55 };
+        let s = if fox && k % 3 == 0 { 2.0 } else { 1.0 };
+        draw_rectangle(x, y, s, s, Color::new(1.0, 0.85, 0.35, a));
     }
 }

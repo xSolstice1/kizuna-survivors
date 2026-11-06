@@ -80,7 +80,9 @@ async fn main() {
     next_frame().await;
     ui::loading();
     next_frame().await;
+    let t_audio = get_time();
     let mut audio = audio::Audio::load(profile.music_volume, profile.sfx_volume).await;
+    macroquad::logging::info!("audio ready in {:.2}s", get_time() - t_audio);
     // Which run-end jingle has played (so it plays once).
     let mut jingle_played = false;
 
@@ -209,7 +211,7 @@ async fn main() {
         }
         // Dev shortcuts (remove before release): F2 skip to the mid-boss, F3 max loadout, F4 open a chest,
         // F5 open a legendary chest, F6 every library weapon (ignores hero pool/slots), F7 shrine underfoot,
-        // F8 skip to the Night Lord.
+        // F8 skip to the Night Lord, F9 fill the special meter.
         if is_key_pressed(KeyCode::F2) {
             world.time = world.time.max(sim::content::MIDBOSS_AT - 3.0);
         }
@@ -227,6 +229,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::F7) {
             world.shrine = Some(world.player.pos);
+        }
+        if is_key_pressed(KeyCode::F9) {
+            world.player.special = 1.0;
         }
         if is_key_pressed(KeyCode::F8) {
             world.time = world.time.max(sim::content::RUN_SECONDS - 3.0);

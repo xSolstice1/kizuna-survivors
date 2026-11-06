@@ -179,9 +179,16 @@ pub enum Sfx {
     Card,
     Victory,
     Defeat,
+    Charge,
+    FoxBurst,
+    FoxAwaken,
+    Volley,
+    Yip,
+    Spin,
+    FoxFade,
 }
 
-pub const ALL_SFX: [Sfx; 32] = [
+pub const ALL_SFX: [Sfx; 39] = [
     Sfx::Hit,
     Sfx::Pop,
     Sfx::BigPop,
@@ -214,6 +221,13 @@ pub const ALL_SFX: [Sfx; 32] = [
     Sfx::Card,
     Sfx::Victory,
     Sfx::Defeat,
+    Sfx::Charge,
+    Sfx::FoxBurst,
+    Sfx::FoxAwaken,
+    Sfx::Volley,
+    Sfx::Yip,
+    Sfx::Spin,
+    Sfx::FoxFade,
 ];
 
 /// Bell-like tone: inharmonic sine partials.
@@ -418,6 +432,50 @@ pub fn sfx(s: Sfx) -> Buf {
                 b.add(i as f32 * 0.35, Note::new(Tri, midi(*n), 0.7, 0.3).vib(0.01, 5.0));
             }
             bell(&mut b, 1.05, midi(50.0), 1.3, 0.4);
+        }
+        Sfx::Charge => {
+            // Rising, shimmering hum as foxfire gathers in the hand.
+            b = Buf::new(0.6);
+            b.add(0.0, Note::new(Sine, 220.0, 0.6, 0.3).slide(880.0).env(0.3, 0.4).vib(0.03, 18.0));
+            b.add(0.0, Note::new(Noise, 1.0, 0.6, 0.18).lp(3000.0).env(0.4, 0.5));
+        }
+        Sfx::FoxBurst => {
+            b = Buf::new(0.4);
+            b.add(0.0, Note::new(Noise, 1.0, 0.35, 0.5).lp(3500.0).env(0.001, 2.5));
+            b.add(0.0, Note::new(Sine, 520.0, 0.3, 0.35).slide(160.0));
+            b.add(0.0, Note::new(Tri, 1560.0, 0.15, 0.12).slide(780.0));
+        }
+        Sfx::FoxAwaken => {
+            // A howl over a blast and a rising roar of flame.
+            b = Buf::new(2.6);
+            b.add(0.0, Note::new(Noise, 1.0, 1.4, 0.7).lp(900.0).env(0.001, 1.6));
+            b.add(0.0, Note::new(Sine, 70.0, 1.4, 0.6).slide(35.0).env(0.002, 1.8));
+            b.add(0.15, Note::new(Saw, 330.0, 1.6, 0.18).slide(660.0).lp(2200.0).env(0.25, 1.2).vib(0.02, 6.0));
+            b.add(0.15, Note::new(Saw, 495.0, 1.6, 0.12).slide(990.0).lp(2200.0).env(0.25, 1.2).vib(0.02, 6.5));
+            for (i, n) in [69.0, 74.0, 76.0, 81.0].iter().enumerate() {
+                bell(&mut b, 0.25 + i as f32 * 0.09, midi(*n), 1.6, 0.18);
+            }
+        }
+        Sfx::Volley => {
+            b = Buf::new(0.35);
+            b.add(0.0, Note::new(Noise, 1.0, 0.25, 0.35).lp(2500.0).env(0.01, 2.0));
+            b.add(0.0, Note::new(Square(0.3), 440.0, 0.3, 0.18).slide(880.0).lp(3000.0));
+        }
+        Sfx::Yip => {
+            b = Buf::new(0.12);
+            b.add(0.0, Note::new(Tri, 1100.0, 0.1, 0.3).slide(1700.0).env(0.003, 1.5).vib(0.05, 30.0));
+        }
+        Sfx::Spin => {
+            b = Buf::new(0.5);
+            for k in 0..6 {
+                b.add(k as f32 * 0.07, Note::new(Noise, 1.0, 0.07, 0.25).lp(4500.0).env(0.02, 1.5));
+            }
+            b.add(0.0, Note::new(Sine, 700.0, 0.45, 0.08).vib(0.2, 14.0));
+        }
+        Sfx::FoxFade => {
+            b = Buf::new(0.9);
+            b.add(0.0, Note::new(Saw, 660.0, 0.9, 0.12).slide(220.0).lp(1500.0).env(0.01, 1.5));
+            b.add(0.0, Note::new(Noise, 1.0, 0.6, 0.15).lp(1200.0).env(0.05, 1.5));
         }
     }
     b
