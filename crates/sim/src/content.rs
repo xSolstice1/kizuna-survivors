@@ -495,6 +495,9 @@ impl HeroId {
             HeroId::Shun => "shun",
         }
     }
+    pub fn index(self) -> usize {
+        ALL_HEROES.iter().position(|h| *h == self).unwrap()
+    }
     pub fn from_key(k: &str) -> Option<HeroId> {
         ALL_HEROES.iter().copied().find(|h| h.key() == k)
     }

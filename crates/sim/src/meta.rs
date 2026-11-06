@@ -192,6 +192,21 @@ pub struct Profile {
     pub awakenings_found: Vec<WeaponKind>,
     pub passives_found: Vec<PassiveKind>,
     pub shrines_found: Vec<ShrineEvent>,
+    /// Lifetime statistics.
+    pub wins: u32,
+    pub deaths: u32,
+    pub dawn_outs: u32,
+    pub best_kills: u64,
+    pub time_played: f32,
+    pub sen_earned: u64,
+    pub chests_opened: u32,
+    pub shrines_taken: u32,
+    pub awakenings: u32,
+    pub specials_used: u32,
+    /// Per hero (indexed like `ALL_HEROES`): nights, wins, longest night.
+    pub hero_runs: [u32; ALL_HEROES.len()],
+    pub hero_wins: [u32; ALL_HEROES.len()],
+    pub hero_best: [f32; ALL_HEROES.len()],
     /// Settings (0..=1).
     pub music_volume: f32,
     pub sfx_volume: f32,
@@ -216,6 +231,19 @@ impl Default for Profile {
             awakenings_found: Vec::new(),
             passives_found: Vec::new(),
             shrines_found: Vec::new(),
+            wins: 0,
+            deaths: 0,
+            dawn_outs: 0,
+            best_kills: 0,
+            time_played: 0.0,
+            sen_earned: 0,
+            chests_opened: 0,
+            shrines_taken: 0,
+            awakenings: 0,
+            specials_used: 0,
+            hero_runs: [0; ALL_HEROES.len()],
+            hero_wins: [0; ALL_HEROES.len()],
+            hero_best: [0.0; ALL_HEROES.len()],
             music_volume: 0.6,
             sfx_volume: 0.8,
         }
@@ -290,6 +318,20 @@ impl Profile {
         self.great_onis += w.great_oni_defeated as u32;
         let night_lord = w.state == RunState::Won;
         self.night_lords += night_lord as u32;
+        self.wins += night_lord as u32;
+        self.deaths += (!night_lord && !w.dawn_out) as u32;
+        self.dawn_outs += w.dawn_out as u32;
+        self.best_kills = self.best_kills.max(w.kills);
+        self.time_played += w.time;
+        self.sen_earned += w.sen as u64;
+        self.chests_opened += w.chests_opened;
+        self.shrines_taken += w.shrines_taken.len() as u32;
+        self.awakenings += w.weapons.iter().filter(|x| x.awakened).count() as u32;
+        self.specials_used += w.specials_used;
+        let hi = w.cfg.hero.index();
+        self.hero_runs[hi] += 1;
+        self.hero_wins[hi] += night_lord as u32;
+        self.hero_best[hi] = self.hero_best[hi].max(w.time);
         let mut report = RunReport { sen: w.sen, unlocked: Vec::new(), discovered: 0 };
         for (i, k) in w.kills_by_kind.iter().enumerate() {
             report.discovered += (self.enemy_kills[i] == 0 && *k > 0) as u32;
@@ -350,6 +392,13 @@ impl Profile {
         s += &format!("passives={}\n", join(&self.passives_found));
         s += &format!("shrines={}\n", join(&self.shrines_found));
         s += &format!("music_volume={}\nsfx_volume={}\n", self.music_volume, self.sfx_volume);
+        s += &format!(
+            "wins={}\ndeaths={}\ndawn_outs={}\nbest_kills={}\ntime_played={}\nsen_earned={}\nchests={}\nshrines_taken={}\nawakened_total={}\nspecials={}\n",
+            self.wins, self.deaths, self.dawn_outs, self.best_kills, self.time_played, self.sen_earned, self.chests_opened, self.shrines_taken, self.awakenings, self.specials_used
+        );
+        for (i, h) in ALL_HEROES.iter().enumerate() {
+            s += &format!("hero.{}={},{},{}\n", h.key(), self.hero_runs[i], self.hero_wins[i], self.hero_best[i]);
+        }
         s
     }
 
@@ -384,9 +433,28 @@ impl Profile {
                 "awakenings" => p.awakenings_found = split(v, &ALL_WEAPONS),
                 "passives" => p.passives_found = split(v, &ALL_PASSIVES),
                 "shrines" => p.shrines_found = split(v, &ALL_SHRINE_EVENTS),
+                "wins" => p.wins = v.parse().unwrap_or(0),
+                "deaths" => p.deaths = v.parse().unwrap_or(0),
+                "dawn_outs" => p.dawn_outs = v.parse().unwrap_or(0),
+                "best_kills" => p.best_kills = v.parse().unwrap_or(0),
+                "time_played" => p.time_played = v.parse().unwrap_or(0.0),
+                "sen_earned" => p.sen_earned = v.parse().unwrap_or(0),
+                "chests" => p.chests_opened = v.parse().unwrap_or(0),
+                "shrines_taken" => p.shrines_taken = v.parse().unwrap_or(0),
+                "awakened_total" => p.awakenings = v.parse().unwrap_or(0),
+                "specials" => p.specials_used = v.parse().unwrap_or(0),
                 "music_volume" => p.music_volume = v.parse::<f32>().unwrap_or(0.6).clamp(0.0, 1.0),
                 "sfx_volume" => p.sfx_volume = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
                 _ => {
+                    if let Some(key) = k.strip_prefix("hero.") {
+                        if let Some(h) = HeroId::from_key(key) {
+                            let f: Vec<&str> = v.split(',').collect();
+                            let i = h.index();
+                            p.hero_runs[i] = f.first().and_then(|x| x.parse().ok()).unwrap_or(0);
+                            p.hero_wins[i] = f.get(1).and_then(|x| x.parse().ok()).unwrap_or(0);
+                            p.hero_best[i] = f.get(2).and_then(|x| x.parse().ok()).unwrap_or(0.0);
+                        }
+                    }
                     if let Some(key) = k.strip_prefix("enemy.") {
                         if let Some(i) = ALL_ENEMIES.iter().position(|e| key_of(e) == key) {
                             p.enemy_kills[i] = v.parse().unwrap_or(0);
@@ -453,6 +521,10 @@ mod tests {
         p.passives_found = vec![PassiveKind::Guard];
         p.shrines_found = vec![ShrineEvent::GlassBlade];
         p.music_volume = 0.25;
+        p.wins = 2;
+        p.time_played = 1234.5;
+        p.hero_runs[1] = 7;
+        p.hero_best[1] = 612.0;
         assert_eq!(Profile::parse(&p.serialize()), p);
         assert_eq!(Profile::parse("garbage\nsen=abc\nrank.might=99"), Profile { ranks: { let mut r = [0; 11]; r[0] = 5; r }, ..Default::default() });
     }

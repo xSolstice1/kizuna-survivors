@@ -506,6 +506,9 @@ pub struct World {
     pub kills_by_kind: [u32; ALL_ENEMIES.len()],
     /// Shrine Events taken this run.
     pub shrines_taken: Vec<ShrineEvent>,
+    /// Run counters for the Stats screen.
+    pub chests_opened: u32,
+    pub specials_used: u32,
     /// True if the run ended because dawn arrived with the Night Lord alive.
     pub dawn_out: bool,
     night_lord_spawned: bool,
@@ -590,6 +593,8 @@ impl World {
             great_oni_defeated: false,
             kills_by_kind: [0; ALL_ENEMIES.len()],
             shrines_taken: Vec::new(),
+            chests_opened: 0,
+            specials_used: 0,
             dawn_out: false,
             night_lord_spawned: false,
             pending_spawns: Vec::new(),
@@ -2376,6 +2381,7 @@ impl World {
     /// Rolls the reward count (85% 1 / 10% 2 / 4% 3 / 1% 5, at least `min_rewards`), then fills it:
     /// an Awakening first if one is eligible, then levels for owned items.
     pub fn open_chest(&mut self, min_rewards: u8) {
+        self.chests_opened += 1;
         let tier = chest_roll(self.rng.f32()).max(min_rewards);
         let sen = 10 * tier as u32 + self.rng.range(0.0, 10.0) as u32;
         self.gain_sen(sen);
@@ -2412,6 +2418,7 @@ impl World {
             return;
         }
         self.player.special = 0.0;
+        self.specials_used += 1;
         match hero_def(self.cfg.hero).special {
             SpecialKind::NineTails => return self.start_fox(),
             SpecialKind::Hannya => return self.start_hannya(),
