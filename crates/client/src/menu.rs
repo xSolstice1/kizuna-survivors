@@ -25,6 +25,14 @@ fn button(r: Rect, label: &str, enabled: bool) -> bool {
     kit::button(r, label, enabled, if primary { kit::Style::Primary } else { kit::Style::Secondary })
 }
 
+/// A fullscreen toggle (on iPhone Safari it explains Add to Home Screen instead).
+pub fn fullscreen_button(r: Rect) {
+    let ok = crate::platform::fullscreen_supported();
+    if kit::button(r, crate::platform::fullscreen_label(), ok, kit::Style::Secondary) {
+        crate::platform::toggle_fullscreen();
+    }
+}
+
 fn sen_badge(assets: &Assets, sen: u32) {
     let v = format!("{sen}");
     let w = kit::measure(&v, 20).width + kit::measure("SEN", 14).width + 28.0;
@@ -84,6 +92,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, time: f64) -> Option<MenuAc
     if button(Rect::new(x, h * 0.42 + 272.0, bw, bh), "Settings", true) || is_key_pressed(KeyCode::O) {
         action = Some(MenuAction::Settings);
     }
+    fullscreen_button(Rect::new(20.0, 18.0, 230.0, 40.0));
 
     centered("WASD / arrows to move   ·   Space: special   ·   Esc to pause", h * 0.42 + 360.0, 18.0, Color::new(1.0, 1.0, 1.0, 0.55));
     action
@@ -570,8 +579,9 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
     centered("SETTINGS", h * 0.22, 44.0, ACCENT);
     let mut changed = slider("Music", h * 0.36, &mut profile.music_volume);
     changed |= slider("Sound effects", h * 0.36 + 70.0, &mut profile.sfx_volume);
-    centered("All music and sound effects are generated in code.", h * 0.36 + 160.0, 18.0, DIM);
-    if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 200.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
+    fullscreen_button(Rect::new((screen_width() - 300.0) / 2.0, h * 0.36 + 140.0, 300.0, 46.0));
+    centered("All music and sound effects are generated in code.", h * 0.36 + 220.0, 16.0, DIM);
+    if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 250.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
         return Some(SettingsAction::Back);
     }
     changed.then_some(SettingsAction::Changed)

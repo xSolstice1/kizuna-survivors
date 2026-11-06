@@ -13,6 +13,7 @@ use crate::voice;
 /// World pixels → screen pixels (integer for crisp pixel art). Small screens (phones in
 /// landscape) zoom out to 1x so the horde stays visible.
 pub fn world_scale() -> f32 {
+    // screen_height() is in CSS pixels (macroquad scales to the device's density itself).
     if screen_height() < 560.0 {
         1.0
     } else {
@@ -1238,17 +1239,18 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
 
     // Damage numbers are drawn in screen space so the text stays crisp.
-    set_default_camera();
+    // Screen-space overlays use the virtual UI space so they scale with the rest of the UI.
+    kit::begin_ui();
     for n in &fx.numbers {
-        let s = cam.world_to_screen(n.pos);
+        let s = kit::to_ui(cam.world_to_screen(n.pos));
         let alpha = 1.0 - (n.age / 0.6).powi(2);
         let txt = format!("{:.0}", n.amount);
         kit::text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, 18.0, Color::new(0.0, 0.0, 0.0, alpha));
         kit::text(&txt, s.x - 5.0, s.y, 18.0, Color::new(1.0, 1.0, 1.0, alpha));
     }
     if let Some(s) = world.shrine {
-        let sp = cam.world_to_screen(vec2(s.x, s.y));
-        let (w, h) = (screen_width(), screen_height());
+        let sp = kit::to_ui(cam.world_to_screen(vec2(s.x, s.y)));
+        let (w, h) = (kit::screen_width(), kit::screen_height());
         // Only when the shrine sprite is fully out of view (it extends ~60px above its anchor).
         if sp.x < -30.0 || sp.y < -10.0 || sp.x > w + 30.0 || sp.y > h + 70.0 {
             let c = vec2(w / 2.0, h / 2.0);
@@ -1264,8 +1266,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
     // Off-screen chests get a gold arrow at the screen edge.
     for (c, tier) in &world.chests {
-        let sp = cam.world_to_screen(vec2(c.x, c.y));
-        let (w, h) = (screen_width(), screen_height());
+        let sp = kit::to_ui(cam.world_to_screen(vec2(c.x, c.y)));
+        let (w, h) = (kit::screen_width(), kit::screen_height());
         if sp.x < 0.0 || sp.y < 0.0 || sp.x > w || sp.y > h {
             let ctr = vec2(w / 2.0, h / 2.0);
             let d = (sp - ctr).normalize_or_zero();
@@ -1283,8 +1285,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
     // Off-screen pickups get a small coloured arrow at the screen edge.
     for (c, k) in &world.pickups {
-        let sp = cam.world_to_screen(vec2(c.x, c.y));
-        let (w, h) = (screen_width(), screen_height());
+        let sp = kit::to_ui(cam.world_to_screen(vec2(c.x, c.y)));
+        let (w, h) = (kit::screen_width(), kit::screen_height());
         if sp.x < 0.0 || sp.y < 0.0 || sp.x > w || sp.y > h {
             let ctr = vec2(w / 2.0, h / 2.0);
             let d = (sp - ctr).normalize_or_zero();
@@ -1300,7 +1302,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     }
     if let Some((line, left)) = &fx.bark {
-        let s = cam.world_to_screen(vec2(p.x, p.y - 34.0));
+        let s = kit::to_ui(cam.world_to_screen(vec2(p.x, p.y - 34.0)));
         let d = kit::measure(line, 20);
         let alpha = left.min(0.4) / 0.4;
         draw_rectangle(s.x - d.width / 2.0 - 8.0, s.y - 20.0, d.width + 16.0, 28.0, Color::new(0.05, 0.03, 0.1, 0.8 * alpha));

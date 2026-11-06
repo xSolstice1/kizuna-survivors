@@ -441,9 +441,10 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32) -> 
     if kit::button(Rect::new(rx + 30.0 + bw / 2.0 + 8.0, by + 88.0, bw / 2.0 - 8.0, 46.0), "Give up", true, Style::Danger) {
         action = Some(PauseAction::GiveUp);
     }
-    kit::panel_title("SOUND", rx + 18.0, by + 172.0, 16.0, GOLD);
-    let mut changed = mini_slider("Music", rx + 30.0, by + 186.0, rw - 60.0, music);
-    changed |= mini_slider("Effects", rx + 30.0, by + 218.0, rw - 60.0, sfx);
+    crate::menu::fullscreen_button(Rect::new(rx + 30.0, by + 144.0, bw, 40.0));
+    kit::panel_title("SOUND", rx + 18.0, by + 210.0, 16.0, GOLD);
+    let mut changed = mini_slider("Music", rx + 30.0, by + 224.0, rw - 60.0, music);
+    changed |= mini_slider("Effects", rx + 30.0, by + 256.0, rw - 60.0, sfx);
     kit::text("Esc resume  ·  R restart  ·  Q give up  ·  N damage numbers", rx + 30.0, by + panel_h - 240.0, 13.0, FAINT);
     if changed && action.is_none() {
         action = Some(PauseAction::Volume);
@@ -547,7 +548,7 @@ pub fn debug_overlay(fps: i32, sim_ms: f32, world: &World, stress: bool) {
 
 /// Draws the map. Small: corner panel (returns true when clicked, to expand).
 /// Big: a large centred map with a legend (returns true when it should close).
-pub fn minimap(world: &World, assets: &Assets, big: bool) -> bool {
+pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> bool {
     let (w, h) = (screen_width(), screen_height());
     let (size, x, y, range) = if big {
         let size = (h - 140.0).min(w - 80.0).min(620.0);
@@ -572,18 +573,13 @@ pub fn minimap(world: &World, assets: &Assets, big: bool) -> bool {
     for k in 1..=3 {
         draw_circle_lines(c.x, c.y, (size / 2.0 - 6.0) * k as f32 / 3.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.05));
     }
-    // Stage obstacles (from the stage's own layout) as faint blocks.
-    let (cx0, cy0) = sim::stage::chunk_of(sim::Vec2::new(p.x - range, p.y - range));
-    let (cx1, cy1) = sim::stage::chunk_of(sim::Vec2::new(p.x + range, p.y + range));
-    for cy in cy0..=cy1 {
-        for cx in cx0..=cx1 {
-            let (props, n) = sim::stage::chunk_props(cx, cy);
-            for prop in &props[..n] {
-                let (mn, mx) = prop.footprint();
-                if let (Some(a0), Some(a1)) = (to_map(mn), to_map(mx)) {
-                    draw_rectangle(a0.x, a0.y, (a1.x - a0.x).max(1.0), (a1.y - a0.y).max(1.0), Color::new(1.0, 1.0, 1.0, 0.12));
-                }
-            }
+    // Stage obstacles, from whatever stage is active.
+    for (mn, mx) in world.map_obstacles(sim::Vec2::new(p.x - range, p.y - range), sim::Vec2::new(p.x + range, p.y + range)) {
+        if let (Some(a0), Some(a1)) = (to_map(mn), to_map(mx)) {
+            // Props are small at map scale: give them a minimum size so they read.
+            let (bw, bh) = ((a1.x - a0.x).max(3.0), (a1.y - a0.y).max(3.0));
+            let (cx2, cy2) = ((a0.x + a1.x) / 2.0, (a0.y + a1.y) / 2.0);
+            draw_rectangle(cx2 - bw / 2.0, cy2 - bh / 2.0, bw, bh, Color::new(0.85, 0.78, 0.65, 0.45));
         }
     }
     // Stage bounds, for bounded maps.
@@ -599,11 +595,25 @@ pub fn minimap(world: &World, assets: &Assets, big: bool) -> bool {
     for m in markers {
         let Some(q) = to_map(m.pos) else { continue };
         match m.kind {
-            sim::MarkerKind::Enemy => draw_rectangle(q.x - 0.75, q.y - 0.75, 1.5, 1.5, Color::new(0.75, 0.55, 1.0, 0.7)),
-            sim::MarkerKind::Elite => draw_circle(q.x, q.y, if big { 3.5 } else { 2.5 }, Color::new(1.0, 0.45, 0.35, 1.0)),
+            sim::MarkerKind::Enemy => {
+                let d = if big { 2.5 } else { 2.0 };
+                draw_rectangle(q.x - d / 2.0, q.y - d / 2.0, d, d, Color::new(1.0, 0.25, 0.3, 0.85));
+            }
+            sim::MarkerKind::Elite => {
+                let s = if big { 16.0 } else { 11.0 };
+                draw_texture_ex(&assets.oni, q.x - s / 2.0, q.y - s / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
+            }
+            sim::MarkerKind::MiniBoss => {
+                let s = if big { 24.0 } else { 16.0 };
+                draw_circle(q.x, q.y, s * 0.7, Color::new(0.6, 0.4, 1.0, 0.25 + 0.2 * pulse));
+                draw_circle_lines(q.x, q.y, s * 0.7, 1.5, Color::new(0.8, 0.6, 1.0, 1.0));
+                draw_texture_ex(&assets.oni, q.x - s / 2.0, q.y - s / 2.0, Color::new(0.85, 0.7, 1.0, 1.0), DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
+            }
             sim::MarkerKind::Boss => {
-                draw_circle(q.x, q.y, if big { 7.0 } else { 5.0 }, VERMILION);
-                draw_circle_lines(q.x, q.y, if big { 9.0 } else { 6.5 }, 1.5, INK);
+                let s = if big { 28.0 } else { 18.0 };
+                draw_circle(q.x, q.y, s * 0.75, Color::new(1.0, 0.3, 0.1, 0.25 + 0.25 * pulse));
+                draw_circle_lines(q.x, q.y, s * 0.75 + 2.0 * pulse, 2.0, Color::new(1.0, 0.5, 0.2, 1.0));
+                draw_texture_ex(&assets.night_lord, q.x - s / 2.0, q.y - s / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(s, s)), ..Default::default() });
             }
             sim::MarkerKind::Chest { tier } => {
                 let s = if tier >= 3 { 1.5 } else { 1.0 };
@@ -636,11 +646,12 @@ pub fn minimap(world: &World, assets: &Assets, big: bool) -> bool {
     if big {
         // Legend.
         let ly = y + size + 26.0;
-        let items: [(&str, Color); 6] = [
+        let items: [(&str, Color); 7] = [
             ("you", INK),
-            ("Otherworlders", Color::new(0.75, 0.55, 1.0, 1.0)),
+            ("Otherworlders", Color::new(1.0, 0.25, 0.3, 1.0)),
             ("Oni", Color::new(1.0, 0.45, 0.35, 1.0)),
-            ("boss", VERMILION),
+            ("Great Oni", Color::new(0.8, 0.6, 1.0, 1.0)),
+            ("Night Lord", Color::new(1.0, 0.5, 0.2, 1.0)),
             ("chest", GOLD),
             ("pickup", JADE),
         ];
@@ -653,7 +664,9 @@ pub fn minimap(world: &World, assets: &Assets, big: bool) -> bool {
         }
         kit::text("M / Tab / Esc to close", w / 2.0 - 70.0, ly + 24.0, 13.0, FAINT);
         let close = kit::button(Rect::new(x + size - 40.0, y + 8.0, 32.0, 32.0), "X", true, Style::Secondary);
-        close || is_key_pressed(KeyCode::Escape) || (is_mouse_button_pressed(MouseButton::Left) && !over && mouse.y > 100.0)
+        // The click that opened the map must not also close it.
+        let outside = !just_opened && is_mouse_button_pressed(MouseButton::Left) && !over && mouse.y > 100.0;
+        close || is_key_pressed(KeyCode::Escape) || outside
     } else {
         kit::text("MAP", x + 10.0, y + 18.0, 12.0, FAINT);
         if over {

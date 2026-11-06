@@ -24,8 +24,10 @@ pub const EDGE: Color = Color::new(1.0, 0.82, 0.42, 0.35);
 const UI_W: f32 = 1280.0;
 const UI_H: f32 = 720.0;
 
+/// Physical pixels per virtual UI pixel. Rendering is high-DPI, so this is above 1 on
+/// dense screens (phones, retina laptops) and the UI is drawn at full resolution.
 pub fn ui_scale() -> f32 {
-    (macroquad::window::screen_width() / UI_W).min(macroquad::window::screen_height() / UI_H).min(1.0)
+    (macroquad::window::screen_width() / UI_W).min(macroquad::window::screen_height() / UI_H)
 }
 
 pub fn screen_width() -> f32 {
@@ -72,15 +74,25 @@ fn with_font<R>(size: f32, f: impl FnOnce(Option<&Font>) -> R) -> R {
     })
 }
 
+/// Text is rasterised at the physical pixel size (then scaled back into UI units), so it is
+/// sharp at any UI scale. Sizes are quantised to keep the glyph atlas small.
+fn raster(size: f32) -> (u16, f32) {
+    // UI units -> CSS pixels (ui_scale) -> device pixels (dpi).
+    let phys = ((size * ui_scale() * screen_dpi_scale()) / 2.0).round().max(4.0) * 2.0;
+    (phys as u16, size / phys)
+}
+
 /// Draws text with its baseline at `y` (same convention as macroquad's draw_text).
 pub fn text(s: &str, x: f32, y: f32, size: f32, color: Color) {
+    let (fs, sc) = raster(size);
     with_font(size, |font| {
-        draw_text_ex(s, x, y, TextParams { font, font_size: size as u16, color, ..Default::default() });
+        draw_text_ex(s, x, y, TextParams { font, font_size: fs, font_scale: sc, color, ..Default::default() });
     });
 }
 
 pub fn measure(s: &str, size: u16) -> TextDimensions {
-    with_font(size as f32, |font| measure_text(s, font, size, 1.0))
+    let (fs, sc) = raster(size as f32);
+    with_font(size as f32, |font| measure_text(s, font, fs, sc))
 }
 
 /// Text with a soft drop shadow (for titles over busy backgrounds).

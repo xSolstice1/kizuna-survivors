@@ -76,6 +76,31 @@
         };
       },
     });
+    // Fullscreen bridge (crates/client/src/platform.rs).
+    miniquad_add_plugin({
+      name: "kz_platform",
+      version: 1,
+      register_plugin: function (importObject) {
+        var el = document.documentElement;
+        function isFull() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+        importObject.env.kz_is_fullscreen = function () { return isFull() ? 1 : 0; };
+        importObject.env.kz_fullscreen_supported = function () {
+          return (el.requestFullscreen || el.webkitRequestFullscreen) ? 1 : 0;
+        };
+        importObject.env.kz_fullscreen_toggle = function () {
+          try {
+            if (isFull()) {
+              (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+            } else {
+              var p = (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+              if (p && p.then) p.then(function () {
+                if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function () {});
+              }).catch(function () {});
+            }
+          } catch (e) { console.warn("fullscreen", e); }
+        };
+      },
+    });
     load("game.wasm");
   </script>
 </body>

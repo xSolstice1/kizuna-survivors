@@ -7,6 +7,7 @@ mod audio;
 mod chest_ui;
 mod kit;
 mod menu;
+mod platform;
 mod render;
 mod save;
 mod sprites;
@@ -19,7 +20,8 @@ mod voice;
 use render::{Assets, Fx};
 
 fn window_conf() -> Conf {
-    Conf { window_title: "Kizuna Survivors".into(), window_width: 1280, window_height: 720, ..Default::default() }
+    // high_dpi: render at the device's real pixel density (sharp text on phones and retina screens).
+    Conf { window_title: "Kizuna Survivors".into(), window_width: 1280, window_height: 720, high_dpi: true, ..Default::default() }
 }
 
 #[derive(PartialEq)]
@@ -80,6 +82,7 @@ async fn main() {
     let mut collection = menu::CollectionState::default();
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
+    let mut map_opened_now = false;
     let mut touch = touch::TouchControls::default();
 
     kit::init();
@@ -347,8 +350,10 @@ async fn main() {
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {
             ui::hud(&world, &assets);
-            if !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false) {
+            map_opened_now = false;
+            if !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false, false) {
                 map_open = true;
+                map_opened_now = true;
             }
         }
         ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
@@ -398,7 +403,7 @@ async fn main() {
                 None => {}
             }
         } else if map_open {
-            if ui::minimap(&world, &assets, true) {
+            if ui::minimap(&world, &assets, true, map_opened_now) {
                 map_open = false;
             }
         } else if screen == Screen::Paused {
