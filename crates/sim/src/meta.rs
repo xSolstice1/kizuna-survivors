@@ -168,6 +168,7 @@ pub fn unlock_text(h: HeroId) -> &'static str {
         HeroId::Nanami => "Reach level 50 in a single night.",
         HeroId::Yuzu => "Defeat the Night Lord.",
         HeroId::Riku => "Defeat 2,000 Otherworlders in a single night.",
+        HeroId::Shun => "Defeat the Great Oni twice (across any nights).",
     }
 }
 
@@ -321,6 +322,7 @@ impl Profile {
                 HeroId::Nanami => w.player.level >= 50,
                 HeroId::Yuzu => night_lord,
                 HeroId::Riku => w.kills >= 2_000,
+                HeroId::Shun => self.great_onis >= 2,
             };
             if earned && !self.is_unlocked(h) {
                 self.unlocked.push(h);

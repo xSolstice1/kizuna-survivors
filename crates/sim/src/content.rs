@@ -151,6 +151,32 @@ pub const FOX_ORB_DAMAGE: f32 = 32.0;
 pub const FOX_DAMAGE_TAKEN: f32 = 0.7;
 pub const FOX_MOVE_SPEED: f32 = 1.2;
 
+// ───────────────────────── Shun's special: Hannya Unbound ─────────────────────────
+
+pub const HANNYA_DURATION: f32 = 8.0;
+pub const HANNYA_ONSET_RADIUS: f32 = 160.0;
+pub const HANNYA_ONSET_DAMAGE: f32 = 80.0;
+pub const HANNYA_AURA_RADIUS: f32 = 72.0;
+pub const HANNYA_AURA_DAMAGE: f32 = 10.0;
+/// Rending Beams: this many crimson beams every `HANNYA_BEAM_EVERY` seconds.
+pub const HANNYA_BEAMS: u32 = 6;
+pub const HANNYA_BEAM_EVERY: f32 = 1.4;
+pub const HANNYA_BEAM_LENGTH: f32 = 380.0;
+pub const HANNYA_BEAM_DAMAGE: f32 = 40.0;
+/// Crescent waves at the nearest enemy.
+pub const HANNYA_WAVE_EVERY: f32 = 0.45;
+pub const HANNYA_WAVE_DAMAGE: f32 = 26.0;
+/// Shadow Step: teleport next to an enemy, the afterimage left behind explodes.
+pub const HANNYA_STEP_EVERY: f32 = 1.8;
+pub const HANNYA_AFTERIMAGE_RADIUS: f32 = 64.0;
+pub const HANNYA_AFTERIMAGE_DAMAGE: f32 = 45.0;
+/// Hannya's Wrath: the finale, charged over the last second.
+pub const HANNYA_FINALE_CHARGE: f32 = 1.0;
+pub const HANNYA_FINALE_RADIUS: f32 = 340.0;
+pub const HANNYA_FINALE_DAMAGE: f32 = 220.0;
+pub const HANNYA_DAMAGE_TAKEN: f32 = 0.7;
+pub const HANNYA_MOVE_SPEED: f32 = 1.15;
+
 /// Enemies within this distance of a Fox Mirage clone chase it instead of the player.
 pub const DECOY_RADIUS: f32 = 110.0;
 /// Earliest time a chest may Awaken a weapon.
@@ -184,9 +210,17 @@ pub enum WeaponKind {
     GaleShuriken,
     /// Illusory copies of Riku that fight, draw enemies and pop in damaging smoke.
     FoxMirage,
+    /// A huge sweeping cut in front that also looses a crescent wave (Shun's signature).
+    GraveCleaver,
+    /// Spectral chains latch onto enemies, drain them and drag them in.
+    SoulTether,
+    /// Soul-lanterns placed on the ground that pulse damage around them.
+    LanternVigil,
+    /// A lightning quick-draw that cuts a long straight line.
+    IaiFlash,
 }
 
-pub const ALL_WEAPONS: [WeaponKind; 12] = [
+pub const ALL_WEAPONS: [WeaponKind; 16] = [
     WeaponKind::Ofuda,
     WeaponKind::MoonOrbs,
     WeaponKind::SakuraField,
@@ -199,6 +233,10 @@ pub const ALL_WEAPONS: [WeaponKind; 12] = [
     WeaponKind::Familiars,
     WeaponKind::GaleShuriken,
     WeaponKind::FoxMirage,
+    WeaponKind::GraveCleaver,
+    WeaponKind::SoulTether,
+    WeaponKind::LanternVigil,
+    WeaponKind::IaiFlash,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -314,6 +352,37 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             pierce: 3 + at(l, 4) as u8 + at(l, 8) as u8, // hits a clone can take
             duration: 4.0 + 0.3 * k,
         },
+        WeaponKind::GraveCleaver => WeaponStats {
+            damage: 16.0 + 4.0 * k,
+            cooldown: 1.3 - 0.04 * k,
+            amount: 1 + at(l, 4) + at(l, 7), // swings (alternating sides)
+            area: 1.0 + 0.08 * k,
+            speed: 320.0, // crescent wave speed
+            ..base
+        },
+        WeaponKind::SoulTether => WeaponStats {
+            damage: 4.0 + 1.2 * k, // per 0.25s tick
+            cooldown: 3.0 - 0.1 * k,
+            amount: 2 + at(l, 3) + at(l, 5) + at(l, 7), // chains
+            area: 1.0 + 0.06 * k, // reach
+            duration: 2.0 + 0.1 * k,
+            ..base
+        },
+        WeaponKind::LanternVigil => WeaponStats {
+            damage: 10.0 + 3.0 * k, // per pulse
+            cooldown: 4.0 - 0.15 * k,
+            amount: 1 + at(l, 3) + at(l, 6),
+            area: 1.0 + 0.10 * k,
+            duration: 4.0 + 0.3 * k,
+            ..base
+        },
+        WeaponKind::IaiFlash => WeaponStats {
+            damage: 30.0 + 8.0 * k,
+            cooldown: 2.2 - 0.08 * k,
+            amount: 1 + at(l, 4) + at(l, 7), // extra cuts fan out
+            area: 1.0 + 0.08 * k, // length
+            ..base
+        },
     }
 }
 
@@ -331,6 +400,8 @@ pub enum Tag {
     Blade,
     /// Riku's fox-spirit arts.
     Fox,
+    /// Shun's grave-spirit arts.
+    Spirit,
     Shared,
 }
 
@@ -357,8 +428,12 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
         WeaponKind::Crescent => (&[Blade], (P::Swiftness, 1)),
         WeaponKind::FoxfireOrb => (&[Fox], (P::Magnet, 1)),
         WeaponKind::Familiars => (&[Fox], (P::Recovery, 1)),
-        WeaponKind::GaleShuriken => (&[Fox, Blade], (P::Haste, 1)),
+        WeaponKind::GaleShuriken => (&[Fox], (P::Haste, 1)),
         WeaponKind::FoxMirage => (&[Fox], (P::Persistence, 1)),
+        WeaponKind::GraveCleaver => (&[Spirit], (P::Might, 1)),
+        WeaponKind::SoulTether => (&[Spirit], (P::Vitality, 1)),
+        WeaponKind::LanternVigil => (&[Spirit], (P::Expanse, 1)),
+        WeaponKind::IaiFlash => (&[Spirit], (P::Swiftness, 1)),
     };
     WeaponDef { tags, complement }
 }
@@ -379,9 +454,10 @@ pub enum HeroId {
     Nanami,
     Yuzu,
     Riku,
+    Shun,
 }
 
-pub const ALL_HEROES: [HeroId; 7] = [HeroId::Ren, HeroId::Riku, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
+pub const ALL_HEROES: [HeroId; 8] = [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
 
 /// What Space does when the meter is full.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -390,6 +466,19 @@ pub enum SpecialKind {
     Barrier,
     /// Ninefold Foxfire: a timed transformation (tails, aura, golden orb volleys).
     NineTails,
+    /// Hannya Unbound: a timed berserk form (beams, crescent waves, shadow steps, finale blast).
+    Hannya,
+}
+
+impl SpecialKind {
+    /// Length of a transformation special (0 for instant ones).
+    pub fn duration(self) -> f32 {
+        match self {
+            SpecialKind::Barrier => 0.0,
+            SpecialKind::NineTails => FOX_DURATION,
+            SpecialKind::Hannya => HANNYA_DURATION,
+        }
+    }
 }
 
 impl HeroId {
@@ -403,6 +492,7 @@ impl HeroId {
             HeroId::Nanami => "nanami",
             HeroId::Yuzu => "yuzu",
             HeroId::Riku => "riku",
+            HeroId::Shun => "shun",
         }
     }
     pub fn from_key(k: &str) -> Option<HeroId> {
@@ -441,10 +531,12 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Nanami => ("Nanami Kiri", "Alchemist", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::FlamePool, &[Fire, Festival, Nature, Celestial], false),
         HeroId::Yuzu => ("Yuzu Momose", "Idol", "+10% experience", Bonus { growth: 0.10, ..b }, WeaponKind::Taiko, &[Festival, Celestial, Nature, Talisman], false),
         HeroId::Riku => ("Riku Kazamine", "Fox-spirit shinobi", "+5% move speed, +5% damage", Bonus { move_speed: 0.05, might: 0.05, ..b }, WeaponKind::FoxfireOrb, &[Fox, Thunder, Blade, Fire], true),
+        HeroId::Shun => ("Shun Yamikiri", "Spirit ferryman", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::GraveCleaver, &[Spirit, Blade, Thunder, Fire], true),
     };
     let (special, special_name) = match id {
         HeroId::Ren => (SpecialKind::Barrier, "Purify"),
         HeroId::Riku => (SpecialKind::NineTails, "Ninefold Foxfire"),
+        HeroId::Shun => (SpecialKind::Hannya, "Hannya Unbound"),
         _ => (SpecialKind::Barrier, "Barrier"),
     };
     HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
@@ -475,6 +567,10 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::Familiars => "Kitsune Procession",
         WeaponKind::GaleShuriken => "Tempest Wheel",
         WeaponKind::FoxMirage => "Thousand-Fox Mirage",
+        WeaponKind::GraveCleaver => "Ferryman's Judgement",
+        WeaponKind::SoulTether => "River of Souls",
+        WeaponKind::LanternVigil => "Thousand Lantern Vigil",
+        WeaponKind::IaiFlash => "Moonsever",
     }
 }
 
@@ -493,6 +589,10 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::Familiars => "Twice the fox spirits; they never tire (+3 pierce, +25% damage).",
         WeaponKind::GaleShuriken => "Two extra shuriken, +30% size and +25% damage.",
         WeaponKind::FoxMirage => "Twice the clones, +30% damage, and their smoke pops are 30% wider.",
+        WeaponKind::GraveCleaver => "Cuts a full circle, and every swing sends crescent waves both ways (+30% damage).",
+        WeaponKind::SoulTether => "Twice the chains, +30% drain, and every chained kill heals you.",
+        WeaponKind::LanternVigil => "Two more lanterns, 40% wider pulses that also slow enemies.",
+        WeaponKind::IaiFlash => "Two extra cuts, 50% longer and +40% damage; each cut leaves a lingering scar.",
     }
 }
 
@@ -549,6 +649,20 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
             s.amount *= 2;
             s.damage *= 1.3;
             s.area *= 1.3;
+        }
+        WeaponKind::GraveCleaver => s.damage *= 1.3, // and cuts a full circle
+        WeaponKind::SoulTether => {
+            s.amount *= 2;
+            s.damage *= 1.3;
+        }
+        WeaponKind::LanternVigil => {
+            s.amount += 2;
+            s.area *= 1.4;
+        }
+        WeaponKind::IaiFlash => {
+            s.amount += 2;
+            s.area *= 1.5;
+            s.damage *= 1.4;
         }
     }
     s
@@ -617,6 +731,10 @@ impl Upgrade {
             Upgrade::Weapon(WeaponKind::Familiars) => "Kitsune Familiars",
             Upgrade::Weapon(WeaponKind::GaleShuriken) => "Gale Shuriken",
             Upgrade::Weapon(WeaponKind::FoxMirage) => "Fox Mirage",
+            Upgrade::Weapon(WeaponKind::GraveCleaver) => "Grave Cleaver",
+            Upgrade::Weapon(WeaponKind::SoulTether) => "Soul Tether",
+            Upgrade::Weapon(WeaponKind::LanternVigil) => "Lantern Vigil",
+            Upgrade::Weapon(WeaponKind::IaiFlash) => "Iai Flash",
             Upgrade::Passive(PassiveKind::Might) => "Might",
             Upgrade::Passive(PassiveKind::Haste) => "Haste",
             Upgrade::Passive(PassiveKind::Expanse) => "Expanse",
@@ -654,6 +772,10 @@ impl Upgrade {
                 WeaponKind::Familiars => "Fox spirits dart out and bite through nearby enemies.",
                 WeaponKind::GaleShuriken => "A huge shuriken spins out and returns to you, cutting both ways.",
                 WeaponKind::FoxMirage => "Conjures illusory copies of you. They fight, draw enemies away, and burst into smoke.",
+                WeaponKind::GraveCleaver => "A huge blade sweeps in front of you and looses a crescent wave of spirit energy.",
+                WeaponKind::SoulTether => "Spectral chains latch onto nearby enemies, draining them and dragging them closer.",
+                WeaponKind::LanternVigil => "Sets soul-lanterns on the ground that pulse spirit fire at anything nearby.",
+                WeaponKind::IaiFlash => "A lightning quick-draw that cuts a long straight line through the horde.",
             }
             .into(),
             Upgrade::Weapon(k) => {
@@ -673,6 +795,10 @@ impl Upgrade {
                         WeaponKind::Familiars => "spirit",
                         WeaponKind::GaleShuriken => "shuriken",
                         WeaponKind::FoxMirage => "clone",
+                        WeaponKind::GraveCleaver => "swing",
+                        WeaponKind::SoulTether => "chain",
+                        WeaponKind::LanternVigil => "lantern",
+                        WeaponKind::IaiFlash => "cut",
                         WeaponKind::SakuraField => "",
                     };
                     parts.push(format!("+{} {unit}", b.amount - a.amount));

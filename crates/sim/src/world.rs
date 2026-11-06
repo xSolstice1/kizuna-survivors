@@ -104,6 +104,53 @@ pub enum Event {
     CloneSummoned { pos: Vec2 },
     CloneStrike { pos: Vec2 },
     ClonePopped { pos: Vec2, radius: f32 },
+    /// Hannya Unbound began (onset shockwave).
+    HannyaAwakened { pos: Vec2 },
+    /// A Rending Beam from `from` to `to`.
+    Beam { from: Vec2, to: Vec2 },
+    /// Shadow Step: the player blinked from `from` to `to` (an afterimage stays at `from`).
+    ShadowStep { from: Vec2, to: Vec2 },
+    AfterimageBlast { pos: Vec2, radius: f32 },
+    /// Hannya's Wrath is charging / went off.
+    FinaleCharge { pos: Vec2 },
+    FinaleBlast { pos: Vec2, radius: f32 },
+    /// An Iai Flash cut along a line.
+    Iai { from: Vec2, to: Vec2 },
+    /// A soul-lantern pulsed.
+    LanternPulse { pos: Vec2, radius: f32 },
+}
+
+/// A Soul Tether chain on one enemy (found by id each tick).
+#[derive(Clone, Copy, Debug)]
+pub struct Tether {
+    pub enemy: u32,
+    pub life: f32,
+    tick: f32,
+    damage: f32,
+    reach: f32,
+    heals: bool,
+}
+
+/// A Lantern Vigil soul-lantern on the ground.
+#[derive(Clone, Copy, Debug)]
+pub struct Lantern {
+    pub pos: Vec2,
+    pub life: f32,
+    pub max_life: f32,
+    pub radius: f32,
+    tick: f32,
+    damage: f32,
+    slows: bool,
+}
+
+/// A lingering Moonsever scar that keeps cutting.
+#[derive(Clone, Copy, Debug)]
+pub struct Scar {
+    pub from: Vec2,
+    pub to: Vec2,
+    pub life: f32,
+    tick: f32,
+    damage: f32,
 }
 
 /// A Fox Mirage clone: fights near the player, draws enemies, pops in damaging smoke.
@@ -243,6 +290,8 @@ pub enum ProjKind {
     Familiar,
     /// Flies out and returns to the player.
     Shuriken,
+    /// A crescent of spirit energy (Grave Cleaver, Hannya Unbound).
+    CrescentWave,
 }
 
 #[derive(Default)]
@@ -355,7 +404,7 @@ pub struct Player {
     /// Special-move charge, 0..=1.
     pub special: f32,
     /// Seconds of Ninefold Foxfire left (0 = not transformed).
-    pub fox: f32,
+    pub form: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -398,12 +447,22 @@ pub struct World {
     fox_tick: f32,
     fox_volley: f32,
     fox_volleys: u32,
+    hannya_beam: f32,
+    hannya_wave: f32,
+    hannya_step: f32,
+    beam_rot: f32,
+    finale_charging: bool,
+    /// Shadow Step afterimages waiting to explode: (position, seconds left).
+    pub afterimages: Vec<(Vec2, f32)>,
     revivals_left: u8,
     /// Sen collected this run.
     pub sen: u32,
     /// Sen coins on the ground: (position, value).
     pub coins: Vec<(Vec2, u32)>,
     pub clones: Vec<MirageClone>,
+    pub tethers: Vec<Tether>,
+    pub lanterns: Vec<Lantern>,
+    pub scars: Vec<Scar>,
     pub great_oni_defeated: bool,
     /// Kills per enemy kind, indexed like `ALL_ENEMIES`.
     pub kills_by_kind: [u32; ALL_ENEMIES.len()],
@@ -452,7 +511,7 @@ impl World {
                 xp: 0,
                 level: 1,
                 special: 0.0,
-                fox: 0.0,
+                form: 0.0,
             },
             weapons: vec![OwnedWeapon { kind: signature, level: 1, awakened: false, timer: 0.0, phase: 0.0 }],
             passives: Vec::new(),
@@ -475,10 +534,19 @@ impl World {
             fox_tick: 0.0,
             fox_volley: 0.0,
             fox_volleys: 0,
+            hannya_beam: 0.0,
+            hannya_wave: 0.0,
+            hannya_step: 0.0,
+            beam_rot: 0.0,
+            finale_charging: false,
+            afterimages: Vec::new(),
             revivals_left: bonus.revivals,
             sen: 0,
             coins: Vec::new(),
             clones: Vec::new(),
+            tethers: Vec::new(),
+            lanterns: Vec::new(),
+            scars: Vec::new(),
             great_oni_defeated: false,
             kills_by_kind: [0; ALL_ENEMIES.len()],
             shrines_taken: Vec::new(),
@@ -516,10 +584,13 @@ impl World {
         self.move_player(input);
         self.director();
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
+        // Needs the fresh grid (queries index into the enemy arrays).
         self.move_enemies();
         self.update_weapons();
         self.update_fox();
+        self.update_hannya();
         self.update_clones();
+        self.update_spirit_arts();
         self.update_effects();
         self.move_projectiles_and_hit();
         if input.special {
@@ -560,7 +631,11 @@ impl World {
         1.0 + 0.10 * self.passive_level(PassiveKind::Expanse) as f32 + self.bonus.area
     }
     fn move_speed(&self) -> f32 {
-        let fox = if self.player.fox > 0.0 { FOX_MOVE_SPEED } else { 1.0 };
+        let fox = match self.form_kind() {
+            Some(SpecialKind::NineTails) => FOX_MOVE_SPEED,
+            Some(SpecialKind::Hannya) => HANNYA_MOVE_SPEED,
+            _ => 1.0,
+        };
         110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32 + self.bonus.move_speed) * self.mods.move_speed * fox
     }
     pub fn magnet(&self) -> f32 {
@@ -631,7 +706,11 @@ impl World {
 
     /// Applies a hit to the player (after armor) and handles death / Revival.
     fn hurt_player(&mut self, raw: f32) {
-        let raw = if self.player.fox > 0.0 { raw * FOX_DAMAGE_TAKEN } else { raw };
+        let raw = match self.form_kind() {
+            Some(SpecialKind::NineTails) => raw * FOX_DAMAGE_TAKEN,
+            Some(SpecialKind::Hannya) => raw * HANNYA_DAMAGE_TAKEN,
+            _ => raw,
+        };
         let dmg = (raw - self.armor()).max(1.0);
         self.player.hp = (self.player.hp - dmg).max(0.0);
         self.player.iframes = IFRAMES;
@@ -1019,6 +1098,76 @@ impl World {
         }
     }
 
+    fn update_spirit_arts(&mut self) {
+        let p = self.player.pos;
+        // Soul Tether: drain and drag.
+        let mut i = 0;
+        while i < self.tethers.len() {
+            let mut t = self.tethers[i];
+            t.life -= DT;
+            t.tick -= DT;
+            let j = self.enemies.id.iter().position(|id| *id == t.enemy);
+            let Some(j) = j.filter(|&j| self.enemies.hp[j] > 0.0 && t.life > 0.0 && (self.enemies.pos[j] - p).length() < t.reach) else {
+                self.tethers.swap_remove(i);
+                continue;
+            };
+            let to_player = p - self.enemies.pos[j];
+            self.enemies.push[j] += to_player.normalize_or_zero() * 9.0 * self.enemies.knock[j].max(0.2); // ~60 px/s drag once push decay settles
+            if t.tick <= 0.0 {
+                t.tick = 0.25;
+                self.hurt_enemy(j, t.damage, to_player);
+                if t.heals && self.enemies.hp[j] <= 0.0 {
+                    self.heal(1.0);
+                }
+            }
+            self.tethers[i] = t;
+            i += 1;
+        }
+        // Lantern Vigil: pulse damage around each lantern.
+        let mut i = 0;
+        while i < self.lanterns.len() {
+            let mut l = self.lanterns[i];
+            l.life -= DT;
+            l.tick -= DT;
+            if l.life <= 0.0 {
+                self.lanterns.swap_remove(i);
+                continue;
+            }
+            if l.tick <= 0.0 {
+                l.tick = 0.6;
+                self.query_circle(l.pos, l.radius);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    let dir = self.enemies.pos[j] - l.pos;
+                    self.hurt_enemy(j, l.damage, dir);
+                    if l.slows {
+                        self.enemies.push[j] = self.enemies.push[j] * 0.5 - self.enemies.vel[j] * 0.3;
+                    }
+                }
+                self.events.push(Event::LanternPulse { pos: l.pos, radius: l.radius });
+            }
+            self.lanterns[i] = l;
+            i += 1;
+        }
+        // Moonsever scars keep cutting.
+        let mut i = 0;
+        while i < self.scars.len() {
+            let mut s = self.scars[i];
+            s.life -= DT;
+            s.tick -= DT;
+            if s.life <= 0.0 {
+                self.scars.swap_remove(i);
+                continue;
+            }
+            if s.tick <= 0.0 {
+                s.tick = 0.3;
+                self.hurt_along(s.from, s.to, 10.0, s.damage);
+            }
+            self.scars[i] = s;
+            i += 1;
+        }
+    }
+
     fn update_clones(&mut self) {
         let mut i = 0;
         while i < self.clones.len() {
@@ -1102,7 +1251,7 @@ impl World {
 
     fn start_fox(&mut self) {
         let p = self.player.pos;
-        self.player.fox = FOX_DURATION;
+        self.player.form = FOX_DURATION;
         self.player.iframes = BARRIER_IFRAMES;
         self.fox_tick = 0.0;
         self.fox_volley = 0.4;
@@ -1119,11 +1268,149 @@ impl World {
         self.events.push(Event::FoxAwakened { pos: p });
     }
 
-    fn update_fox(&mut self) {
-        if self.player.fox <= 0.0 {
+    /// The active transformation, if any.
+    pub fn form_kind(&self) -> Option<SpecialKind> {
+        (self.player.form > 0.0).then(|| hero_def(self.cfg.hero).special)
+    }
+
+    fn start_hannya(&mut self) {
+        let p = self.player.pos;
+        self.player.form = HANNYA_DURATION;
+        self.player.iframes = BARRIER_IFRAMES;
+        self.fox_tick = 0.0;
+        self.hannya_beam = 0.3;
+        self.hannya_wave = 0.1;
+        self.hannya_step = 0.9;
+        self.finale_charging = false;
+        let dmg = HANNYA_ONSET_DAMAGE * self.fox_power();
+        self.query_circle(p, HANNYA_ONSET_RADIUS);
+        for idx in 0..self.scratch.len() {
+            let j = self.scratch[idx] as usize;
+            let dir = self.enemies.pos[j] - p;
+            self.hurt_enemy(j, dmg, dir);
+            self.enemies.push[j] += dir.normalize_or_zero() * (380.0 * self.enemies.knock[j]);
+        }
+        let r2 = HANNYA_ONSET_RADIUS * HANNYA_ONSET_RADIUS;
+        self.shots.retain(|s| (s.pos - p).length_sq() > r2);
+        self.events.push(Event::HannyaAwakened { pos: p });
+    }
+
+    /// Damages every enemy within `width` of the segment once.
+    fn hurt_along(&mut self, from: Vec2, to: Vec2, width: f32, dmg: f32) {
+        let d = to - from;
+        let len = d.length().max(1.0);
+        let steps = (len / 40.0).ceil() as usize;
+        self.dead.clear();
+        for k in 0..=steps {
+            let c = from + d * (k as f32 / steps as f32);
+            self.query_circle(c, 30.0 + width);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let e = self.enemies.pos[j];
+                let t = ((e - from).dot_with(d) / (len * len)).clamp(0.0, 1.0);
+                if (from + d * t - e).length() <= width + self.enemies.radius[j] && !self.dead.contains(&j) {
+                    self.dead.push(j);
+                    self.hurt_enemy(j, dmg, d);
+                }
+            }
+        }
+        self.dead.clear();
+    }
+
+    fn update_hannya(&mut self) {
+        // Afterimages explode even if the form just ended.
+        let mut k = 0;
+        while k < self.afterimages.len() {
+            self.afterimages[k].1 -= DT;
+            if self.afterimages[k].1 <= 0.0 {
+                let (c, _) = self.afterimages.swap_remove(k);
+                let dmg = HANNYA_AFTERIMAGE_DAMAGE * self.fox_power();
+                self.query_circle(c, HANNYA_AFTERIMAGE_RADIUS);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    let dir = self.enemies.pos[j] - c;
+                    self.hurt_enemy(j, dmg, dir);
+                }
+                self.events.push(Event::AfterimageBlast { pos: c, radius: HANNYA_AFTERIMAGE_RADIUS });
+            } else {
+                k += 1;
+            }
+        }
+        if self.form_kind() != Some(SpecialKind::Hannya) {
             return;
         }
-        self.player.fox -= DT;
+        self.player.form -= DT;
+        let power = self.fox_power();
+        let p = self.player.pos;
+        // Dread Aura.
+        self.fox_tick -= DT;
+        if self.fox_tick <= 0.0 {
+            self.fox_tick = FOX_TICK;
+            self.query_circle(p, HANNYA_AURA_RADIUS);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let dir = self.enemies.pos[j] - p;
+                self.hurt_enemy(j, HANNYA_AURA_DAMAGE * power, dir);
+            }
+        }
+        // Rending Beams in every direction.
+        self.hannya_beam -= DT;
+        if self.hannya_beam <= 0.0 {
+            self.hannya_beam = HANNYA_BEAM_EVERY;
+            self.beam_rot += 0.37;
+            for b in 0..HANNYA_BEAMS {
+                let a = self.beam_rot + b as f32 / HANNYA_BEAMS as f32 * std::f32::consts::TAU;
+                let to = p + Vec2::from_angle(a) * HANNYA_BEAM_LENGTH;
+                self.hurt_along(p, to, 9.0, HANNYA_BEAM_DAMAGE * power);
+                self.events.push(Event::Beam { from: p, to });
+            }
+        }
+        // Crescent waves at the nearest enemy.
+        self.hannya_wave -= DT;
+        if self.hannya_wave <= 0.0 {
+            self.hannya_wave = HANNYA_WAVE_EVERY;
+            let d = self.aim_dir();
+            self.projectiles.push_kind(ProjKind::CrescentWave, 18.0, p, d * 360.0, 0.8, HANNYA_WAVE_DAMAGE * power, 255, 0.0);
+            self.events.push(Event::Slash { pos: p, dir: d, radius: 46.0, full: false });
+        }
+        // Shadow Step: blink beside an enemy; the afterimage left behind explodes.
+        self.hannya_step -= DT;
+        if self.hannya_step <= 0.0 {
+            self.hannya_step = HANNYA_STEP_EVERY;
+            if let Some(j) = self.nearest_index(p, 260.0, &[]) {
+                let e = self.enemies.pos[j];
+                let to = stage::resolve(e + (e - p).normalize_or_zero() * 26.0, PLAYER_RADIUS);
+                self.afterimages.push((p, 0.35));
+                self.player.pos = to;
+                self.player.iframes = self.player.iframes.max(0.3);
+                self.events.push(Event::ShadowStep { from: p, to });
+            }
+        }
+        // Hannya's Wrath: charge, then a giant blast as the form ends.
+        if !self.finale_charging && self.player.form <= HANNYA_FINALE_CHARGE {
+            self.finale_charging = true;
+            self.events.push(Event::FinaleCharge { pos: self.player.pos });
+        }
+        if self.player.form <= 0.0 {
+            self.player.form = 0.0;
+            let c = self.player.pos;
+            self.query_circle(c, HANNYA_FINALE_RADIUS);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let dir = self.enemies.pos[j] - c;
+                self.hurt_enemy(j, HANNYA_FINALE_DAMAGE * power, dir);
+                self.enemies.push[j] += dir.normalize_or_zero() * (450.0 * self.enemies.knock[j]);
+            }
+            self.shots.clear();
+            self.events.push(Event::FinaleBlast { pos: c, radius: HANNYA_FINALE_RADIUS });
+        }
+    }
+
+    fn update_fox(&mut self) {
+        if self.form_kind() != Some(SpecialKind::NineTails) {
+            return;
+        }
+        self.player.form -= DT;
         let power = self.fox_power();
         let p = self.player.pos;
         // Tails + aura tick.
@@ -1168,8 +1455,8 @@ impl World {
             }
             self.events.push(Event::FoxVolley);
         }
-        if self.player.fox <= 0.0 {
-            self.player.fox = 0.0;
+        if self.player.form <= 0.0 {
+            self.player.form = 0.0;
             self.events.push(Event::FoxFaded);
         }
     }
@@ -1220,7 +1507,7 @@ impl World {
             if tier > 0 {
                 self.chests.push((pos, tier));
             }
-            if self.player.fox <= 0.0 {
+            if self.player.form <= 0.0 {
                 self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
             }
             self.events.push(Event::Kill { pos, kind });
@@ -1322,7 +1609,11 @@ impl World {
                 | WeaponKind::FoxfireOrb
                 | WeaponKind::Familiars
                 | WeaponKind::GaleShuriken
-                | WeaponKind::FoxMirage => {
+                | WeaponKind::FoxMirage
+                | WeaponKind::GraveCleaver
+                | WeaponKind::SoulTether
+                | WeaponKind::LanternVigil
+                | WeaponKind::IaiFlash => {
                     let timer = w.timer - DT;
                     if timer <= 0.0 {
                         self.weapons[wi].timer = s.cooldown * haste;
@@ -1471,6 +1762,71 @@ impl World {
                 for n in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU) + n as f32;
                     self.projectiles.push_kind(ProjKind::Familiar, 6.0, p, Vec2::from_angle(a) * s.speed, life, dmg, s.pierce, 6.0);
+                }
+            }
+            WeaponKind::GraveCleaver => {
+                self.events.push(Event::Fired(WeaponKind::GraveCleaver));
+                let radius = 66.0 * area;
+                let dir = self.aim_dir();
+                let cone = 72f32.to_radians().cos();
+                for n in 0..s.amount {
+                    // Alternate swings: forward, behind, forward again.
+                    let turn = if n % 2 == 1 { std::f32::consts::PI } else { 0.0 };
+                    let d = Vec2::from_angle(dir.y.atan2(dir.x) + turn);
+                    self.query_circle(p, radius);
+                    for idx in 0..self.scratch.len() {
+                        let j = self.scratch[idx] as usize;
+                        let to = (self.enemies.pos[j] - p).normalize_or_zero();
+                        if w.awakened || to.x * d.x + to.y * d.y >= cone {
+                            self.hurt_enemy(j, dmg, to);
+                        }
+                    }
+                    self.events.push(Event::Slash { pos: p, dir: d, radius, full: w.awakened });
+                    // The cut looses a crescent wave (both ways once Awakened).
+                    let waves: &[f32] = if w.awakened { &[0.0, std::f32::consts::PI] } else { &[0.0] };
+                    for t in waves {
+                        let wd = Vec2::from_angle(d.y.atan2(d.x) + t);
+                        self.projectiles.push_kind(ProjKind::CrescentWave, 13.0 * area, p + wd * 20.0, wd * s.speed, 0.7, dmg * 0.6, 255, 0.0);
+                    }
+                    if w.awakened {
+                        break;
+                    }
+                }
+            }
+            WeaponKind::SoulTether => {
+                self.events.push(Event::Fired(WeaponKind::SoulTether));
+                let reach = 170.0 * area;
+                let mut taken: Vec<u32> = self.tethers.iter().map(|t| t.enemy).collect();
+                for _ in 0..s.amount {
+                    let Some(j) = self.nearest_index(p, reach, &taken) else { break };
+                    let id = self.enemies.id[j];
+                    taken.push(id);
+                    self.tethers.push(Tether { enemy: id, life: s.duration * self.persistence(), tick: 0.0, damage: dmg, reach: reach * 1.3, heals: w.awakened });
+                }
+            }
+            WeaponKind::LanternVigil => {
+                self.events.push(Event::Fired(WeaponKind::LanternVigil));
+                let life = s.duration * self.persistence();
+                for _ in 0..s.amount {
+                    let a = self.rng.range(0.0, std::f32::consts::TAU);
+                    let d = self.rng.range(30.0, 110.0);
+                    let pos = stage::resolve(p + Vec2::from_angle(a) * d, 8.0);
+                    self.lanterns.push(Lantern { pos, life, max_life: life, radius: 46.0 * area, tick: 0.2, damage: dmg, slows: w.awakened });
+                }
+            }
+            WeaponKind::IaiFlash => {
+                self.events.push(Event::Fired(WeaponKind::IaiFlash));
+                let len = 210.0 * area;
+                let base = self.aim_dir();
+                let n = s.amount as f32;
+                for k in 0..s.amount {
+                    let a = base.y.atan2(base.x) + (k as f32 - (n - 1.0) / 2.0) * 0.45;
+                    let to = p + Vec2::from_angle(a) * len;
+                    self.hurt_along(p, to, 12.0, dmg);
+                    self.events.push(Event::Iai { from: p, to });
+                    if w.awakened {
+                        self.scars.push(Scar { from: p, to, life: 1.5, tick: 0.3, damage: dmg * 0.25 });
+                    }
                 }
             }
             WeaponKind::FoxMirage => {
@@ -1836,13 +2192,14 @@ impl World {
     }
 
     fn use_special(&mut self) {
-        if self.player.special < 1.0 || self.player.fox > 0.0 {
+        if self.player.special < 1.0 || self.player.form > 0.0 {
             return;
         }
         self.player.special = 0.0;
-        if hero_def(self.cfg.hero).special == SpecialKind::NineTails {
-            self.start_fox();
-            return;
+        match hero_def(self.cfg.hero).special {
+            SpecialKind::NineTails => return self.start_fox(),
+            SpecialKind::Hannya => return self.start_hannya(),
+            SpecialKind::Barrier => {}
         }
         self.player.iframes = BARRIER_IFRAMES;
         let p = self.player.pos;
@@ -2510,7 +2867,7 @@ mod tests {
         w.player.special = 1.0;
         w.step(Input { special: true, ..Default::default() });
         assert!(w.events.iter().any(|e| matches!(e, Event::FoxAwakened { .. })));
-        assert!(w.player.fox > 0.0);
+        assert!(w.player.form > 0.0);
         let speed = w.move_speed();
         let (mut volleys, mut faded) = (0, false);
         for _ in 0..60 * 9 {
@@ -2518,7 +2875,7 @@ mod tests {
             volleys += w.events.iter().filter(|e| matches!(e, Event::FoxVolley)).count();
             faded |= w.events.iter().any(|e| matches!(e, Event::FoxFaded));
         }
-        assert!(faded && w.player.fox == 0.0, "should fade after its duration");
+        assert!(faded && w.player.form == 0.0, "should fade after its duration");
         assert!(volleys >= 6, "golden orb volleys: {volleys}");
         assert!(w.kills >= 20, "the tails and orbs should flatten a ring of Oni, killed {}", w.kills);
         assert!(w.move_speed() < speed, "speed boost ends with the form");
@@ -2548,7 +2905,40 @@ mod tests {
         assert!(popped, "clone should pop when its time or hits run out");
     }
 
-    /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
+    #[test]
+    fn hannya_unbound_beams_steps_and_ends_in_a_finale() {
+        let mut w = World::new(WorldConfig { hero: HeroId::Shun, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        assert_eq!(w.weapons[0].kind, WeaponKind::GraveCleaver);
+        w.weapons.clear();
+        for k in 0..36 {
+            let a = k as f32 / 36.0 * std::f32::consts::TAU;
+            w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * (80.0 + (k % 4) as f32 * 50.0));
+        }
+        w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        w.player.special = 1.0;
+        w.step(Input { special: true, ..Default::default() });
+        assert!(w.events.iter().any(|e| matches!(e, Event::HannyaAwakened { .. })));
+        assert_eq!(w.form_kind(), Some(SpecialKind::Hannya));
+        let (mut beams, mut steps, mut blasts, mut finale) = (0, 0, 0, false);
+        for _ in 0..60 * 9 {
+            w.step(Input::default());
+            for e in &w.events {
+                match e {
+                    Event::Beam { .. } => beams += 1,
+                    Event::ShadowStep { .. } => steps += 1,
+                    Event::AfterimageBlast { .. } => blasts += 1,
+                    Event::FinaleBlast { .. } => finale = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(beams >= 30, "beams: {beams}");
+        assert!(steps >= 2 && blasts >= 2, "shadow steps {steps}, afterimage blasts {blasts}");
+        assert!(finale, "Hannya's Wrath should go off at the end");
+        assert_eq!(w.form_kind(), None);
+        assert!(w.kills >= 15, "should tear through the ring, killed {}", w.kills);
+    }
+
     #[test]
     #[ignore]
     fn balance_full_run() {
