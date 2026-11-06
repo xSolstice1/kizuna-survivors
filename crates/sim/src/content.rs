@@ -577,22 +577,22 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
 /// Collection text for an Awakening.
 pub fn awakened_text(kind: WeaponKind) -> &'static str {
     match kind {
-        WeaponKind::Ofuda => "Twice the talismans, sharper homing, +3 pierce and +20% damage.",
-        WeaponKind::MoonOrbs => "A second, counter-rotating ring of moons and +25% damage.",
-        WeaponKind::SakuraField => "+30% area and +20% damage; the petals never wilt.",
-        WeaponKind::ThunderChain => "Twice the bolts, +30% damage, strikes 20% more often.",
-        WeaponKind::Taiko => "An extra beat, +30% area and +30% damage.",
-        WeaponKind::StarFall => "Twice the stars and +20% damage.",
-        WeaponKind::Crescent => "Cuts a full circle with +30% damage.",
-        WeaponKind::FlamePool => "Pools burn 60% longer, 25% wider, 25% hotter.",
-        WeaponKind::FoxfireOrb => "Charges twice as fast, +40% damage and +30% burst; each burst scatters three sparks.",
-        WeaponKind::Familiars => "Twice the fox spirits; they never tire (+3 pierce, +25% damage).",
-        WeaponKind::GaleShuriken => "Two extra shuriken, +30% size and +25% damage.",
-        WeaponKind::FoxMirage => "Twice the clones, +30% damage, and their smoke pops are 30% wider.",
-        WeaponKind::GraveCleaver => "Cuts a full circle, and every swing sends crescent waves both ways (+30% damage).",
-        WeaponKind::SoulTether => "Twice the chains, +30% drain, and every chained kill heals you.",
-        WeaponKind::LanternVigil => "Two more lanterns, 40% wider pulses that also slow enemies.",
-        WeaponKind::IaiFlash => "Two extra cuts, 50% longer and +40% damage; each cut leaves a lingering scar.",
+        WeaponKind::Ofuda => "Seal Storm: an endless stream of homing seals that explode on contact, on top of twice the talismans.",
+        WeaponKind::MoonOrbs => "Lunar Eclipse: a second ring of moons, and moonbeams sweep the whole screen every few seconds.",
+        WeaponKind::SakuraField => "Hanafubuki: a ceaseless spiral storm of cutting petals pours out of a wider field that heals you.",
+        WeaponKind::ThunderChain => "Heavenfall: lightning keeps crashing down from the sky on nearby enemies, plus twice the chains.",
+        WeaponKind::Taiko => "Festival Quake: colossal shockwaves roll out across the screen between the beats.",
+        WeaponKind::StarFall => "Meteor: giant meteors crash down and leave burning craters, on top of twice the stars.",
+        WeaponKind::Crescent => "Moonlit Waves: cuts a full circle and every swing fires eight crescent waves.",
+        WeaponKind::FlamePool => "Foxfire Trail: you leave a trail of burning ground wherever you walk; pools burn longer and wider.",
+        WeaponKind::FoxfireOrb => "Comet Rain: blue comets keep falling on the horde; orbs charge twice as fast and burst into sparks.",
+        WeaponKind::Familiars => "Kitsune Blaze: twice the fox spirits, and every one explodes in foxfire when it strikes.",
+        WeaponKind::GaleShuriken => "Cyclone: every few seconds a whole ring of shuriken bursts out and returns.",
+        WeaponKind::FoxMirage => "Mirage Barrage: twice the clones, and every clone hurls foxfire at the horde.",
+        WeaponKind::GraveCleaver => "Judgement: full-circle cuts, waves both ways, and a colossal crescent of judgement every few seconds.",
+        WeaponKind::SoulTether => "Endless River: twice the chains; when a chained enemy dies the chain leaps to the next and heals you.",
+        WeaponKind::LanternVigil => "Lantern Volley: more, wider lanterns that slow enemies and fire spirit bolts at them.",
+        WeaponKind::IaiFlash => "Thousand Cuts: longer cuts that leave scars, and a radial storm of twelve cuts every few seconds.",
     }
 }
 
@@ -665,7 +665,56 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
             s.damage *= 1.4;
         }
     }
+    // Every Awakening is a real power spike on top of its own changes (and its signature).
+    s.damage *= AWAKEN_DAMAGE;
     s
+}
+
+/// Extra damage every Awakened weapon gets.
+pub const AWAKEN_DAMAGE: f32 = 1.5;
+
+/// Seconds between an Awakened weapon's signature effects.
+pub fn signature_every(kind: WeaponKind) -> f32 {
+    match kind {
+        WeaponKind::Ofuda => 0.12,
+        WeaponKind::MoonOrbs => 2.4,
+        WeaponKind::SakuraField => 0.07,
+        WeaponKind::ThunderChain => 0.35,
+        WeaponKind::Taiko => 1.6,
+        WeaponKind::StarFall => 1.1,
+        WeaponKind::Crescent => 0.0, // part of every swing
+        WeaponKind::FlamePool => 0.3,
+        WeaponKind::FoxfireOrb => 1.8,
+        WeaponKind::Familiars => 0.0, // the spirits themselves explode
+        WeaponKind::GaleShuriken => 3.0,
+        WeaponKind::FoxMirage => 1.2,
+        WeaponKind::GraveCleaver => 2.8,
+        WeaponKind::SoulTether => 0.0, // chains jump on kills
+        WeaponKind::LanternVigil => 0.5,
+        WeaponKind::IaiFlash => 4.0,
+    }
+}
+
+/// Name of an Awakened weapon's signature effect (shown in the Collection and on pickup).
+pub fn signature_name(kind: WeaponKind) -> &'static str {
+    match kind {
+        WeaponKind::Ofuda => "Seal Storm",
+        WeaponKind::MoonOrbs => "Lunar Eclipse",
+        WeaponKind::SakuraField => "Hanafubuki",
+        WeaponKind::ThunderChain => "Heavenfall",
+        WeaponKind::Taiko => "Festival Quake",
+        WeaponKind::StarFall => "Meteor",
+        WeaponKind::Crescent => "Moonlit Waves",
+        WeaponKind::FlamePool => "Foxfire Trail",
+        WeaponKind::FoxfireOrb => "Comet Rain",
+        WeaponKind::Familiars => "Kitsune Blaze",
+        WeaponKind::GaleShuriken => "Cyclone",
+        WeaponKind::FoxMirage => "Mirage Barrage",
+        WeaponKind::GraveCleaver => "Judgement",
+        WeaponKind::SoulTether => "Endless River",
+        WeaponKind::LanternVigil => "Lantern Volley",
+        WeaponKind::IaiFlash => "Thousand Cuts",
+    }
 }
 
 // ───────────────────────── Passives ─────────────────────────

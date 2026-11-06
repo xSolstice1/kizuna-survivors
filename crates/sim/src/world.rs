@@ -93,8 +93,10 @@ pub enum Event {
     EnemyShot,
     /// A weapon fired a volley / beat / pool (once per trigger, not per projectile).
     Fired(WeaponKind),
-    /// A bursting projectile (Foxfire Orb) exploded.
-    Burst { pos: Vec2, radius: f32 },
+    /// A bursting projectile or a delayed blast went off (see `style`).
+    Burst { pos: Vec2, radius: f32, style: u8 },
+    /// An Awakened weapon's signature effect fired.
+    Signature(WeaponKind),
     /// Ninefold Foxfire began (with its opening blast) / ended.
     FoxAwakened { pos: Vec2 },
     FoxFaded,
@@ -106,8 +108,8 @@ pub enum Event {
     ClonePopped { pos: Vec2, radius: f32 },
     /// Hannya Unbound began (onset shockwave).
     HannyaAwakened { pos: Vec2 },
-    /// A Rending Beam from `from` to `to`.
-    Beam { from: Vec2, to: Vec2 },
+    /// A beam from `from` to `to` (Rending Beam = crimson, Lunar Eclipse = moon).
+    Beam { from: Vec2, to: Vec2, style: u8 },
     /// Shadow Step: the player blinked from `from` to `to` (an afterimage stays at `from`).
     ShadowStep { from: Vec2, to: Vec2 },
     AfterimageBlast { pos: Vec2, radius: f32 },
@@ -292,6 +294,39 @@ pub enum ProjKind {
     Shuriken,
     /// A crescent of spirit energy (Grave Cleaver, Hannya Unbound).
     CrescentWave,
+    /// Hundredfold Seal: a homing seal that explodes on contact.
+    Seal,
+    /// Hanafubuki petal.
+    Petal,
+    /// Lantern Volley spirit bolt.
+    SpiritBolt,
+}
+
+/// Burst / blast looks (shared by the sim events and the renderer).
+pub mod style {
+    pub const FOXFIRE: u8 = 0;
+    pub const SEAL: u8 = 5;
+    pub const METEOR: u8 = 6;
+    pub const FOX: u8 = 7;
+    pub const SKYBOLT: u8 = 9;
+    pub const COMET: u8 = 10;
+    pub const QUAKE: u8 = 11;
+    /// Beam styles.
+    pub const CRIMSON: u8 = 0;
+    pub const MOON: u8 = 1;
+}
+
+/// A delayed area blast: meteors, comets, sky lightning. Drawn as a telegraph until it lands.
+#[derive(Clone, Copy, Debug)]
+pub struct Blast {
+    pub pos: Vec2,
+    pub delay: f32,
+    pub max_delay: f32,
+    pub radius: f32,
+    damage: f32,
+    pub style: u8,
+    /// Leaves burning ground.
+    burns: bool,
 }
 
 #[derive(Default)]
@@ -461,6 +496,9 @@ pub struct World {
     pub coins: Vec<(Vec2, u32)>,
     pub clones: Vec<MirageClone>,
     pub tethers: Vec<Tether>,
+    pub blasts: Vec<Blast>,
+    /// Per-weapon signature timers, indexed like `ALL_WEAPONS`.
+    sig_timers: [f32; ALL_WEAPONS.len()],
     pub lanterns: Vec<Lantern>,
     pub scars: Vec<Scar>,
     pub great_oni_defeated: bool,
@@ -545,6 +583,8 @@ impl World {
             coins: Vec::new(),
             clones: Vec::new(),
             tethers: Vec::new(),
+            blasts: Vec::new(),
+            sig_timers: [0.0; ALL_WEAPONS.len()],
             lanterns: Vec::new(),
             scars: Vec::new(),
             great_oni_defeated: false,
@@ -587,6 +627,7 @@ impl World {
         // Needs the fresh grid (queries index into the enemy arrays).
         self.move_enemies();
         self.update_weapons();
+        self.update_signatures();
         self.update_fox();
         self.update_hannya();
         self.update_clones();
@@ -1088,13 +1129,165 @@ impl World {
             let dir = self.enemies.pos[j] - c;
             self.hurt_enemy(j, dmg, dir);
         }
-        self.events.push(Event::Burst { pos: c, radius: r });
+        let st = match kind {
+            ProjKind::Seal => style::SEAL,
+            ProjKind::Familiar => style::FOX,
+            _ => style::FOXFIRE,
+        };
+        self.events.push(Event::Burst { pos: c, radius: r, style: st });
         if kind == ProjKind::Comet {
             let a0 = self.rng.range(0.0, std::f32::consts::TAU);
             for k in 0..3 {
                 let a = a0 + k as f32 * std::f32::consts::TAU / 3.0;
                 self.projectiles.push_kind(ProjKind::Spark, 5.0, c, Vec2::from_angle(a) * 240.0, 0.6, dmg * 0.4, 3, 5.0);
             }
+        }
+    }
+
+    /// Awakened weapons' signature effects, plus the delayed blasts they create.
+    fn update_signatures(&mut self) {
+        let p = self.player.pos;
+        let might = self.might();
+        for wi in 0..self.weapons.len() {
+            let w = self.weapons[wi];
+            let every = signature_every(w.kind);
+            if !w.awakened || every <= 0.0 {
+                continue;
+            }
+            let ti = ALL_WEAPONS.iter().position(|k| *k == w.kind).unwrap();
+            self.sig_timers[ti] -= DT;
+            if self.sig_timers[ti] > 0.0 {
+                continue;
+            }
+            self.sig_timers[ti] = every * self.haste();
+            let s = self.stats_of(&w);
+            let dmg = s.damage * might;
+            let area = s.area * self.area_mult();
+            let loud = every >= 0.3; // continuous streams don't announce every shot
+            match w.kind {
+                WeaponKind::Ofuda => {
+                    // Seal Storm: a stream of homing seals that explode.
+                    let d = self.aim_dir();
+                    let a = d.y.atan2(d.x) + self.rng.range(-0.5, 0.5);
+                    self.projectiles.push_kind(ProjKind::Seal, 6.0, p, Vec2::from_angle(a) * 380.0, 1.6, dmg * 0.9, 1, 10.0);
+                    let last = self.projectiles.len() - 1;
+                    self.projectiles.burst[last] = 28.0 * area;
+                }
+                WeaponKind::MoonOrbs => {
+                    // Lunar Eclipse: six moonbeams sweep out from the player.
+                    let rot = self.time * 0.9;
+                    for k in 0..6 {
+                        let a = rot + k as f32 * std::f32::consts::TAU / 6.0;
+                        let to = p + Vec2::from_angle(a) * 340.0;
+                        self.hurt_along(p, to, 12.0, dmg * 2.5);
+                        self.events.push(Event::Beam { from: p, to, style: style::MOON });
+                    }
+                }
+                WeaponKind::SakuraField => {
+                    // Hanafubuki: a spiral stream of cutting petals.
+                    for arm in 0..2 {
+                        let a = self.time * 7.0 + arm as f32 * std::f32::consts::PI;
+                        let v = Vec2::from_angle(a) * 210.0 + Vec2::from_angle(a + 1.4) * 60.0;
+                        self.projectiles.push_kind(ProjKind::Petal, 5.0, p, v, 1.3, dmg * 1.4, 3, 0.0);
+                    }
+                }
+                WeaponKind::ThunderChain => {
+                    // Heavenfall: sky lightning on a random nearby enemy.
+                    if let Some(t) = self.random_targets(320.0, 1).first().copied() {
+                        self.blasts.push(Blast { pos: t, delay: 0.12, max_delay: 0.12, radius: 46.0 * area, damage: dmg * 1.4, style: style::SKYBOLT, burns: false });
+                    }
+                }
+                WeaponKind::Taiko => {
+                    // Festival Quake: a colossal shockwave.
+                    self.waves.push(Wave { center: p, radius: 0.0, max_radius: 320.0 * area, speed: 420.0, damage: dmg * 1.8 });
+                    self.events.push(Event::Burst { pos: p, radius: 60.0, style: style::QUAKE });
+                }
+                WeaponKind::StarFall => {
+                    // Meteor: a giant meteor on the thickest part of the horde, leaving a crater.
+                    if let Some(t) = self.random_targets(300.0, 1).first().copied() {
+                        self.blasts.push(Blast { pos: t, delay: 0.7, max_delay: 0.7, radius: 110.0 * area, damage: dmg * 3.0, style: style::METEOR, burns: true });
+                    }
+                }
+                WeaponKind::FlamePool => {
+                    // Foxfire Trail: burning ground under the player's feet.
+                    self.pools.push(Pool { pos: p, radius: 30.0 * area, life: 2.4, max_life: 2.4, tick: 0.0, damage: dmg });
+                }
+                WeaponKind::FoxfireOrb => {
+                    // Comet Rain: five blue comets fall on the horde.
+                    for t in self.random_targets(320.0, 5) {
+                        let d = self.rng.range(0.4, 0.9);
+                        self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 50.0 * area, damage: dmg * 1.3, style: style::COMET, burns: false });
+                    }
+                }
+                WeaponKind::GaleShuriken => {
+                    // Cyclone: a ring of shuriken bursts out and returns.
+                    for k in 0..10 {
+                        let a = k as f32 / 10.0 * std::f32::consts::TAU;
+                        self.projectiles.push_kind(ProjKind::Shuriken, 9.0 * area, p, Vec2::from_angle(a) * 300.0, s.duration * self.persistence(), dmg, 255, 0.0);
+                    }
+                }
+                WeaponKind::FoxMirage => {
+                    // Mirage Barrage: every clone hurls a foxfire orb.
+                    let clones: Vec<Vec2> = self.clones.iter().map(|c| c.pos).collect();
+                    for c in clones {
+                        if let Some(j) = self.nearest_index(c, 220.0, &[]) {
+                            let d = (self.enemies.pos[j] - c).normalize_or_zero();
+                            self.projectiles.push_kind(ProjKind::Foxfire, 6.0, c, d * 280.0, 1.2, dmg * 1.5, 1, 0.0);
+                            let last = self.projectiles.len() - 1;
+                            self.projectiles.burst[last] = 30.0 * area;
+                        }
+                    }
+                }
+                WeaponKind::GraveCleaver => {
+                    // Judgement: a colossal slow crescent.
+                    let d = self.aim_dir();
+                    self.projectiles.push_kind(ProjKind::CrescentWave, 42.0 * area, p + d * 20.0, d * 230.0, 1.6, dmg * 3.0, 255, 0.0);
+                    self.events.push(Event::Slash { pos: p, dir: d, radius: 90.0, full: true });
+                }
+                WeaponKind::LanternVigil => {
+                    // Lantern Volley: every lantern fires a spirit bolt.
+                    let lanterns: Vec<Vec2> = self.lanterns.iter().map(|l| l.pos).collect();
+                    for l in lanterns {
+                        if let Some(j) = self.nearest_index(l, 200.0, &[]) {
+                            let d = (self.enemies.pos[j] - l).normalize_or_zero();
+                            self.projectiles.push_kind(ProjKind::SpiritBolt, 5.0, l + Vec2::new(0.0, -12.0), d * 320.0, 0.9, dmg * 0.9, 2, 6.0);
+                        }
+                    }
+                }
+                WeaponKind::IaiFlash => {
+                    // Thousand Cuts: a radial storm of twelve cuts.
+                    for k in 0..12 {
+                        let a = k as f32 / 12.0 * std::f32::consts::TAU + self.time;
+                        let to = p + Vec2::from_angle(a) * 300.0;
+                        self.hurt_along(p, to, 12.0, dmg * 0.8);
+                        self.events.push(Event::Iai { from: p, to });
+                    }
+                }
+                _ => continue,
+            }
+            if loud {
+                self.events.push(Event::Signature(w.kind));
+            }
+        }
+        // Delayed blasts land.
+        let mut i = 0;
+        while i < self.blasts.len() {
+            self.blasts[i].delay -= DT;
+            if self.blasts[i].delay > 0.0 {
+                i += 1;
+                continue;
+            }
+            let b = self.blasts.swap_remove(i);
+            self.query_circle(b.pos, b.radius);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let dir = self.enemies.pos[j] - b.pos;
+                self.hurt_enemy(j, b.damage, dir);
+            }
+            if b.burns {
+                self.pools.push(Pool { pos: b.pos, radius: b.radius * 0.6, life: 3.0, max_life: 3.0, tick: 0.0, damage: b.damage * 0.08 });
+            }
+            self.events.push(Event::Burst { pos: b.pos, radius: b.radius, style: b.style });
         }
     }
 
@@ -1107,7 +1300,19 @@ impl World {
             t.life -= DT;
             t.tick -= DT;
             let j = self.enemies.id.iter().position(|id| *id == t.enemy);
-            let Some(j) = j.filter(|&j| self.enemies.hp[j] > 0.0 && t.life > 0.0 && (self.enemies.pos[j] - p).length() < t.reach) else {
+            let alive = j.filter(|&j| self.enemies.hp[j] > 0.0 && t.life > 0.0 && (self.enemies.pos[j] - p).length() < t.reach);
+            let Some(j) = alive else {
+                // Endless River: the chain leaps from a dead enemy to the next one and heals.
+                if t.heals && t.life > 0.0 {
+                    let from = j.map_or(p, |j| self.enemies.pos[j]);
+                    let taken: Vec<u32> = self.tethers.iter().map(|t| t.enemy).collect();
+                    if let Some(n) = self.nearest_index(from, 140.0, &taken) {
+                        self.heal(1.0);
+                        self.tethers[i].enemy = self.enemies.id[n];
+                        i += 1;
+                        continue;
+                    }
+                }
                 self.tethers.swap_remove(i);
                 continue;
             };
@@ -1362,7 +1567,7 @@ impl World {
                 let a = self.beam_rot + b as f32 / HANNYA_BEAMS as f32 * std::f32::consts::TAU;
                 let to = p + Vec2::from_angle(a) * HANNYA_BEAM_LENGTH;
                 self.hurt_along(p, to, 9.0, HANNYA_BEAM_DAMAGE * power);
-                self.events.push(Event::Beam { from: p, to });
+                self.events.push(Event::Beam { from: p, to, style: style::CRIMSON });
             }
         }
         // Crescent waves at the nearest enemy.
@@ -1732,6 +1937,11 @@ impl World {
                     }
                     self.events.push(Event::Slash { pos: p, dir: d, radius, full: w.awakened });
                     if w.awakened {
+                        // Moonlit Waves: eight crescents fly out of the full-circle cut.
+                        for k in 0..8 {
+                            let wd = Vec2::from_angle(k as f32 * std::f32::consts::FRAC_PI_4 + self.time);
+                            self.projectiles.push_kind(ProjKind::CrescentWave, 14.0 * area, p + wd * 24.0, wd * 330.0, 0.8, dmg * 0.7, 255, 0.0);
+                        }
                         break; // the full circle already covers every direction
                     }
                 }
@@ -1762,6 +1972,12 @@ impl World {
                 for n in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU) + n as f32;
                     self.projectiles.push_kind(ProjKind::Familiar, 6.0, p, Vec2::from_angle(a) * s.speed, life, dmg, s.pierce, 6.0);
+                    if w.awakened {
+                        // Kitsune Blaze: each spirit explodes in foxfire when it strikes.
+                        let last = self.projectiles.len() - 1;
+                        self.projectiles.burst[last] = 30.0 * area;
+                        self.projectiles.damage[last] = dmg * 1.6;
+                    }
                 }
             }
             WeaponKind::GraveCleaver => {
@@ -2389,6 +2605,14 @@ impl World {
         }
     }
 
+    /// Dev shortcut: Awaken every owned weapon.
+    pub fn debug_awaken_all(&mut self) {
+        for w in &mut self.weapons {
+            w.level = MAX_LEVEL;
+            w.awakened = true;
+        }
+    }
+
     /// Dev shortcut: every library weapon at level 5, ignoring the hero's pool and slots.
     pub fn debug_all_weapons(&mut self) {
         for k in ALL_WEAPONS {
@@ -2939,6 +3163,35 @@ mod tests {
         assert!(w.kills >= 15, "should tear through the ring, killed {}", w.kills);
     }
 
+    fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {
+        let mut w = World::new(WorldConfig { seed: 5, hero, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.time = AWAKEN_FROM + 1.0;
+        w.weapons = vec![OwnedWeapon { kind, level: MAX_LEVEL, awakened, timer: 0.0, phase: 0.0 }];
+        for k in 0..60 {
+            let a = k as f32 / 60.0 * std::f32::consts::TAU;
+            w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * (40.0 + (k % 5) as f32 * 45.0));
+        }
+        w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        w.enemies.hp.iter_mut().for_each(|h| *h = 1e9);
+        let mut dealt = 0.0;
+        for _ in 0..60 * 6 {
+            w.step(Input::default());
+            dealt += w.events.iter().filter_map(|e| if let Event::Hit { amount, .. } = e { Some(*amount) } else { None }).sum::<f32>();
+        }
+        dealt
+    }
+
+    #[test]
+    fn awakenings_are_a_huge_power_spike() {
+        for k in ALL_WEAPONS {
+            let hero = ALL_HEROES.iter().copied().find(|h| hero_def(*h).weapon_pool().contains(&k)).unwrap_or(HeroId::Ren);
+            let (base, aw) = (damage_over(k, false, hero), damage_over(k, true, hero));
+            println!("{k:?}: max level {base:.0}, awakened {aw:.0} ({:.1}x)", aw / base.max(1.0));
+            assert!(aw > base * 2.0, "{k:?}: awakened {aw:.0} vs max level {base:.0}");
+        }
+    }
+
+    /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn balance_full_run() {
