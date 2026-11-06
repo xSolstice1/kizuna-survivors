@@ -30,6 +30,7 @@ pub struct Assets {
     shun_hannya: [Texture2D; 3],
     toya_mukade: [Texture2D; 3],
     kuon_domain: [Texture2D; 3],
+    ren_divine: [Texture2D; 3],
     cleaver: Texture2D,
     cleaver_hannya: Texture2D,
     cleaver_rest: Texture2D,
@@ -70,6 +71,7 @@ impl Assets {
                 HeroId::Shun => frames(sprites::parse(include_str!("../../../art/src/shun.px"))),
                 HeroId::Toya => frames(sprites::parse(include_str!("../../../art/src/toya.px"))),
                 HeroId::Kuon => frames(sprites::parse(include_str!("../../../art/src/kuon.px"))),
+                HeroId::Ren => frames(sprites::parse(include_str!("../../../art/src/ren.px"))),
                 _ => frames(sprites::parse(&sprites::recolor(base, hero_palette(*h)))),
             })
             .collect();
@@ -79,6 +81,7 @@ impl Assets {
             shun_hannya: frames(sprites::parse(include_str!("../../../art/src/shun_hannya.px"))),
             toya_mukade: frames(sprites::parse(include_str!("../../../art/src/toya_mukade.px"))),
             kuon_domain: frames(sprites::parse(include_str!("../../../art/src/kuon_domain.px"))),
+            ren_divine: frames(sprites::parse(include_str!("../../../art/src/ren_divine.px"))),
             cleaver: sprites::texture(include_str!("../../../art/src/cleaver.px")),
             cleaver_hannya: sprites::texture(include_str!("../../../art/src/cleaver_hannya.px")),
             cleaver_rest: sprites::texture(include_str!("../../../art/src/cleaver_rest.px")),
@@ -127,6 +130,9 @@ impl Assets {
             ("gravity_well", sprites::texture(include_str!("../../../art/src/icons/gravity_well.px"))),
             ("repulsion_star", sprites::texture(include_str!("../../../art/src/icons/repulsion_star.px"))),
             ("void_lance", sprites::texture(include_str!("../../../art/src/icons/void_lance.px"))),
+            ("yinyang_orbs", sprites::texture(include_str!("../../../art/src/icons/yinyang_orbs.px"))),
+            ("spirit_seal", sprites::texture(include_str!("../../../art/src/icons/spirit_seal.px"))),
+            ("purification_wave", sprites::texture(include_str!("../../../art/src/icons/purification_wave.px"))),
             ("guard", sprites::texture(include_str!("../../../art/src/icons/guard.px"))),
             ("haste", sprites::texture(include_str!("../../../art/src/icons/haste.px"))),
             ("magnetism", sprites::texture(include_str!("../../../art/src/icons/magnetism.px"))),
@@ -157,6 +163,7 @@ impl Assets {
             (HeroId::Shun, true) => &self.shun_hannya[0],
             (HeroId::Toya, true) => &self.toya_mukade[0],
             (HeroId::Kuon, true) => &self.kuon_domain[0],
+            (HeroId::Ren, true) => &self.ren_divine[0],
             _ => &self.hero(h)[0],
         }
     }
@@ -195,6 +202,9 @@ impl Assets {
                 WeaponKind::GravityWell => "gravity_well",
                 WeaponKind::RepulsionStar => "repulsion_star",
                 WeaponKind::VoidLance => "void_lance",
+                WeaponKind::YinYangOrbs => "yinyang_orbs",
+                WeaponKind::SpiritSeal => "spirit_seal",
+                WeaponKind::PurificationWave => "purification_wave",
             },
             Upgrade::Passive(p) => match p {
                 PassiveKind::Might => "might",
@@ -491,6 +501,13 @@ impl Fx {
                     self.shake = self.shake.max(0.08);
                 }
                 Event::Warded => self.bursts.push((self.last_player, 26.0, 0.0, 17)),
+                Event::BarrierBlock => self.bursts.push((self.last_player, 22.0, 0.0, 21)),
+                Event::DivineAwakened { .. } => {
+                    self.announce("DIVINE PURIFICATION".into());
+                    self.say(self.lines().special);
+                    self.shake = self.shake.max(0.4);
+                }
+                Event::DivineCharge { .. } => self.say("Be purified... all of you!"),
                 Event::DomainOpened { .. } => {
                     self.announce("DOMAIN: ENDLESS FIRMAMENT".into());
                     self.say(self.lines().special);
@@ -809,6 +826,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
     let mukade = form == Some(SpecialKind::Mukade);
     let domain = form == Some(SpecialKind::Firmament);
+    let divine = form == Some(SpecialKind::Divine);
+    if divine {
+        draw_divine(world, t);
+    }
+    if world.cfg.hero == HeroId::Ren && !divine && world.barrier_cd <= 0.0 {
+        // Barrier ready: a soft pink shimmer.
+        draw_circle_lines(p.x, p.y - 8.0, 18.0 + 1.5 * (t * 4.0).sin(), 1.5, Color::new(1.0, 0.7, 0.85, 0.5));
+    }
     if world.cfg.hero == HeroId::Kuon && !domain {
         draw_stillness(world, t);
     }
@@ -880,15 +905,17 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         &a.toya_mukade[frame]
     } else if domain {
         &a.kuon_domain[frame]
+    } else if divine {
+        &a.ren_divine[frame]
     } else {
         &a.hero(world.cfg.hero)[frame]
     };
     let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
     let params = DrawTextureParams { flip_x: pl.facing.x < 0.0, ..Default::default() };
-    if fox || hannya || mukade || domain {
+    if fox || hannya || mukade || domain || divine {
         // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread / star-blue), offset around.
         let flare = 0.45 + 0.25 * (t * 9.0).sin();
-        let glow = if fox {
+        let glow = if fox || divine {
             Color::new(1.0, 0.75, 0.2, flare)
         } else if domain {
             Color::new(0.45, 0.8, 1.0, flare + 0.2)
@@ -923,6 +950,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     draw_rectangle(p.x - 10.0, p.y + 9.0, 20.0 * frac, 2.0, Color::from_rgba(255, 80, 110, 255));
 
     for w in &world.weapons {
+        if w.kind == WeaponKind::YinYangOrbs {
+            let r = world.yinyang_radius(w);
+            for c in world.yinyang_positions(w) {
+                draw_circle(c.x, c.y, r * 1.5, Color::new(1.0, 0.75, 0.85, 0.15));
+                draw_yinyang(vec2(c.x, c.y), r, time as f32 * 4.0);
+            }
+        }
         if w.kind == WeaponKind::MoonOrbs {
             let r = world.orb_radius(w.level);
             for c in world.orb_positions(w) {
@@ -933,6 +967,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
 
     for wv in &world.waves {
+        if wv.radius > 0.0 && wv.purify {
+            let f = 1.0 - wv.radius / wv.max_radius;
+            draw_circle(wv.center.x, wv.center.y, wv.radius, Color::new(1.0, 0.85, 0.92, 0.08 * f));
+            draw_circle_lines(wv.center.x, wv.center.y, wv.radius, 6.0, Color::new(1.0, 0.6, 0.75, 0.8 * f + 0.1));
+            draw_circle_lines(wv.center.x, wv.center.y, wv.radius - 6.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.7 * f));
+            continue;
+        }
         if wv.radius > 0.0 {
             let f = 1.0 - wv.radius / wv.max_radius;
             draw_circle_lines(wv.center.x, wv.center.y, wv.radius, 4.0, Color::new(1.0, 0.7, 0.3, 0.75 * f + 0.1));
@@ -1087,6 +1128,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 draw_circle(q.x, q.y, 6.0, Color::new(0.55, 0.8, 1.0, 0.3));
                 draw_circle(q.x, q.y, 3.0, Color::new(0.9, 0.97, 1.0, 1.0));
             }
+            ProjKind::SealOrb => {
+                let r = pr.radius[i];
+                let hue = (q.x * 0.01 + q.y * 0.013).sin() * 0.5 + 0.5;
+                let col = Color::new(1.0, 0.55 + 0.3 * hue, 0.75 - 0.2 * hue, 1.0);
+                draw_circle(q.x, q.y, r * 1.9, Color::new(col.r, col.g, col.b, 0.22));
+                draw_circle(q.x, q.y, r, col);
+                draw_circle(q.x, q.y, r * 0.5, WHITE);
+            }
             ProjKind::RedStar => {
                 let r = pr.radius[i];
                 let back = v.normalize_or_zero() * -1.0;
@@ -1234,6 +1283,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             style::QUAKE => (Color::new(1.0, 0.6, 0.2, 0.25 * fade), Color::new(1.0, 0.85, 0.4, fade), 6.0),
             style::SPINE => (Color::new(0.4, 0.02, 0.06, 0.35 * fade), Color::new(0.9, 0.2, 0.25, fade), 2.0),
             16 => (Color::new(0.2, 0.35, 0.9, 0.35 * fade), Color::new(0.75, 0.88, 1.0, fade), 3.0),
+            21 => (Color::new(1.0, 0.6, 0.75, 0.3 * fade), Color::new(1.0, 0.9, 0.95, fade), 2.0),
+            style::YINYANG => (Color::new(1.0, 1.0, 1.0, 0.3 * fade), Color::new(1.0, 0.4, 0.45, fade), 4.0),
+            style::PURIFY => (Color::new(1.0, 0.92, 0.65, 0.4 * fade), Color::new(1.0, 0.35, 0.4, fade), 9.0),
             17 => (Color::new(0.45, 0.8, 1.0, 0.3 * fade), Color::new(0.9, 0.97, 1.0, fade), 2.5),
             18 => (Color::new(0.55, 0.25, 1.0, 0.4 * fade), Color::new(0.9, 0.75, 1.0, fade), 7.0),
             style::VENOM => (Color::new(0.3, 0.75, 0.2, 0.35 * fade), Color::new(0.6, 1.0, 0.4, fade), 2.0),
@@ -1290,6 +1342,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 }
             }
             _ => {}
+        }
+        if *style == style::PURIFY {
+            draw_circle_lines(c.x, c.y, rr * 0.8, 5.0, Color::new(1.0, 0.95, 0.75, fade));
+            draw_circle_lines(c.x, c.y, rr * 0.55, 3.0, Color::new(1.0, 0.5, 0.6, fade));
         }
         if *style == 3 {
             draw_circle(c.x, c.y, rr * 0.6, Color::new(0.05, 0.0, 0.02, 0.5 * fade));
@@ -1440,6 +1496,9 @@ fn burst_life(st: u8) -> f32 {
     match st {
         style::SPINE => 0.45,
         16 => 0.45,
+        21 => 0.3,
+        style::YINYANG => 0.5,
+        style::PURIFY => 1.0,
         17 => 0.3,
         18 => 0.8,
         style::FRENZY => 0.7,
@@ -1566,6 +1625,13 @@ fn draw_blasts(world: &World, t: f32) {
             }
             style::SKYBOLT => {
                 draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k), 1.5, Color::new(0.8, 0.9, 1.0, 0.8));
+            }
+            style::YINYANG => {
+                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k) + 4.0, 2.0, Color::new(1.0, 0.5, 0.6, 0.4 + 0.5 * k));
+                // The orb drops from above, spinning.
+                let size = b.radius * 0.45;
+                let y = c.y - (1.0 - k) * 220.0;
+                draw_yinyang(vec2(c.x, y), size, t * 8.0);
             }
             _ => {}
         }
@@ -1794,4 +1860,70 @@ fn draw_star_motes(p: sim::Vec2, t: f32, domain: bool) {
         let tw = 0.5 + 0.5 * (t * 5.0 + kf).sin();
         draw_rectangle(x, y, 2.0, 2.0, Color::new(0.8, 0.92, 1.0, 0.4 + 0.5 * tw));
     }
+}
+
+/// A yin-yang orb: white and dark halves, each with a dot of the other.
+pub fn draw_yinyang(c: Vec2, r: f32, rot: f32) {
+    let dark = Color::new(0.1, 0.08, 0.14, 1.0);
+    draw_circle(c.x, c.y, r + 1.5, Color::new(0.85, 0.15, 0.2, 1.0));
+    draw_circle(c.x, c.y, r, WHITE);
+    // Dark half (a fan of triangles), then the two lobes.
+    let segs = 16;
+    for k in 0..segs {
+        let a0 = rot + std::f32::consts::FRAC_PI_2 + k as f32 / segs as f32 * std::f32::consts::PI;
+        let a1 = rot + std::f32::consts::FRAC_PI_2 + (k + 1) as f32 / segs as f32 * std::f32::consts::PI;
+        draw_triangle(c, c + vec2(a0.cos(), a0.sin()) * r, c + vec2(a1.cos(), a1.sin()) * r, dark);
+    }
+    let up = vec2((rot - std::f32::consts::FRAC_PI_2).cos(), (rot - std::f32::consts::FRAC_PI_2).sin()) * (r * 0.5);
+    draw_circle(c.x + up.x, c.y + up.y, r * 0.5, dark);
+    draw_circle(c.x - up.x, c.y - up.y, r * 0.5, WHITE);
+    draw_circle(c.x + up.x, c.y + up.y, r * 0.16, WHITE);
+    draw_circle(c.x - up.x, c.y - up.y, r * 0.16, dark);
+}
+
+/// Divine Purification: a turning magic circle, giant yin-yang orbs and floating ofuda.
+fn draw_divine(world: &World, t: f32) {
+    let p = world.player.pos;
+    let left = world.player.form;
+    let open = ((sim::content::DIVINE_DURATION - left) / 0.5).min(1.0);
+    let r = 90.0 * open;
+    let c = vec2(p.x, p.y + 2.0);
+    draw_circle(c.x, c.y, r, Color::new(1.0, 0.85, 0.6, 0.08));
+    for k in 0..3 {
+        draw_circle_lines(c.x, c.y, r * (0.45 + 0.27 * k as f32), 1.5, Color::new(1.0, 0.8, 0.5, 0.6));
+    }
+    // Rotating rune ticks and a pentagram.
+    for k in 0..24 {
+        let a = t * 0.6 + k as f32 / 24.0 * std::f32::consts::TAU;
+        let (r0, r1) = (r * 0.9, r * 0.98);
+        draw_line(c.x + a.cos() * r0, c.y + a.sin() * r0 * 0.5, c.x + a.cos() * r1, c.y + a.sin() * r1 * 0.5, 2.0, Color::new(1.0, 0.4, 0.45, 0.7));
+    }
+    for k in 0..5 {
+        let a0 = -t * 0.4 + k as f32 * std::f32::consts::TAU / 5.0;
+        let a1 = a0 + 2.0 * std::f32::consts::TAU / 5.0;
+        draw_line(c.x + a0.cos() * r * 0.7, c.y + a0.sin() * r * 0.35, c.x + a1.cos() * r * 0.7, c.y + a1.sin() * r * 0.35, 1.5, Color::new(1.0, 0.9, 0.6, 0.7));
+    }
+    // Giant orbiting yin-yang orbs.
+    for k in 0..4 {
+        let a = t * 1.4 + k as f32 * std::f32::consts::FRAC_PI_2;
+        let o = vec2(p.x + a.cos() * 52.0, p.y - 10.0 + a.sin() * 30.0);
+        draw_yinyang(o, 11.0, t * 5.0 + k as f32);
+    }
+    // Floating ofuda.
+    for k in 0..18 {
+        let a = -t * 0.9 + k as f32 * std::f32::consts::TAU / 18.0;
+        let rr = 30.0 + (k % 3) as f32 * 9.0;
+        let x = p.x + a.cos() * rr;
+        let y = p.y - 12.0 + a.sin() * rr * 0.6 + (t * 3.0 + k as f32).sin() * 3.0;
+        draw_rectangle(x - 1.5, y - 3.0, 3.0, 6.0, Color::new(1.0, 0.97, 0.9, 0.9));
+        draw_rectangle(x - 1.5, y - 1.0, 3.0, 1.0, Color::new(0.9, 0.2, 0.25, 0.9));
+    }
+    // Final Purification charging: the circle swells and brightens.
+    if left <= sim::content::DIVINE_FINALE_CHARGE {
+        let k = 1.0 - left / sim::content::DIVINE_FINALE_CHARGE;
+        let fr = sim::content::DIVINE_FINALE_RADIUS * (0.2 + 0.8 * k);
+        draw_circle(c.x, c.y, fr, Color::new(1.0, 0.85, 0.6, 0.08 + 0.12 * k));
+        draw_circle_lines(c.x, c.y, fr, 3.0, Color::new(1.0, 0.45, 0.5, 0.5 + 0.5 * k));
+    }
+    let _ = world;
 }
