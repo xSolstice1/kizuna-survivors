@@ -288,6 +288,26 @@ pub const MUKADE_MOVE_SPEED: f32 = 1.3;
 pub const MUKADE_HASTE: f32 = 0.7;
 pub const MUKADE_DAMAGE_TAKEN: f32 = 0.75;
 
+// ───────────────────────── Kuon: Stillness and Endless Firmament ─────────────────────────
+
+/// Stillness: enemies this close to Kuon move at this fraction of their speed.
+pub const STILLNESS_RADIUS: f32 = 64.0;
+pub const STILLNESS_SLOW: f32 = 0.3;
+/// The ward negates one hit, then recharges.
+pub const WARD_RECHARGE: f32 = 6.0;
+pub const DOMAIN_DURATION: f32 = 8.0;
+pub const DOMAIN_RADIUS: f32 = 360.0;
+/// Waves of spatial collapse inside the domain.
+pub const DOMAIN_WAVE_EVERY: f32 = 0.5;
+pub const DOMAIN_WAVE_DAMAGE: f32 = 20.0;
+/// Inside the domain Kuon's attacks hit harder and come faster.
+pub const DOMAIN_MIGHT: f32 = 1.8;
+pub const DOMAIN_HASTE: f32 = 0.6;
+/// Void Lance: Maximum, launched as the domain ends.
+pub const DOMAIN_FINALE_CHARGE: f32 = 1.2;
+pub const DOMAIN_FINALE_RADIUS: f32 = 70.0;
+pub const DOMAIN_FINALE_DAMAGE: f32 = 400.0;
+
 /// Enemies within this distance of a Fox Mirage clone chase it instead of the player.
 pub const DECOY_RADIUS: f32 = 110.0;
 /// Earliest time a chest may Awaken a weapon.
@@ -337,9 +357,15 @@ pub enum WeaponKind {
     Devour,
     /// Venomous fangs that home in and burst.
     VenomFang,
+    /// A gravity singularity that pulls a cluster together, then crushes it (Kuon's signature).
+    GravityWell,
+    /// A crimson star that blasts enemies back along its path.
+    RepulsionStar,
+    /// A slow purple orb that erases everything in its line.
+    VoidLance,
 }
 
-pub const ALL_WEAPONS: [WeaponKind; 20] = [
+pub const ALL_WEAPONS: [WeaponKind; 23] = [
     WeaponKind::Ofuda,
     WeaponKind::MoonOrbs,
     WeaponKind::SakuraField,
@@ -360,6 +386,9 @@ pub const ALL_WEAPONS: [WeaponKind; 20] = [
     WeaponKind::MukadeSpines,
     WeaponKind::Devour,
     WeaponKind::VenomFang,
+    WeaponKind::GravityWell,
+    WeaponKind::RepulsionStar,
+    WeaponKind::VoidLance,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -528,6 +557,30 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             speed: 260.0,
             ..base
         },
+        WeaponKind::GravityWell => WeaponStats {
+            damage: 26.0 + 7.0 * k, // collapse damage (the pull ticks for a quarter of this)
+            cooldown: 2.2 - 0.08 * k,
+            amount: 1 + at(l, 4) + at(l, 7),
+            area: 1.0 + 0.09 * k,
+            duration: 1.0,
+            ..base
+        },
+        WeaponKind::RepulsionStar => WeaponStats {
+            damage: 16.0 + 4.5 * k,
+            cooldown: 1.3 - 0.05 * k,
+            amount: 1 + at(l, 3) + at(l, 6),
+            area: 1.0 + 0.06 * k,
+            speed: 330.0,
+            ..base
+        },
+        WeaponKind::VoidLance => WeaponStats {
+            damage: 40.0 + 11.0 * k,
+            cooldown: 3.4 - 0.12 * k,
+            amount: 1 + at(l, 5),
+            area: 1.0 + 0.08 * k,
+            speed: 150.0,
+            ..base
+        },
         WeaponKind::IaiFlash => WeaponStats {
             damage: 30.0 + 8.0 * k,
             cooldown: 2.2 - 0.08 * k,
@@ -556,6 +609,8 @@ pub enum Tag {
     Spirit,
     /// Toya's Omukade curse.
     Curse,
+    /// Kuon's star-reading arts.
+    Star,
     Shared,
 }
 
@@ -592,6 +647,9 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
         WeaponKind::MukadeSpines => (&[Curse], (P::Expanse, 1)),
         WeaponKind::Devour => (&[Curse], (P::Vitality, 1)),
         WeaponKind::VenomFang => (&[Curse], (P::Haste, 1)),
+        WeaponKind::GravityWell => (&[Star], (P::Expanse, 1)),
+        WeaponKind::RepulsionStar => (&[Star], (P::Might, 1)),
+        WeaponKind::VoidLance => (&[Star], (P::Persistence, 1)),
     };
     WeaponDef { tags, complement }
 }
@@ -614,9 +672,10 @@ pub enum HeroId {
     Riku,
     Shun,
     Toya,
+    Kuon,
 }
 
-pub const ALL_HEROES: [HeroId; 9] = [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Toya, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
+pub const ALL_HEROES: [HeroId; 10] = [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Toya, HeroId::Kuon, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
 
 /// What Space does when the meter is full.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -629,6 +688,8 @@ pub enum SpecialKind {
     Hannya,
     /// Hundred-Leg Rampage: a timed predator form (tendril barrage, eruptions, regeneration).
     Mukade,
+    /// Domain: Endless Firmament: enemies in the domain freeze and take damage; ends in a giant lance.
+    Firmament,
 }
 
 impl SpecialKind {
@@ -639,6 +700,7 @@ impl SpecialKind {
             SpecialKind::NineTails => FOX_DURATION,
             SpecialKind::Hannya => HANNYA_DURATION,
             SpecialKind::Mukade => MUKADE_DURATION,
+            SpecialKind::Firmament => DOMAIN_DURATION,
         }
     }
 }
@@ -656,6 +718,7 @@ impl HeroId {
             HeroId::Riku => "riku",
             HeroId::Shun => "shun",
             HeroId::Toya => "toya",
+            HeroId::Kuon => "kuon",
         }
     }
     pub fn index(self) -> usize {
@@ -697,6 +760,7 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Nanami => ("Nanami Kiri", "Alchemist", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::FlamePool, &[Fire, Festival, Nature, Celestial], false),
         HeroId::Yuzu => ("Yuzu Momose", "Idol", "+10% experience", Bonus { growth: 0.10, ..b }, WeaponKind::Taiko, &[Festival, Celestial, Nature, Talisman], false),
         HeroId::Riku => ("Riku Kazamine", "Fox-spirit shinobi", "+5% move speed, +5% damage", Bonus { move_speed: 0.05, might: 0.05, ..b }, WeaponKind::FoxfireOrb, &[Fox, Thunder, Blade, Fire], true),
+        HeroId::Kuon => ("Kuon Hoshimi", "Star-reading onmyoji", "Stillness: nearby enemies crawl; a ward blocks a hit every 6s", b, WeaponKind::GravityWell, &[Star, Celestial, Talisman, Thunder], true),
         HeroId::Toya => ("Toya Hyakuashi", "Cursed youth", "Regenerate 0.3 HP/s, +5% move speed", Bonus { recovery: 0.3, move_speed: 0.05, ..b }, WeaponKind::CrimsonTendrils, &[Curse, Blade, Fire, Thunder], true),
         HeroId::Shun => ("Shun Yamikiri", "Spirit ferryman", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::GraveCleaver, &[Spirit, Blade, Thunder, Fire], true),
     };
@@ -705,6 +769,7 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Riku => (SpecialKind::NineTails, "Ninefold Foxfire"),
         HeroId::Shun => (SpecialKind::Hannya, "Hannya Unbound"),
         HeroId::Toya => (SpecialKind::Mukade, "Hundred-Leg Rampage"),
+        HeroId::Kuon => (SpecialKind::Firmament, "Domain: Endless Firmament"),
         _ => (SpecialKind::Barrier, "Barrier"),
     };
     HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
@@ -743,6 +808,9 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::MukadeSpines => "Centipede Spine",
         WeaponKind::Devour => "Gluttony",
         WeaponKind::VenomFang => "Venom Rain",
+        WeaponKind::GravityWell => "Event Horizon",
+        WeaponKind::RepulsionStar => "Red Nova",
+        WeaponKind::VoidLance => "Void Cascade",
     }
 }
 
@@ -769,6 +837,9 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::MukadeSpines => "Centipede Spine: a marching line of spines crawls out across the ground every few seconds.",
         WeaponKind::Devour => "Gluttony: a wider pulse that heals twice as much, and a great feeding wave every few seconds.",
         WeaponKind::VenomFang => "Venom Rain: more fangs, and a ring of venom fangs bursts out every few seconds.",
+        WeaponKind::GravityWell => "Event Horizon: a vast singularity swallows the horde every few seconds.",
+        WeaponKind::RepulsionStar => "Red Nova: a ring of crimson stars blasts outward every few seconds.",
+        WeaponKind::VoidLance => "Void Cascade: three void lances fan out across the field every few seconds.",
     }
 }
 
@@ -844,6 +915,9 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
         WeaponKind::MukadeSpines => s.amount += 2,
         WeaponKind::Devour => s.area *= 1.3,
         WeaponKind::VenomFang => s.amount += 2,
+        WeaponKind::GravityWell => s.area *= 1.3,
+        WeaponKind::RepulsionStar => s.amount += 1,
+        WeaponKind::VoidLance => s.area *= 1.3,
     }
     // Every Awakening is a real power spike on top of its own changes (and its signature).
     s.damage *= AWAKEN_DAMAGE;
@@ -876,6 +950,9 @@ pub fn signature_every(kind: WeaponKind) -> f32 {
         WeaponKind::MukadeSpines => 2.0,
         WeaponKind::Devour => 2.5,
         WeaponKind::VenomFang => 2.2,
+        WeaponKind::GravityWell => 4.0,
+        WeaponKind::RepulsionStar => 2.6,
+        WeaponKind::VoidLance => 3.5,
     }
 }
 
@@ -902,6 +979,9 @@ pub fn signature_name(kind: WeaponKind) -> &'static str {
         WeaponKind::MukadeSpines => "Marching Spine",
         WeaponKind::Devour => "Feeding Wave",
         WeaponKind::VenomFang => "Fang Ring",
+        WeaponKind::GravityWell => "Event Horizon",
+        WeaponKind::RepulsionStar => "Red Nova",
+        WeaponKind::VoidLance => "Void Cascade",
     }
 }
 
@@ -976,6 +1056,9 @@ impl Upgrade {
             Upgrade::Weapon(WeaponKind::MukadeSpines) => "Mukade Spines",
             Upgrade::Weapon(WeaponKind::Devour) => "Devour",
             Upgrade::Weapon(WeaponKind::VenomFang) => "Venom Fang",
+            Upgrade::Weapon(WeaponKind::GravityWell) => "Gravity Well",
+            Upgrade::Weapon(WeaponKind::RepulsionStar) => "Repulsion Star",
+            Upgrade::Weapon(WeaponKind::VoidLance) => "Void Lance",
             Upgrade::Passive(PassiveKind::Might) => "Might",
             Upgrade::Passive(PassiveKind::Haste) => "Haste",
             Upgrade::Passive(PassiveKind::Expanse) => "Expanse",
@@ -1021,6 +1104,9 @@ impl Upgrade {
                 WeaponKind::MukadeSpines => "Segmented spines erupt from the ground beneath nearby enemies.",
                 WeaponKind::Devour => "A hungry pulse drains everything around you and heals you for each enemy caught.",
                 WeaponKind::VenomFang => "Venomous fangs home in on enemies and burst on impact.",
+                WeaponKind::GravityWell => "A gravity singularity drags a cluster of enemies together, then crushes them.",
+                WeaponKind::RepulsionStar => "A crimson star tears through enemies and blasts them back.",
+                WeaponKind::VoidLance => "A slow orb of void erases everything along its line.",
             }
             .into(),
             Upgrade::Weapon(k) => {
@@ -1048,6 +1134,9 @@ impl Upgrade {
                         WeaponKind::MukadeSpines => "spine",
                         WeaponKind::Devour => "",
                         WeaponKind::VenomFang => "fang",
+                        WeaponKind::GravityWell => "well",
+                        WeaponKind::RepulsionStar => "star",
+                        WeaponKind::VoidLance => "lance",
                         WeaponKind::SakuraField => "",
                     };
                     parts.push(format!("+{} {unit}", b.amount - a.amount));

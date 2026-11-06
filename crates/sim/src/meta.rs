@@ -170,6 +170,7 @@ pub fn unlock_text(h: HeroId) -> &'static str {
         HeroId::Haru => "As Toya, open 10 chests in one night.",
         HeroId::Nanami => "As Shun, take 3 shrine blessings in one night.",
         HeroId::Yuzu => "As Toya, reach level 60.",
+        HeroId::Kuon => "As Toya, defeat the Night Lord.",
     }
 }
 
@@ -371,6 +372,7 @@ impl Profile {
                 HeroId::Haru => as_hero == HeroId::Toya && w.chests_opened >= 10,
                 HeroId::Nanami => as_hero == HeroId::Shun && w.shrines_taken.len() >= 3,
                 HeroId::Yuzu => as_hero == HeroId::Toya && w.player.level >= 60,
+                HeroId::Kuon => as_hero == HeroId::Toya && night_lord,
             };
             if earned && !self.is_unlocked(h) {
                 self.unlocked.push(h);

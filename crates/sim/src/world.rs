@@ -124,6 +124,14 @@ pub enum Event {
     Devour { pos: Vec2, radius: f32 },
     /// Hundred-Leg Rampage began (with the Thousand-Leg Burst).
     MukadeAwakened { pos: Vec2 },
+    /// A Gravity Well collapsed.
+    WellCollapse { pos: Vec2, radius: f32 },
+    /// Kuon's ward negated a hit.
+    Warded,
+    /// Domain: Endless Firmament opened / is charging its finale / launched Void Lance: Maximum.
+    DomainOpened { pos: Vec2 },
+    VoidCharge { pos: Vec2 },
+    VoidMaximum { pos: Vec2 },
     /// A floor pickup appeared / was taken.
     PickupSpawned { pos: Vec2, kind: PickupKind },
     PickupTaken { pos: Vec2, kind: PickupKind },
@@ -335,6 +343,21 @@ pub enum ProjKind {
     SpiritBolt,
     /// Venom Fang: homes in and bursts.
     Fang,
+    /// Repulsion Star: pierces and blasts enemies back.
+    RedStar,
+    /// Void Lance: a slow orb that erases its line.
+    VoidOrb,
+}
+
+/// A Gravity Well singularity: pulls enemies in, then collapses.
+#[derive(Clone, Copy, Debug)]
+pub struct Well {
+    pub pos: Vec2,
+    pub life: f32,
+    pub max_life: f32,
+    pub radius: f32,
+    damage: f32,
+    tick: f32,
 }
 
 /// Burst / blast looks (shared by the sim events and the renderer).
@@ -535,6 +558,12 @@ pub struct World {
     pub coins: Vec<(Vec2, u32)>,
     pub clones: Vec<MirageClone>,
     pub tethers: Vec<Tether>,
+    pub wells: Vec<Well>,
+    /// Kuon's ward: seconds until it can block again (0 = ready).
+    pub ward_cd: f32,
+    /// Centre of Endless Firmament while it is open.
+    pub domain_center: Vec2,
+    domain_charging: bool,
     /// Floor pickups waiting on the ground.
     pub pickups: Vec<(Vec2, PickupKind)>,
     next_pickup: f32,
@@ -633,6 +662,10 @@ impl World {
             coins: Vec::new(),
             clones: Vec::new(),
             tethers: Vec::new(),
+            wells: Vec::new(),
+            ward_cd: 0.0,
+            domain_center: Vec2::ZERO,
+            domain_charging: false,
             pickups: Vec::new(),
             next_pickup: 30.0,
             speed_buff: 0.0,
@@ -689,6 +722,7 @@ impl World {
         self.update_fox();
         self.update_hannya();
         self.update_mukade();
+        self.update_domain();
         self.update_clones();
         self.update_spirit_arts();
         self.update_effects();
@@ -723,11 +757,15 @@ impl World {
         self.weapons.iter().find(|w| w.kind == kind).map_or(0, |w| w.level)
     }
     fn might(&self) -> f32 {
-        let sake = if self.damage_buff > 0.0 { DAMAGE_BUFF } else { 1.0 };
+        let sake = if self.damage_buff > 0.0 { DAMAGE_BUFF } else { 1.0 } * if self.form_kind() == Some(SpecialKind::Firmament) { DOMAIN_MIGHT } else { 1.0 };
         (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake
     }
     fn haste(&self) -> f32 {
-        let frenzy = if self.form_kind() == Some(SpecialKind::Mukade) { MUKADE_HASTE } else { 1.0 };
+        let frenzy = match self.form_kind() {
+            Some(SpecialKind::Mukade) => MUKADE_HASTE,
+            Some(SpecialKind::Firmament) => DOMAIN_HASTE,
+            _ => 1.0,
+        };
         (1.0 - 0.08 * self.passive_level(PassiveKind::Haste) as f32 - self.bonus.cooldown) * frenzy
     }
     pub fn area_mult(&self) -> f32 {
@@ -810,6 +848,13 @@ impl World {
 
     /// Applies a hit to the player (after armor) and handles death / Revival.
     fn hurt_player(&mut self, raw: f32) {
+        // Kuon's ward: a hit is simply not allowed to land.
+        if self.cfg.hero == HeroId::Kuon && self.ward_cd <= 0.0 {
+            self.ward_cd = WARD_RECHARGE;
+            self.player.iframes = 0.6;
+            self.events.push(Event::Warded);
+            return;
+        }
         let raw = match self.form_kind() {
             Some(SpecialKind::NineTails) => raw * FOX_DAMAGE_TAKEN,
             Some(SpecialKind::Hannya) => raw * HANNYA_DAMAGE_TAKEN,
@@ -858,7 +903,7 @@ impl World {
             return;
         }
         let p = self.player.pos;
-        let frozen = self.freeze > 0.0;
+        let frozen = self.freeze > 0.0 || self.form_kind() == Some(SpecialKind::Firmament);
         let mut worst = 0.0f32;
         let enemies = &self.enemies;
         self.grid.for_each_near(p, PLAYER_RADIUS + MAX_ENEMY_RADIUS, |j| {
@@ -994,6 +1039,8 @@ impl World {
         let time = self.time;
         // Fox Mirage decoys: nearby enemies chase a clone instead of the player.
         let decoys: Vec<Vec2> = self.clones.iter().map(|c| c.pos).collect();
+        let stillness = self.cfg.hero == HeroId::Kuon;
+        let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some(self.domain_center);
         let e = &mut self.enemies;
         let frozen = self.freeze > 0.0;
         // Pass 1: desired velocity = seek player + separation from grid neighbours.
@@ -1002,9 +1049,24 @@ impl World {
                 e.vel[i] = Vec2::ZERO;
                 continue;
             }
+            // Endless Firmament: everything inside is suspended (bosses only crawl).
+            if let Some(c) = domain {
+                if (e.pos[i] - c).length_sq() < DOMAIN_RADIUS * DOMAIN_RADIUS {
+                    if e.kind[i].is_boss() {
+                        e.vel[i] = (player - e.pos[i]).normalize_or_zero() * (e.speed[i] * 0.15);
+                    } else {
+                        e.vel[i] = Vec2::ZERO;
+                    }
+                    continue;
+                }
+            }
             let p = e.pos[i];
             let ri = e.radius[i];
             let mut speed = e.speed[i];
+            // Stillness: space thickens around Kuon.
+            if stillness && (e.pos[i] - player).length_sq() < STILLNESS_RADIUS * STILLNESS_RADIUS {
+                speed *= STILLNESS_SLOW;
+            }
             if e.kind[i] == EnemyKind::Kasa {
                 // Hopping gait.
                 speed *= 0.45 + 0.75 * ((time * 7.0 + e.id[i] as f32 * 0.7).sin().abs());
@@ -1325,6 +1387,27 @@ impl World {
                         }
                     }
                 }
+                WeaponKind::GravityWell => {
+                    // Event Horizon: a vast singularity.
+                    if let Some(t) = self.random_targets(260.0, 1).first().copied() {
+                        self.wells.push(Well { pos: t, life: 1.6, max_life: 1.6, radius: 170.0 * area, damage: dmg * 2.0, tick: 0.0 });
+                    }
+                }
+                WeaponKind::RepulsionStar => {
+                    // Red Nova: a ring of crimson stars.
+                    for k in 0..10 {
+                        let a = k as f32 / 10.0 * std::f32::consts::TAU;
+                        self.projectiles.push_kind(ProjKind::RedStar, 10.0 * area, p, Vec2::from_angle(a) * 340.0, 1.3, dmg, 255, 0.0);
+                    }
+                }
+                WeaponKind::VoidLance => {
+                    // Void Cascade: three lances fan out.
+                    let d = self.aim_dir();
+                    for k in -1..=1 {
+                        let a = d.y.atan2(d.x) + k as f32 * 0.55;
+                        self.projectiles.push_kind(ProjKind::VoidOrb, 26.0 * area, p, Vec2::from_angle(a) * 170.0, 3.0, dmg * 1.3, 255, 0.0);
+                    }
+                }
                 WeaponKind::CrimsonTendrils => {
                     // Hundred Lashes: twelve tendrils tear through everything around.
                     self.lash_targets(p, 160.0 * area, 12, dmg * 1.2);
@@ -1407,6 +1490,50 @@ impl World {
             let tip = from + (to - from).normalize_or_zero() * ((to - from).length() + 20.0);
             self.hurt_along(from, tip, 8.0, dmg);
             self.events.push(Event::Lash { from, to: tip });
+        }
+    }
+
+    fn start_domain(&mut self) {
+        let p = self.player.pos;
+        self.player.form = DOMAIN_DURATION;
+        self.player.iframes = BARRIER_IFRAMES;
+        self.domain_center = p;
+        self.domain_charging = false;
+        self.fox_tick = 0.0;
+        self.shots.clear();
+        self.events.push(Event::DomainOpened { pos: p });
+    }
+
+    fn update_domain(&mut self) {
+        self.ward_cd = (self.ward_cd - DT).max(0.0);
+        if self.form_kind() != Some(SpecialKind::Firmament) {
+            return;
+        }
+        self.player.form -= DT;
+        let c = self.domain_center;
+        let power = self.fox_power();
+        // Waves of spatial collapse over everything inside.
+        self.fox_tick -= DT;
+        if self.fox_tick <= 0.0 {
+            self.fox_tick = DOMAIN_WAVE_EVERY;
+            self.query_circle(c, DOMAIN_RADIUS);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let dir = self.enemies.pos[j] - c;
+                self.hurt_enemy(j, DOMAIN_WAVE_DAMAGE * power, dir * 0.0);
+            }
+        }
+        if !self.domain_charging && self.player.form <= DOMAIN_FINALE_CHARGE {
+            self.domain_charging = true;
+            self.events.push(Event::VoidCharge { pos: self.player.pos });
+        }
+        if self.player.form <= 0.0 {
+            self.player.form = 0.0;
+            // Void Lance: Maximum, erasing everything along its line.
+            let p = self.player.pos;
+            let d = self.aim_dir();
+            self.projectiles.push_kind(ProjKind::VoidOrb, DOMAIN_FINALE_RADIUS, p, d * 260.0, 4.0, DOMAIN_FINALE_DAMAGE * power, 255, 0.0);
+            self.events.push(Event::VoidMaximum { pos: p });
         }
     }
 
@@ -1519,6 +1646,40 @@ impl World {
 
     fn update_spirit_arts(&mut self) {
         let p = self.player.pos;
+        // Gravity Wells: drag enemies to the centre, then collapse.
+        let mut i = 0;
+        while i < self.wells.len() {
+            let mut wl = self.wells[i];
+            wl.life -= DT;
+            wl.tick -= DT;
+            self.query_circle(wl.pos, wl.radius);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let to = wl.pos - self.enemies.pos[j];
+                if !self.enemies.kind[j].is_boss() {
+                    self.enemies.push[j] += to * (4.0 * DT * 60.0 / 10.0);
+                }
+            }
+            if wl.tick <= 0.0 {
+                wl.tick = 0.25;
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    self.hurt_enemy(j, wl.damage * 0.25, Vec2::ZERO);
+                }
+            }
+            if wl.life <= 0.0 {
+                self.query_circle(wl.pos, wl.radius * 0.8);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    self.hurt_enemy(j, wl.damage, Vec2::ZERO);
+                }
+                self.events.push(Event::WellCollapse { pos: wl.pos, radius: wl.radius });
+                self.wells.swap_remove(i);
+                continue;
+            }
+            self.wells[i] = wl;
+            i += 1;
+        }
         // Soul Tether: drain and drag.
         let mut i = 0;
         while i < self.tethers.len() {
@@ -2090,7 +2251,10 @@ impl World {
                 | WeaponKind::CrimsonTendrils
                 | WeaponKind::MukadeSpines
                 | WeaponKind::Devour
-                | WeaponKind::VenomFang => {
+                | WeaponKind::VenomFang
+                | WeaponKind::GravityWell
+                | WeaponKind::RepulsionStar
+                | WeaponKind::VoidLance => {
                     let timer = w.timer - DT;
                     if timer <= 0.0 {
                         self.weapons[wi].timer = s.cooldown * haste;
@@ -2353,6 +2517,30 @@ impl World {
                     self.projectiles.burst[last] = 26.0 * area;
                 }
             }
+            WeaponKind::GravityWell => {
+                self.events.push(Event::Fired(WeaponKind::GravityWell));
+                for t in self.random_targets(260.0, s.amount) {
+                    self.wells.push(Well { pos: t, life: s.duration, max_life: s.duration, radius: 70.0 * area, damage: dmg, tick: 0.0 });
+                }
+            }
+            WeaponKind::RepulsionStar => {
+                self.events.push(Event::Fired(WeaponKind::RepulsionStar));
+                let d = self.aim_dir();
+                let n = s.amount as f32;
+                for k in 0..s.amount {
+                    let a = d.y.atan2(d.x) + (k as f32 - (n - 1.0) / 2.0) * 0.3;
+                    self.projectiles.push_kind(ProjKind::RedStar, 10.0 * area, p, Vec2::from_angle(a) * s.speed, 1.4, dmg, 255, 0.0);
+                }
+            }
+            WeaponKind::VoidLance => {
+                self.events.push(Event::Fired(WeaponKind::VoidLance));
+                let d = self.aim_dir();
+                let n = s.amount as f32;
+                for k in 0..s.amount {
+                    let a = d.y.atan2(d.x) + (k as f32 - (n - 1.0) / 2.0) * 0.6;
+                    self.projectiles.push_kind(ProjKind::VoidOrb, 22.0 * area, p, Vec2::from_angle(a) * s.speed, 3.0, dmg, 255, 0.0);
+                }
+            }
             WeaponKind::FoxMirage => {
                 self.events.push(Event::Fired(WeaponKind::FoxMirage));
                 let n = s.amount;
@@ -2550,6 +2738,9 @@ impl World {
                 }
                 let (dmg, vel) = (self.projectiles.damage[i], self.projectiles.vel[i]);
                 self.hurt_enemy(j, dmg, vel);
+                if self.projectiles.kind[i] == ProjKind::RedStar {
+                    self.enemies.push[j] += vel.normalize_or_zero() * (420.0 * self.enemies.knock[j].max(0.3));
+                }
                 pierce = pierce.saturating_sub(if pierce == 255 { 0 } else { 1 });
             }
             self.projectiles.pierce[i] = pierce;
@@ -2728,6 +2919,7 @@ impl World {
             SpecialKind::NineTails => return self.start_fox(),
             SpecialKind::Hannya => return self.start_hannya(),
             SpecialKind::Mukade => return self.start_mukade(),
+            SpecialKind::Firmament => return self.start_domain(),
             SpecialKind::Barrier => {}
         }
         self.player.iframes = BARRIER_IFRAMES;
@@ -3562,6 +3754,45 @@ mod tests {
         assert!(has(MarkerKind::Chest { tier: 3 }) && has(MarkerKind::Shrine) && has(MarkerKind::Pickup(PickupKind::OniSake)));
         let obstacles = w.map_obstacles(Vec2::new(-2000.0, -2000.0), Vec2::new(2000.0, 2000.0));
         assert!(!obstacles.is_empty(), "the stage's props should be reported to the map");
+    }
+
+    #[test]
+    fn kuon_ward_stillness_and_endless_firmament() {
+        let mut w = World::new(WorldConfig { hero: HeroId::Kuon, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        assert_eq!(w.weapons[0].kind, WeaponKind::GravityWell);
+        w.cfg.stress = None;
+        // Ward: the first hit is negated, the next one lands.
+        let hp = w.player.hp;
+        w.hurt_player(30.0);
+        assert_eq!(w.player.hp, hp);
+        w.player.iframes = 0.0;
+        w.hurt_player(30.0);
+        assert!(w.player.hp < hp);
+        // Stillness: an enemy right next to Kuon crawls.
+        w.cfg.stress = Some(Stress { enemies: 0, projectiles: 0 });
+        w.weapons.clear();
+        w.spawn_enemy(EnemyKind::Kasa, Vec2::new(40.0, 0.0));
+        w.enemies.hp[0] = 1e9;
+        let before = w.enemies.pos[0];
+        w.step(Input::default());
+        assert!((w.enemies.pos[0] - before).length() < 0.6, "stillness should slow it, moved {}", (w.enemies.pos[0] - before).length());
+        // Domain: enemies inside freeze, take damage, and the finale lance fires.
+        for k in 0..20 {
+            w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(k as f32) * 200.0);
+        }
+        w.player.special = 1.0;
+        w.step(Input { special: true, ..Default::default() });
+        assert!(w.events.iter().any(|e| matches!(e, Event::DomainOpened { .. })));
+        let i = w.enemies.len() - 1;
+        let frozen_at = w.enemies.pos[i];
+        let mut finale = false;
+        for _ in 0..60 * 9 {
+            w.step(Input::default());
+            finale |= w.events.iter().any(|e| matches!(e, Event::VoidMaximum { .. }));
+        }
+        assert!(finale, "Void Lance: Maximum should launch at the end");
+        assert!(w.kills >= 10, "domain waves should kill the suspended ring, killed {}", w.kills);
+        let _ = frozen_at;
     }
 
     fn damage_over(kind: WeaponKind, awakened: bool, hero: HeroId) -> f32 {
