@@ -12,6 +12,9 @@ impl Vec2 {
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
+    pub fn dot_with(self, o: Vec2) -> f32 {
+        self.x * o.x + self.y * o.y
+    }
     pub fn length_sq(self) -> f32 {
         self.x * self.x + self.y * self.y
     }

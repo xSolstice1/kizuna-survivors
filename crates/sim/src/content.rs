@@ -129,6 +129,27 @@ pub const SPECIAL_KILLS: f32 = 120.0;
 pub const BARRIER_RADIUS: f32 = 170.0;
 pub const BARRIER_DAMAGE: f32 = 60.0;
 pub const BARRIER_IFRAMES: f32 = 1.5;
+
+// ───────────────────────── Riku's special: Ninefold Foxfire ─────────────────────────
+
+pub const FOX_DURATION: f32 = 8.0;
+/// Opening explosion.
+pub const FOX_BLAST_RADIUS: f32 = 230.0;
+pub const FOX_BLAST_DAMAGE: f32 = 110.0;
+pub const FOX_TAILS: usize = 9;
+pub const FOX_TAIL_REACH: (f32, f32) = (55.0, 125.0);
+pub const FOX_TAIL_DAMAGE: f32 = 18.0;
+/// Seconds between tail / aura damage ticks.
+pub const FOX_TICK: f32 = 0.25;
+pub const FOX_AURA_RADIUS: f32 = 64.0;
+pub const FOX_AURA_DAMAGE: f32 = 9.0;
+/// A ring of golden orbs every this many seconds.
+pub const FOX_ORB_EVERY: f32 = 1.1;
+pub const FOX_ORBS: u32 = 10;
+pub const FOX_ORB_DAMAGE: f32 = 32.0;
+/// Damage taken while transformed is multiplied by this.
+pub const FOX_DAMAGE_TAKEN: f32 = 0.7;
+pub const FOX_MOVE_SPEED: f32 = 1.2;
 /// Earliest time a chest may Awaken a weapon.
 pub const AWAKEN_FROM: f32 = 480.0;
 
@@ -152,9 +173,15 @@ pub enum WeaponKind {
     Crescent,
     /// Thrown flasks that leave burning ground.
     FlamePool,
+    /// Foxfire gathers in the hand, then launches and bursts (Riku's signature, charge type).
+    FoxfireOrb,
+    /// Fox spirits that hunt the nearest enemies.
+    Familiars,
+    /// A big spinning shuriken that flies out and comes back.
+    GaleShuriken,
 }
 
-pub const ALL_WEAPONS: [WeaponKind; 8] = [
+pub const ALL_WEAPONS: [WeaponKind; 11] = [
     WeaponKind::Ofuda,
     WeaponKind::MoonOrbs,
     WeaponKind::SakuraField,
@@ -163,6 +190,9 @@ pub const ALL_WEAPONS: [WeaponKind; 8] = [
     WeaponKind::StarFall,
     WeaponKind::Crescent,
     WeaponKind::FlamePool,
+    WeaponKind::FoxfireOrb,
+    WeaponKind::Familiars,
+    WeaponKind::GaleShuriken,
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -242,6 +272,33 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             duration: 2.5 + 0.15 * k,
             ..base
         },
+        WeaponKind::FoxfireOrb => WeaponStats {
+            damage: 17.0 + 4.5 * k, // burst damage
+            cooldown: 1.6 - 0.06 * k,
+            amount: 1 + at(l, 4) + at(l, 7),
+            area: 1.0 + 0.10 * k, // burst radius
+            speed: 260.0,
+            duration: 0.55, // charge time
+            ..base
+        },
+        WeaponKind::Familiars => WeaponStats {
+            damage: 10.0 + 2.5 * k,
+            cooldown: 2.2 - 0.08 * k,
+            amount: 2 + at(l, 3) + at(l, 5) + at(l, 7),
+            speed: 170.0,
+            pierce: 3 + at(l, 4) as u8 + at(l, 6) as u8 + at(l, 8) as u8,
+            duration: 2.6, // lifetime
+            ..base
+        },
+        WeaponKind::GaleShuriken => WeaponStats {
+            damage: 12.0 + 3.0 * k,
+            cooldown: 2.0 - 0.07 * k,
+            amount: 1 + at(l, 3) + at(l, 6),
+            area: 1.0 + 0.08 * k,
+            speed: 300.0,
+            duration: 1.4, // out-and-back time
+            ..base
+        },
     }
 }
 
@@ -257,6 +314,8 @@ pub enum Tag {
     Fire,
     Thunder,
     Blade,
+    /// Riku's fox-spirit arts.
+    Fox,
     Shared,
 }
 
@@ -281,6 +340,9 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
         // Built for future heroes (thunder / blade users); not in Ren's pool.
         WeaponKind::ThunderChain => (&[Thunder], (P::Might, 1)),
         WeaponKind::Crescent => (&[Blade], (P::Swiftness, 1)),
+        WeaponKind::FoxfireOrb => (&[Fox], (P::Magnet, 1)),
+        WeaponKind::Familiars => (&[Fox], (P::Recovery, 1)),
+        WeaponKind::GaleShuriken => (&[Fox, Blade], (P::Haste, 1)),
     };
     WeaponDef { tags, complement }
 }
@@ -300,9 +362,19 @@ pub enum HeroId {
     Haru,
     Nanami,
     Yuzu,
+    Riku,
 }
 
-pub const ALL_HEROES: [HeroId; 6] = [HeroId::Ren, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
+pub const ALL_HEROES: [HeroId; 7] = [HeroId::Ren, HeroId::Riku, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
+
+/// What Space does when the meter is full.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpecialKind {
+    /// Purifying Barrier: a ring that damages, knocks back and erases fireballs.
+    Barrier,
+    /// Ninefold Foxfire: a timed transformation (tails, aura, golden orb volleys).
+    NineTails,
+}
 
 impl HeroId {
     /// Save-file key (stable; never rename).
@@ -314,6 +386,7 @@ impl HeroId {
             HeroId::Haru => "haru",
             HeroId::Nanami => "nanami",
             HeroId::Yuzu => "yuzu",
+            HeroId::Riku => "riku",
         }
     }
     pub fn from_key(k: &str) -> Option<HeroId> {
@@ -337,6 +410,8 @@ pub struct HeroDef {
     pub passive_slots: usize,
     /// False while the hero's own sprite and special move are still placeholders.
     pub finished: bool,
+    pub special: SpecialKind,
+    pub special_name: &'static str,
 }
 
 pub fn hero_def(id: HeroId) -> HeroDef {
@@ -349,8 +424,14 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Haru => ("Haru Tachibana", "Swordsman", "+1 armor", Bonus { armor: 1.0, ..b }, WeaponKind::Crescent, &[Blade, Nature, Festival, Thunder], false),
         HeroId::Nanami => ("Nanami Kiri", "Alchemist", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::FlamePool, &[Fire, Festival, Nature, Celestial], false),
         HeroId::Yuzu => ("Yuzu Momose", "Idol", "+10% experience", Bonus { growth: 0.10, ..b }, WeaponKind::Taiko, &[Festival, Celestial, Nature, Talisman], false),
+        HeroId::Riku => ("Riku Kazamine", "Fox-spirit shinobi", "+5% move speed, +5% damage", Bonus { move_speed: 0.05, might: 0.05, ..b }, WeaponKind::FoxfireOrb, &[Fox, Thunder, Blade, Fire], true),
     };
-    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished }
+    let (special, special_name) = match id {
+        HeroId::Ren => (SpecialKind::Barrier, "Purify"),
+        HeroId::Riku => (SpecialKind::NineTails, "Ninefold Foxfire"),
+        _ => (SpecialKind::Barrier, "Barrier"),
+    };
+    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
 }
 
 impl HeroDef {
@@ -374,6 +455,9 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::StarFall => "Meteor Festival",
         WeaponKind::Crescent => "Full Moon Cut",
         WeaponKind::FlamePool => "Undying Foxfire",
+        WeaponKind::FoxfireOrb => "Foxfire Comet",
+        WeaponKind::Familiars => "Kitsune Procession",
+        WeaponKind::GaleShuriken => "Tempest Wheel",
     }
 }
 
@@ -388,6 +472,9 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::StarFall => "Twice the stars and +20% damage.",
         WeaponKind::Crescent => "Cuts a full circle with +30% damage.",
         WeaponKind::FlamePool => "Pools burn 60% longer, 25% wider, 25% hotter.",
+        WeaponKind::FoxfireOrb => "Charges twice as fast, +40% damage and +30% burst; each burst scatters three sparks.",
+        WeaponKind::Familiars => "Twice the fox spirits; they never tire (+3 pierce, +25% damage).",
+        WeaponKind::GaleShuriken => "Two extra shuriken, +30% size and +25% damage.",
     }
 }
 
@@ -423,6 +510,21 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
         WeaponKind::FlamePool => {
             s.duration *= 1.6;
             s.area *= 1.25;
+            s.damage *= 1.25;
+        }
+        WeaponKind::FoxfireOrb => {
+            s.duration *= 0.5;
+            s.damage *= 1.4;
+            s.area *= 1.3;
+        }
+        WeaponKind::Familiars => {
+            s.amount *= 2;
+            s.pierce += 3;
+            s.damage *= 1.25;
+        }
+        WeaponKind::GaleShuriken => {
+            s.amount += 2;
+            s.area *= 1.3;
             s.damage *= 1.25;
         }
     }
@@ -488,6 +590,9 @@ impl Upgrade {
             Upgrade::Weapon(WeaponKind::StarFall) => "Star Fall",
             Upgrade::Weapon(WeaponKind::Crescent) => "Crescent Slash",
             Upgrade::Weapon(WeaponKind::FlamePool) => "Flame Pool",
+            Upgrade::Weapon(WeaponKind::FoxfireOrb) => "Foxfire Orb",
+            Upgrade::Weapon(WeaponKind::Familiars) => "Kitsune Familiars",
+            Upgrade::Weapon(WeaponKind::GaleShuriken) => "Gale Shuriken",
             Upgrade::Passive(PassiveKind::Might) => "Might",
             Upgrade::Passive(PassiveKind::Haste) => "Haste",
             Upgrade::Passive(PassiveKind::Expanse) => "Expanse",
@@ -521,6 +626,9 @@ impl Upgrade {
                 WeaponKind::StarFall => "Stars crash down on enemies around you.",
                 WeaponKind::Crescent => "A crescent slash cuts in front of you.",
                 WeaponKind::FlamePool => "Throws flasks that leave burning ground.",
+                WeaponKind::FoxfireOrb => "Gathers foxfire in your hand, then hurls it to burst on the nearest enemy.",
+                WeaponKind::Familiars => "Fox spirits dart out and bite through nearby enemies.",
+                WeaponKind::GaleShuriken => "A huge shuriken spins out and returns to you, cutting both ways.",
             }
             .into(),
             Upgrade::Weapon(k) => {
@@ -536,6 +644,9 @@ impl Upgrade {
                         WeaponKind::StarFall => "star",
                         WeaponKind::Crescent => "slash",
                         WeaponKind::FlamePool => "flask",
+                        WeaponKind::FoxfireOrb => "orb",
+                        WeaponKind::Familiars => "spirit",
+                        WeaponKind::GaleShuriken => "shuriken",
                         WeaponKind::SakuraField => "",
                     };
                     parts.push(format!("+{} {unit}", b.amount - a.amount));

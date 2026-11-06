@@ -93,6 +93,13 @@ pub enum Event {
     EnemyShot,
     /// A weapon fired a volley / beat / pool (once per trigger, not per projectile).
     Fired(WeaponKind),
+    /// A bursting projectile (Foxfire Orb) exploded.
+    Burst { pos: Vec2, radius: f32 },
+    /// Ninefold Foxfire began (with its opening blast) / ended.
+    FoxAwakened { pos: Vec2 },
+    FoxFaded,
+    /// Ninefold Foxfire fired a ring of golden orbs.
+    FoxVolley,
 }
 
 /// Enemy fireball.
@@ -159,6 +166,8 @@ pub struct Enemies {
     pub flash: Vec<u8>,
     /// Ticks until moon orbs may hit this enemy again.
     pub orb_cd: Vec<u8>,
+    /// Ticks until an infinitely piercing projectile (shuriken, golden orb) may hit again.
+    pub pierce_cd: Vec<u8>,
     /// Boss AI: state (0 chase, 1 telegraph, 2 charge), timer, charge direction.
     pub ai_state: Vec<u8>,
     pub ai_timer: Vec<f32>,
@@ -188,6 +197,7 @@ impl Enemies {
         self.knock.swap_remove(i);
         self.flash.swap_remove(i);
         self.orb_cd.swap_remove(i);
+        self.pierce_cd.swap_remove(i);
         self.ai_state.swap_remove(i);
         self.ai_timer.swap_remove(i);
         self.ai_dir.swap_remove(i);
@@ -195,8 +205,31 @@ impl Enemies {
     }
 }
 
+/// What a projectile is (behaviour and look).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjKind {
+    Talisman,
+    /// Charges in the hand, flies, bursts on contact (Foxfire Orb).
+    Foxfire,
+    /// Awakened Foxfire Orb: bursts into three sparks too.
+    Comet,
+    Spark,
+    /// Ninefold Foxfire volley.
+    GoldenOrb,
+    Familiar,
+    /// Flies out and returns to the player.
+    Shuriken,
+}
+
 #[derive(Default)]
 pub struct Projectiles {
+    pub kind: Vec<ProjKind>,
+    pub radius: Vec<f32>,
+    /// Seconds left charging in the hand (> 0 = not launched yet).
+    pub charge: Vec<f32>,
+    /// Burst radius on removal (0 = none).
+    pub burst: Vec<f32>,
+    pub max_life: Vec<f32>,
     pub pos: Vec<Vec2>,
     pub vel: Vec<Vec2>,
     pub life: Vec<f32>,
@@ -216,6 +249,15 @@ impl Projectiles {
         self.pos.is_empty()
     }
     fn push(&mut self, pos: Vec2, vel: Vec2, life: f32, damage: f32, pierce: u8, homing: f32) {
+        self.push_kind(ProjKind::Talisman, PROJECTILE_RADIUS, pos, vel, life, damage, pierce, homing);
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn push_kind(&mut self, kind: ProjKind, radius: f32, pos: Vec2, vel: Vec2, life: f32, damage: f32, pierce: u8, homing: f32) {
+        self.kind.push(kind);
+        self.radius.push(radius);
+        self.charge.push(0.0);
+        self.burst.push(0.0);
+        self.max_life.push(life);
         self.pos.push(pos);
         self.vel.push(vel);
         self.life.push(life);
@@ -225,6 +267,11 @@ impl Projectiles {
         self.homing.push(homing);
     }
     fn swap_remove(&mut self, i: usize) {
+        self.kind.swap_remove(i);
+        self.radius.swap_remove(i);
+        self.charge.swap_remove(i);
+        self.burst.swap_remove(i);
+        self.max_life.swap_remove(i);
         self.pos.swap_remove(i);
         self.vel.swap_remove(i);
         self.life.swap_remove(i);
@@ -283,6 +330,8 @@ pub struct Player {
     pub level: u32,
     /// Special-move charge, 0..=1.
     pub special: f32,
+    /// Seconds of Ninefold Foxfire left (0 = not transformed).
+    pub fox: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -322,6 +371,9 @@ pub struct World {
     pub shots: Vec<Shot>,
     /// Hero innate + Shrine Shop bonuses.
     pub bonus: Bonus,
+    fox_tick: f32,
+    fox_volley: f32,
+    fox_volleys: u32,
     revivals_left: u8,
     /// Sen collected this run.
     pub sen: u32,
@@ -375,6 +427,7 @@ impl World {
                 xp: 0,
                 level: 1,
                 special: 0.0,
+                fox: 0.0,
             },
             weapons: vec![OwnedWeapon { kind: signature, level: 1, awakened: false, timer: 0.0, phase: 0.0 }],
             passives: Vec::new(),
@@ -394,6 +447,9 @@ impl World {
             mods: Modifiers::default(),
             shots: Vec::new(),
             bonus,
+            fox_tick: 0.0,
+            fox_volley: 0.0,
+            fox_volleys: 0,
             revivals_left: bonus.revivals,
             sen: 0,
             coins: Vec::new(),
@@ -436,6 +492,7 @@ impl World {
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
         self.move_enemies();
         self.update_weapons();
+        self.update_fox();
         self.update_effects();
         self.move_projectiles_and_hit();
         if input.special {
@@ -476,7 +533,8 @@ impl World {
         1.0 + 0.10 * self.passive_level(PassiveKind::Expanse) as f32 + self.bonus.area
     }
     fn move_speed(&self) -> f32 {
-        110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32 + self.bonus.move_speed) * self.mods.move_speed
+        let fox = if self.player.fox > 0.0 { FOX_MOVE_SPEED } else { 1.0 };
+        110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32 + self.bonus.move_speed) * self.mods.move_speed * fox
     }
     pub fn magnet(&self) -> f32 {
         55.0 * (1.0 + self.bonus.magnet) * (1.0 + 0.30 * self.passive_level(PassiveKind::Magnet) as f32) * self.mods.magnet
@@ -546,6 +604,7 @@ impl World {
 
     /// Applies a hit to the player (after armor) and handles death / Revival.
     fn hurt_player(&mut self, raw: f32) {
+        let raw = if self.player.fox > 0.0 { raw * FOX_DAMAGE_TAKEN } else { raw };
         let dmg = (raw - self.armor()).max(1.0);
         self.player.hp = (self.player.hp - dmg).max(0.0);
         self.player.iframes = IFRAMES;
@@ -630,6 +689,7 @@ impl World {
         e.knock.push(d.knockback);
         e.flash.push(0);
         e.orb_cd.push(0);
+        e.pierce_cd.push(0);
         e.ai_state.push(0);
         e.ai_timer.push(match kind {
             EnemyKind::Chochin => 1.5 + self.rng.range(0.0, 1.5),
@@ -896,7 +956,120 @@ impl World {
             e.push[i] = e.push[i] * 0.86;
             e.flash[i] = e.flash[i].saturating_sub(1);
             e.orb_cd[i] = e.orb_cd[i].saturating_sub(1);
+            e.pierce_cd[i] = e.pierce_cd[i].saturating_sub(1);
             e.wave_cd[i] = e.wave_cd[i].saturating_sub(1);
+        }
+    }
+
+    fn burst_projectile(&mut self, i: usize) {
+        let (c, r, dmg, kind) = (self.projectiles.pos[i], self.projectiles.burst[i], self.projectiles.damage[i], self.projectiles.kind[i]);
+        self.query_circle(c, r);
+        for idx in 0..self.scratch.len() {
+            let j = self.scratch[idx] as usize;
+            let dir = self.enemies.pos[j] - c;
+            self.hurt_enemy(j, dmg, dir);
+        }
+        self.events.push(Event::Burst { pos: c, radius: r });
+        if kind == ProjKind::Comet {
+            let a0 = self.rng.range(0.0, std::f32::consts::TAU);
+            for k in 0..3 {
+                let a = a0 + k as f32 * std::f32::consts::TAU / 3.0;
+                self.projectiles.push_kind(ProjKind::Spark, 5.0, c, Vec2::from_angle(a) * 240.0, 0.6, dmg * 0.4, 3, 5.0);
+            }
+        }
+    }
+
+    /// Ninefold Foxfire's power: scales with Might and level so it stays an endgame threat.
+    fn fox_power(&self) -> f32 {
+        self.might() * (1.0 + self.player.level as f32 / 40.0)
+    }
+
+    /// The nine tails as (root, tip) segments. Shared with the renderer so hits match visuals.
+    pub fn fox_tails(&self) -> [(Vec2, Vec2); FOX_TAILS] {
+        let t = self.time;
+        let root = self.player.pos + Vec2::new(0.0, -6.0);
+        let mut out = [(root, root); FOX_TAILS];
+        for (k, seg) in out.iter_mut().enumerate() {
+            let kf = k as f32;
+            let a = t * 0.7 + kf * std::f32::consts::TAU / FOX_TAILS as f32 + 0.35 * (t * 2.3 + kf * 1.7).sin();
+            let lash = 0.5 + 0.5 * (t * 5.0 + kf * 2.1).sin();
+            let reach = FOX_TAIL_REACH.0 + (FOX_TAIL_REACH.1 - FOX_TAIL_REACH.0) * lash;
+            *seg = (root, root + Vec2::from_angle(a) * reach);
+        }
+        out
+    }
+
+    fn start_fox(&mut self) {
+        let p = self.player.pos;
+        self.player.fox = FOX_DURATION;
+        self.player.iframes = BARRIER_IFRAMES;
+        self.fox_tick = 0.0;
+        self.fox_volley = 0.4;
+        let dmg = FOX_BLAST_DAMAGE * self.fox_power();
+        self.query_circle(p, FOX_BLAST_RADIUS);
+        for idx in 0..self.scratch.len() {
+            let j = self.scratch[idx] as usize;
+            let dir = self.enemies.pos[j] - p;
+            self.hurt_enemy(j, dmg, dir);
+            self.enemies.push[j] += dir.normalize_or_zero() * (420.0 * self.enemies.knock[j]);
+        }
+        let r2 = FOX_BLAST_RADIUS * FOX_BLAST_RADIUS;
+        self.shots.retain(|s| (s.pos - p).length_sq() > r2);
+        self.events.push(Event::FoxAwakened { pos: p });
+    }
+
+    fn update_fox(&mut self) {
+        if self.player.fox <= 0.0 {
+            return;
+        }
+        self.player.fox -= DT;
+        let power = self.fox_power();
+        let p = self.player.pos;
+        // Tails + aura tick.
+        self.fox_tick -= DT;
+        if self.fox_tick <= 0.0 {
+            self.fox_tick = FOX_TICK;
+            self.dead.clear(); // reused as "already hit this tick"
+            for (root, tip) in self.fox_tails() {
+                let mid = (root + tip) * 0.5;
+                let half = (tip - root).length() * 0.5;
+                self.query_circle(mid, half + 10.0);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    let e = self.enemies.pos[j];
+                    // Distance from the enemy to the tail segment.
+                    let d = tip - root;
+                    let t = (((e - root).dot_with(d)) / d.length_sq().max(1e-6)).clamp(0.0, 1.0);
+                    let close = (root + d * t - e).length() <= 9.0 + self.enemies.radius[j];
+                    if close && !self.dead.contains(&j) {
+                        self.dead.push(j);
+                        self.hurt_enemy(j, FOX_TAIL_DAMAGE * power, e - p);
+                    }
+                }
+            }
+            self.query_circle(p, FOX_AURA_RADIUS);
+            for idx in 0..self.scratch.len() {
+                let j = self.scratch[idx] as usize;
+                let dir = self.enemies.pos[j] - p;
+                self.hurt_enemy(j, FOX_AURA_DAMAGE * power, dir);
+            }
+            self.dead.clear();
+        }
+        // Golden orb volleys in every direction.
+        self.fox_volley -= DT;
+        if self.fox_volley <= 0.0 {
+            self.fox_volley = FOX_ORB_EVERY;
+            self.fox_volleys += 1;
+            let rot = self.fox_volleys as f32 * 0.31;
+            for k in 0..FOX_ORBS {
+                let a = rot + k as f32 / FOX_ORBS as f32 * std::f32::consts::TAU;
+                self.projectiles.push_kind(ProjKind::GoldenOrb, 13.0, p, Vec2::from_angle(a) * 250.0, 1.8, FOX_ORB_DAMAGE * power, 255, 0.0);
+            }
+            self.events.push(Event::FoxVolley);
+        }
+        if self.player.fox <= 0.0 {
+            self.player.fox = 0.0;
+            self.events.push(Event::FoxFaded);
         }
     }
 
@@ -946,7 +1119,9 @@ impl World {
             if tier > 0 {
                 self.chests.push((pos, tier));
             }
-            self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
+            if self.player.fox <= 0.0 {
+                self.player.special = (self.player.special + self.mods.special_rate / SPECIAL_KILLS).min(1.0);
+            }
             self.events.push(Event::Kill { pos, kind });
             self.kills_by_kind[kind.index()] += 1;
             if self.cfg.stress.is_none() {
@@ -1042,7 +1217,10 @@ impl World {
                 | WeaponKind::Taiko
                 | WeaponKind::StarFall
                 | WeaponKind::Crescent
-                | WeaponKind::FlamePool => {
+                | WeaponKind::FlamePool
+                | WeaponKind::FoxfireOrb
+                | WeaponKind::Familiars
+                | WeaponKind::GaleShuriken => {
                     let timer = w.timer - DT;
                     if timer <= 0.0 {
                         self.weapons[wi].timer = s.cooldown * haste;
@@ -1172,6 +1350,40 @@ impl World {
                     self.pools.push(Pool { pos, radius: r, life: s.duration, max_life: s.duration, tick: 0.0, damage: dmg });
                 }
             }
+            WeaponKind::FoxfireOrb => {
+                self.events.push(Event::Fired(WeaponKind::FoxfireOrb));
+                let kind = if w.awakened { ProjKind::Comet } else { ProjKind::Foxfire };
+                let (vel, life) = (self.player.facing * s.speed, 2.0 * self.persistence());
+                for n in 0..s.amount {
+                    let pr = &mut self.projectiles;
+                    pr.push_kind(kind, 7.0, p, vel, life, dmg, 1, 0.0);
+                    let last = pr.len() - 1;
+                    // Extra orbs gather one after another.
+                    pr.charge[last] = s.duration * (1.0 + 0.4 * n as f32);
+                    pr.burst[last] = 34.0 * area;
+                }
+            }
+            WeaponKind::Familiars => {
+                self.events.push(Event::Fired(WeaponKind::Familiars));
+                let life = s.duration * self.persistence();
+                for n in 0..s.amount {
+                    let a = self.rng.range(0.0, std::f32::consts::TAU) + n as f32;
+                    self.projectiles.push_kind(ProjKind::Familiar, 6.0, p, Vec2::from_angle(a) * s.speed, life, dmg, s.pierce, 6.0);
+                }
+            }
+            WeaponKind::GaleShuriken => {
+                self.events.push(Event::Fired(WeaponKind::GaleShuriken));
+                let dir = match self.nearest_enemy(320.0) {
+                    Some(e) => (e - p).normalize_or_zero(),
+                    None => self.player.facing,
+                };
+                let base = dir.y.atan2(dir.x);
+                let n = s.amount as f32;
+                for k in 0..s.amount {
+                    let a = base + (k as f32 - (n - 1.0) / 2.0) * 0.5;
+                    self.projectiles.push_kind(ProjKind::Shuriken, 10.0 * area, p, Vec2::from_angle(a) * s.speed, s.duration * self.persistence(), dmg, 255, 0.0);
+                }
+            }
             _ => {}
         }
     }
@@ -1244,6 +1456,38 @@ impl World {
     fn move_projectiles_and_hit(&mut self) {
         let mut i = 0;
         while i < self.projectiles.len() {
+            // Charging in the hand: follow the player, then launch at the nearest enemy.
+            if self.projectiles.charge[i] > 0.0 {
+                self.projectiles.charge[i] -= DT;
+                let hand = Vec2::new(if self.player.facing.x < 0.0 { -9.0 } else { 9.0 }, -6.0);
+                self.projectiles.pos[i] = self.player.pos + hand;
+                if self.projectiles.charge[i] <= 0.0 {
+                    let speed = self.projectiles.vel[i].length().max(1.0);
+                    let dir = match self.nearest_enemy(380.0) {
+                        Some(e) => (e - self.projectiles.pos[i]).normalize_or_zero(),
+                        None => self.player.facing,
+                    };
+                    self.projectiles.vel[i] = dir * speed;
+                }
+                i += 1;
+                continue;
+            }
+            if self.projectiles.kind[i] == ProjKind::Shuriken {
+                let pr = &mut self.projectiles;
+                if pr.life[i] < pr.max_life[i] * 0.5 {
+                    // Coming back: home on the player; caught when close.
+                    let to = self.player.pos - pr.pos[i];
+                    let speed = pr.vel[i].length();
+                    pr.vel[i] = to.normalize_or_zero() * speed;
+                    if to.length_sq() < 14.0 * 14.0 {
+                        pr.swap_remove(i);
+                        continue;
+                    }
+                    pr.last_hit[i] = u32::MAX; // may hit the same enemy again on the way back
+                } else {
+                    pr.vel[i] = pr.vel[i] * 0.985; // slows toward the turn
+                }
+            }
             let turn = self.projectiles.homing[i];
             if turn > 0.0 {
                 let here = self.projectiles.pos[i];
@@ -1277,8 +1521,9 @@ impl World {
             let p = self.projectiles.pos[i] + self.projectiles.vel[i] * DT;
             self.projectiles.pos[i] = p;
             self.projectiles.life[i] -= DT;
-            self.query_circle(p, PROJECTILE_RADIUS);
+            self.query_circle(p, self.projectiles.radius[i]);
             let mut pierce = self.projectiles.pierce[i];
+            let bursts = self.projectiles.burst[i] > 0.0;
             for idx in 0..self.scratch.len() {
                 if pierce == 0 {
                     break;
@@ -1287,13 +1532,26 @@ impl World {
                 if self.enemies.id[j] == self.projectiles.last_hit[i] || self.enemies.hp[j] <= 0.0 {
                     continue;
                 }
+                if pierce == 255 {
+                    if self.enemies.pierce_cd[j] > 0 {
+                        continue;
+                    }
+                    self.enemies.pierce_cd[j] = 20; // 1/3 s
+                }
                 self.projectiles.last_hit[i] = self.enemies.id[j];
+                if bursts {
+                    pierce = 0; // the burst below does the damage
+                    break;
+                }
                 let (dmg, vel) = (self.projectiles.damage[i], self.projectiles.vel[i]);
                 self.hurt_enemy(j, dmg, vel);
-                pierce -= 1;
+                pierce = pierce.saturating_sub(if pierce == 255 { 0 } else { 1 });
             }
             self.projectiles.pierce[i] = pierce;
             if pierce == 0 || self.projectiles.life[i] <= 0.0 {
+                if bursts {
+                    self.burst_projectile(i);
+                }
                 self.projectiles.swap_remove(i);
             } else {
                 i += 1;
@@ -1453,10 +1711,14 @@ impl World {
     }
 
     fn use_special(&mut self) {
-        if self.player.special < 1.0 {
+        if self.player.special < 1.0 || self.player.fox > 0.0 {
             return;
         }
         self.player.special = 0.0;
+        if hero_def(self.cfg.hero).special == SpecialKind::NineTails {
+            self.start_fox();
+            return;
+        }
         self.player.iframes = BARRIER_IFRAMES;
         let p = self.player.pos;
         self.query_circle(p, BARRIER_RADIUS);
@@ -2093,6 +2355,50 @@ mod tests {
         assert!(w.move_speed() > World::new(WorldConfig::default()).move_speed());
     }
 
+    #[test]
+    fn foxfire_orb_charges_in_hand_then_launches_and_bursts() {
+        let mut w = World::new(WorldConfig { hero: HeroId::Riku, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.spawn_enemy(EnemyKind::Oni, Vec2::new(150.0, 0.0));
+        w.enemies.speed[0] = 0.0;
+        let mut charged = false;
+        let mut burst = false;
+        for _ in 0..60 * 4 {
+            w.step(Input::default());
+            if (0..w.projectiles.len()).any(|i| w.projectiles.charge[i] > 0.0 && (w.projectiles.pos[i] - w.player.pos).length() < 15.0) {
+                charged = true;
+            }
+            burst |= w.events.iter().any(|e| matches!(e, Event::Burst { .. }));
+        }
+        assert!(charged, "orb never charged in the hand");
+        assert!(burst, "orb never burst");
+    }
+
+    #[test]
+    fn ninefold_foxfire_transforms_attacks_and_fades() {
+        let mut w = World::new(WorldConfig { hero: HeroId::Riku, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.weapons.clear();
+        for k in 0..30 {
+            let a = k as f32 / 30.0 * std::f32::consts::TAU;
+            w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * (60.0 + (k % 3) as f32 * 40.0));
+        }
+        w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        w.player.special = 1.0;
+        w.step(Input { special: true, ..Default::default() });
+        assert!(w.events.iter().any(|e| matches!(e, Event::FoxAwakened { .. })));
+        assert!(w.player.fox > 0.0);
+        let speed = w.move_speed();
+        let (mut volleys, mut faded) = (0, false);
+        for _ in 0..60 * 9 {
+            w.step(Input::default());
+            volleys += w.events.iter().filter(|e| matches!(e, Event::FoxVolley)).count();
+            faded |= w.events.iter().any(|e| matches!(e, Event::FoxFaded));
+        }
+        assert!(faded && w.player.fox == 0.0, "should fade after its duration");
+        assert!(volleys >= 6, "golden orb volleys: {volleys}");
+        assert!(w.kills >= 20, "the tails and orbs should flatten a ring of Oni, killed {}", w.kills);
+        assert!(w.move_speed() < speed, "speed boost ends with the form");
+    }
+
     /// Full 15-minute bot run; prints how far it got. `cargo test -p sim balance -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -2100,7 +2406,8 @@ mod tests {
         let seeds: u64 = std::env::var("BALANCE_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
         for seed in 1..=seeds {
             let started = std::time::Instant::now();
-            let mut w = World::new(WorldConfig { seed, ..Default::default() });
+            let hero = std::env::var("BALANCE_HERO").ok().and_then(|h| HeroId::from_key(&h)).unwrap_or(HeroId::Ren);
+            let mut w = World::new(WorldConfig { seed, hero, ..Default::default() });
             while w.state == RunState::Playing {
                 if w.offer.is_some() {
                     w.choose(0);
