@@ -348,7 +348,16 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     }
     let extra: Vec<String> = l.exotics.iter().map(|e| e.name().to_string()).chain(l.uniques.iter().map(|(u, _)| u.name().to_string())).chain(l.sets4.iter().map(|s| format!("{} set", set_name(*s)))).collect();
     if !extra.is_empty() {
-        kit::text_fit(&extra.join("  ·  "), tx + 14.0, ty + th - 10.0, tw - 28.0, 13.0, GOLD);
+        // Exotics, uniques and sets wrap onto as many rows as they need, under the stats.
+        let rows = lines.len().div_ceil(3) as f32;
+        let mut ey = ty + 22.0 + rows * 17.0 + 6.0;
+        for l in kit::wrap(&extra.join("  ·  "), tw - 28.0, 12) {
+            if ey > ty + th - 4.0 {
+                break;
+            }
+            kit::text(&l, tx + 14.0, ey, 12.0, GOLD);
+            ey += 15.0;
+        }
     }
 
     // Bag: filters, sort, grid.
