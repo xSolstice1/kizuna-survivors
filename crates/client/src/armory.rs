@@ -344,19 +344,24 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     let colw = (tw - 28.0) / 3.0;
     for (i, t) in lines.iter().enumerate() {
         let (c, r) = (i % 3, i / 3);
-        kit::text_fit(t, tx + 14.0 + c as f32 * colw, ty + 22.0 + r as f32 * 17.0, colw - 6.0, 13.0, INK);
+        kit::text_fit(t, tx + 14.0 + c as f32 * colw, ty + 20.0 + r as f32 * 15.0, colw - 6.0, 12.5, INK);
     }
     let extra: Vec<String> = l.exotics.iter().map(|e| e.name().to_string()).chain(l.uniques.iter().map(|(u, _)| u.name().to_string())).chain(l.sets4.iter().map(|s| format!("{} set", set_name(*s)))).collect();
     if !extra.is_empty() {
-        // Exotics, uniques and sets wrap onto as many rows as they need, under the stats.
+        // Exotics, uniques and sets wrap onto as many rows as they need, under the stats;
+        // anything that still doesn't fit is summarised as "+N more".
         let rows = lines.len().div_ceil(3) as f32;
-        let mut ey = ty + 22.0 + rows * 17.0 + 6.0;
-        for l in kit::wrap(&extra.join("  ·  "), tw - 28.0, 12) {
-            if ey > ty + th - 4.0 {
-                break;
-            }
-            kit::text(&l, tx + 14.0, ey, 12.0, GOLD);
-            ey += 15.0;
+        let top = ty + 20.0 + rows * 15.0 + 4.0;
+        let room = (((ty + th - 6.0) - top) / 13.0).floor().max(1.0) as usize;
+        let mut shown = extra.len();
+        let mut wrapped = kit::wrap(&extra.join("  ·  "), tw - 28.0, 11);
+        while wrapped.len() > room && shown > 1 {
+            shown -= 1;
+            let t = format!("{}  ·  +{} more", extra[..shown].join("  ·  "), extra.len() - shown);
+            wrapped = kit::wrap(&t, tw - 28.0, 11);
+        }
+        for (k, l) in wrapped.iter().take(room).enumerate() {
+            kit::text(l, tx + 14.0, top + 10.0 + k as f32 * 13.0, 11.0, GOLD);
         }
     }
 
