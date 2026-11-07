@@ -8,6 +8,44 @@ pub struct Sprite {
     pub w: u16,
     pub h: u16,
     pub rgba: Vec<u8>,
+    /// Already at `UP`x resolution (a high-resolution PNG): no upscaling.
+    pub hd: bool,
+}
+
+mod index {
+    include!(concat!(env!("OUT_DIR"), "/art_index.rs"));
+}
+
+/// The pixel source of an art path (e.g. "w1/boss").
+pub fn px(path: &str) -> &'static str {
+    index::px(path)
+}
+
+fn decode_hd(path: &str) -> Option<Sprite> {
+    let bytes = index::png(path)?;
+    let img = Image::from_file_with_format(bytes, Some(ImageFormat::Png)).ok()?;
+    // Must be exactly UP x the pixel art, so layouts and hitboxes stay the same.
+    let base = parse(px(path));
+    if img.width as u32 != base.w as u32 * UP as u32 || img.height as u32 != base.h as u32 * UP as u32 {
+        macroquad::logging::warn!("hd art {path}: {}x{} is not {}x the pixel art; using pixels", img.width, img.height, UP);
+        return None;
+    }
+    Some(Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true })
+}
+
+/// A sprite by art path: the HD redraw when there is one, else the pixel source.
+pub fn sprite(path: &str) -> Sprite {
+    decode_hd(path).unwrap_or_else(|| parse(px(path)))
+}
+
+/// A texture by art path.
+pub fn art(path: &str) -> Texture2D {
+    sprite(path).texture()
+}
+
+/// A seamless ground tile by art path.
+pub fn art_tile(path: &str) -> Texture2D {
+    sprite(path).tile_texture()
 }
 
 /// Replaces palette entries (`<char> #rrggbb` lines) in a `.px` source.
@@ -63,7 +101,7 @@ pub fn parse(src: &str) -> Sprite {
             rgba[o + 3] = 255;
         }
     }
-    Sprite { w: w as u16, h: h as u16, rgba }
+    Sprite { w: w as u16, h: h as u16, rgba, hd: false }
 }
 
 /// Every sprite texture is stored at this multiple of its art size, smoothed (Scale2x twice)
@@ -183,6 +221,9 @@ fn soften(w: usize, h: usize, src: &[u8], wrap: bool) -> Vec<u8> {
 
 impl Sprite {
     fn upscaled(&self, wrap: bool) -> (u16, u16, Vec<u8>) {
+        if self.hd {
+            return (self.w, self.h, self.rgba.clone());
+        }
         let (w, h) = (self.w as usize, self.h as usize);
         let a = scale2x(w, h, &self.rgba, wrap);
         let mut b = scale2x(w * 2, h * 2, &a, wrap);
@@ -209,13 +250,16 @@ impl Sprite {
     /// Copy with the pixels in columns `xs` and rows `ys` shifted up by one
     /// (used to lift a leg for walk frames). The bottom row of the region clears.
     pub fn lift(&self, xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> Sprite {
+        // Ranges are in art pixels; HD sprites shift by one art pixel (UP texels).
+        let k = if self.hd { UP as usize } else { 1 };
+        let (xs, ys) = (xs.start * k..xs.end * k, ys.start * k..ys.end * k);
         let w = self.w as usize;
         let mut rgba = self.rgba.clone();
         for y in ys.clone() {
             for x in xs.clone() {
                 let dst = (y * w + x) * 4;
-                if y + 1 < ys.end {
-                    let src = ((y + 1) * w + x) * 4;
+                if y + k < ys.end {
+                    let src = ((y + k) * w + x) * 4;
                     let px: [u8; 4] = self.rgba[src..src + 4].try_into().unwrap();
                     rgba[dst..dst + 4].copy_from_slice(&px);
                 } else {
@@ -223,14 +267,8 @@ impl Sprite {
                 }
             }
         }
-        Sprite { w: self.w, h: self.h, rgba }
+        Sprite { w: self.w, h: self.h, rgba, hd: self.hd }
     }
 }
 
-pub fn texture(src: &str) -> Texture2D {
-    parse(src).texture()
-}
 
-pub fn tile(src: &str) -> Texture2D {
-    parse(src).tile_texture()
-}
