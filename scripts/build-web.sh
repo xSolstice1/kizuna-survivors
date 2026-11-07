@@ -10,7 +10,7 @@ RUSTFLAGS="-C target-feature=+simd128 -C link-arg=--allow-undefined" cargo build
 
 rm -rf dist && mkdir -p dist
 cp web/index.html web/perf.js dist/
-cp "$(ls -d ~/.cargo/registry/src/*/macroquad-0.4.*/js | tail -1)/mq_js_bundle.js" dist/
+cp "$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/macroquad-0.4.*/js | tail -1)/mq_js_bundle.js" dist/
 WASM="$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/client.wasm"
 if command -v wasm-opt >/dev/null; then
   wasm-opt -Oz --enable-simd --enable-bulk-memory "$WASM" -o dist/game.wasm
