@@ -23,7 +23,17 @@ use render::{Assets, Fx};
 
 fn window_conf() -> Conf {
     // high_dpi: render at the device's real pixel density (sharp text on phones and retina screens).
-    Conf { window_title: "Kizuna Survivors".into(), window_width: 1280, window_height: 720, high_dpi: true, ..Default::default() }
+    let mut conf = Conf { window_title: "Kizuna Survivors".into(), window_width: 1280, window_height: 720, high_dpi: true, ..Default::default() };
+    if perf_stage().is_some() {
+        conf.platform.swap_interval = Some(0); // vsync off so frame time is real work
+    }
+    conf
+}
+
+/// Dev perf harness (native): `KZ_PERF=<stage key>` plays a 2000-enemy stress fight,
+/// prints the average frame time and exits.
+fn perf_stage() -> Option<sim::campaign::StageId> {
+    std::env::var("KZ_PERF").ok().map(|k| sim::campaign::StageId::from_key(&k).unwrap_or(sim::campaign::StageId::Shotengai))
 }
 
 #[derive(PartialEq)]
@@ -124,9 +134,29 @@ async fn main() {
     macroquad::logging::info!("audio ready in {:.2}s", get_time() - t_audio);
     // Which run-end jingle has played (so it plays once).
     let mut jingle_played = false;
+    let perf = perf_stage();
+    let (mut perf_frames, mut perf_ms, mut perf_cpu) = (0u32, 0.0f64, 0.0f64);
+    if let Some(st) = perf {
+        profile.stage = st;
+        stress = Some(Stress { enemies: 2000, projectiles: 4000 });
+        world = new_world(stress, &profile);
+        screen = Screen::Playing;
+    }
 
     loop {
         let dt = get_frame_time().min(0.1);
+        let frame_start = get_time();
+        if let Some(st) = perf {
+            perf_frames += 1;
+            if perf_frames > 240 {
+                perf_ms += get_frame_time() as f64 * 1000.0;
+            }
+            if perf_frames == 240 + 900 {
+                let avg = perf_ms / 900.0;
+                println!("KZ_PERF {}: {avg:.2} ms/frame ({:.0} fps), {:.2} ms CPU, {} enemies, {} projectiles", st.key(), 1000.0 / avg, perf_cpu / 900.0, world.enemies.len(), world.projectiles.len());
+                return;
+            }
+        }
         // UI draws in virtual 1280x720 pixels (scaled down on small screens).
         kit::begin_ui();
         let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
@@ -515,6 +545,14 @@ async fn main() {
             }
         }
 
+        if perf_frames > 240 {
+            perf_cpu += (get_time() - frame_start) * 1000.0;
+        }
+        if perf_frames == 600 {
+            if let Ok(path) = std::env::var("KZ_SHOT") {
+                get_screen_data().export_png(&path);
+            }
+        }
         next_frame().await
     }
 }

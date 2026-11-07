@@ -771,7 +771,27 @@ impl Fx {
 
 /// A campaign enemy: sized by rank, with its telegraphs (charge lines, dash crouch) and a
 /// boss aura in the stage's accent colour.
-fn draw_world_enemy(world: &World, i: usize, t: &Texture2D, tint: Color, flip: bool, accent: Color, time: f64) {
+/// Sprites held back so a layer draws all its shapes first, then its sprites grouped by
+/// texture: every texture switch is a separate GPU draw call.
+struct Sprites<'a>(Vec<(&'a Texture2D, f32, f32, Color, DrawTextureParams)>);
+
+impl<'a> Sprites<'a> {
+    fn new() -> Self {
+        Sprites(Vec::new())
+    }
+    fn push(&mut self, t: &'a Texture2D, x: f32, y: f32, c: Color, p: DrawTextureParams) {
+        self.0.push((t, x, y, c, p));
+    }
+    fn flush(&mut self) {
+        self.0.sort_by_key(|s| s.0 as *const Texture2D as usize);
+        for (t, x, y, c, p) in self.0.drain(..) {
+            draw_texture_ex(t, x, y, c, p);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, flip: bool, accent: Color, time: f64, sprites: &mut Sprites<'a>) {
     use sim::content::{enemy_def, Ai, Rank};
     let e = &world.enemies;
     let (pos, kind) = (e.pos[i], e.kind[i]);
@@ -820,7 +840,7 @@ fn draw_world_enemy(world: &World, i: usize, t: &Texture2D, tint: Color, flip: b
         draw_circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
     }
     draw_ellipse(pos.x, pos.y + h * 0.25 - 1.0, w * 0.32, (w * 0.09).max(2.5), 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
-    draw_texture_ex(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+    sprites.push(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
 }
 
 /// World hazards: tag/blast and lightning telegraphs, spirit pressure, hostile domains.
@@ -936,6 +956,17 @@ fn draw_art(world: &World, t: f32) {
     }
 }
 
+/// The world area the camera shows (no shake), for skipping what's off-screen.
+fn view_rect(cam: &Camera2D) -> Rect {
+    let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
+    Rect::new(cam.target.x - sw / 2.0, cam.target.y - sh / 2.0, sw, sh)
+}
+
+/// `(x, y)` lies within `pad` world units of the view.
+fn near(view: &Rect, x: f32, y: f32, pad: f32) -> bool {
+    x > view.x - pad && x < view.x + view.w + pad && y > view.y - pad && y < view.y + view.h + pad
+}
+
 pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
     let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
     let p = world.player.pos;
@@ -949,6 +980,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     set_camera(cam);
     stage.draw_ground(world.cfg.stage, cam, time);
     let p = world.player.pos;
+    let view = view_rect(cam);
 
     // Sakura Field sits on the ground under everything.
     for w in &world.weapons {
@@ -1011,9 +1043,15 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
 
     let e = &world.enemies;
+    let mut sprites = Sprites::new();
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
         let pos = e.pos[i];
+        // Bosses and elites always draw; chargers' dash warnings reach 230 units ahead.
+        let pad = if e.kind[i].rank() >= Rank::Elite { f32::INFINITY } else if matches!(sim::content::enemy_def(e.kind[i]).ai, sim::content::Ai::Charger { .. }) { 240.0 } else { 48.0 };
+        if !near(&view, pos.x, pos.y, pad) {
+            continue;
+        }
         let in_domain = world.form_kind() == Some(SpecialKind::Firmament) && (e.pos[i] - world.domain_center).length() < sim::content::DOMAIN_RADIUS;
         let frozen = (world.freeze > 0.0 || in_domain) && !e.kind[i].is_boss();
         let tint = if e.flash[i] > 0 {
@@ -1065,7 +1103,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
         let kind = e.kind[i];
         if let Some(t) = &a.world_enemies[kind.index()] {
-            draw_world_enemy(world, i, t, tint, flip, fx.accent, time);
+            draw_world_enemy(world, i, t, tint, flip, fx.accent, time, &mut sprites);
             continue;
         }
         let (tex, half, bottom) = match e.kind[i] {
@@ -1083,8 +1121,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let t = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
             tint.a = t.clamp(0.1, 1.0) * 0.85;
         }
-        draw_texture_ex(&tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(&tex)), flip_x: flip, ..Default::default() });
+        sprites.push(tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
     }
+    sprites.flush();
 
     // Player: walk cycle while moving, blink during i-frames.
     let pl = &world.player;
@@ -1300,8 +1339,11 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let t = time as f32;
     for i in 0..pr.len() {
         let (q, v) = (pr.pos[i], pr.vel[i]);
+        if !near(&view, q.x, q.y, 64.0) {
+            continue;
+        }
         match pr.kind[i] {
-            ProjKind::Talisman => draw_texture_ex(
+            ProjKind::Talisman => sprites.push(
                 &a.talisman,
                 q.x - 3.0,
                 q.y - 5.0,
@@ -1361,7 +1403,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     let c = q + back * (k as f32 * 3.5);
                     draw_rectangle(c.x - 1.0, c.y - 1.0, 2.0, 2.0, Color::new(1.0, 0.75, 0.3, 0.8 - k as f32 * 0.2));
                 }
-                draw_texture_ex(&a.familiar, (q.x - 6.0).round(), (q.y - 5.0).round(), WHITE, DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.familiar)), flip_x: v.x < 0.0, ..Default::default() });
+                sprites.push(&a.familiar, (q.x - 6.0).round(), (q.y - 5.0).round(), WHITE, DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.familiar)), flip_x: v.x < 0.0, ..Default::default() });
             }
             ProjKind::CrescentWave => {
                 let hannya = world.form_kind() == Some(SpecialKind::Hannya);
@@ -1388,7 +1430,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     draw_circle(c.x, c.y, 4.0 - k as f32 * 0.7, Color::new(1.0, 0.8, 0.3, 0.5 - k as f32 * 0.1));
                 }
                 draw_circle(q.x, q.y, 8.0, Color::new(1.0, 0.85, 0.35, 0.25));
-                draw_texture_ex(&a.talisman, q.x - 3.0, q.y - 5.0, Color::new(1.0, 0.85, 0.35, 1.0), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.talisman)), rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() });
+                sprites.push(&a.talisman, q.x - 3.0, q.y - 5.0, Color::new(1.0, 0.85, 0.35, 1.0), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.talisman)), rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() });
             }
             ProjKind::Petal => {
                 let a = t * 10.0 + q.x * 0.1;
@@ -1469,6 +1511,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             }
         }
     }
+    sprites.flush();
     for (c, r, age) in &fx.smokes {
         let k = age / 0.5;
         for i in 0..7 {
@@ -1650,13 +1693,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_circle_lines(c.x, c.y, r, 3.0, Color::new(1.0, 0.9, 0.6, 0.9 * (1.0 - t)));
     }
 
-    for pt in &fx.particles {
+    for pt in fx.particles.iter().filter(|pt| near(&view, pt.pos.x, pt.pos.y, 4.0)) {
         let alpha = 1.0 - pt.age / pt.life;
         let mut c = pt.color;
         c.a = alpha;
         draw_rectangle(pt.pos.x - 1.0, pt.pos.y - 1.0, 2.0, 2.0, c);
     }
-    draw_drops(world, a, fx, time);
+    draw_drops(world, a, fx, &view, time);
 
     // Damage numbers are drawn in screen space so the text stays crisp.
     // Screen-space overlays use the virtual UI space so they scale with the rest of the UI.
@@ -1998,9 +2041,13 @@ fn draw_curse_motes(p: sim::Vec2, t: f32, mukade: bool) {
 }
 
 /// Everything the player can pick up, drawn above enemies and effects so it stays readable.
-fn draw_drops(world: &World, a: &Assets, fx: &Fx, time: f64) {
+fn draw_drops(world: &World, a: &Assets, fx: &Fx, view: &Rect, time: f64) {
+    let mut sprites = Sprites::new();
     // Gems tier by value (merged gems are worth more and look it).
     for (g, &v) in world.gems.pos.iter().zip(&world.gems.value) {
+        if !near(view, g.x, g.y, 16.0) {
+            continue;
+        }
         let (size, tint) = match v {
             0..=4 => (7.0, WHITE),
             5..=24 => (9.0, Color::new(0.45, 1.0, 0.45, 1.0)),
@@ -2012,20 +2059,19 @@ fn draw_drops(world: &World, a: &Assets, fx: &Fx, time: f64) {
             draw_circle(g.x, g.y, size * 0.9, Color::new(tint.r, tint.g, tint.b, pulse));
             draw_circle_lines(g.x, g.y, size * 0.9, 1.5, tint);
         }
-        draw_texture_ex(
-            &a.gem,
-            (g.x - size / 2.0).round(),
-            (g.y - size / 2.0).round(),
-            tint,
-            DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() },
-        );
+        sprites.push(&a.gem, (g.x - size / 2.0).round(), (g.y - size / 2.0).round(), tint, DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
     }
+    sprites.flush();
     for (c, v) in &world.coins {
+        if !near(view, c.x, c.y, 16.0) {
+            continue;
+        }
         let size = if *v >= 50 { 16.0 } else if *v >= 5 { 12.0 } else { 10.0 };
         let bob = ((time * 4.0 + c.x as f64).sin() * 1.0) as f32;
         backing(vec2(c.x, c.y + bob), size * 0.75, Color::new(1.0, 0.85, 0.3, 1.0), 0.8);
-        draw_texture_ex(&a.coin, (c.x - size / 2.0).round(), (c.y - size / 2.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
+        sprites.push(&a.coin, (c.x - size / 2.0).round(), (c.y - size / 2.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
     }
+    sprites.flush();
     for (c, k) in &world.pickups {
         draw_pickup(a, vec2(c.x, c.y), *k, time as f32);
     }
