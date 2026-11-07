@@ -422,6 +422,7 @@ fn powerup_icon(assets: &Assets, p: PowerUp) -> &Texture2D {
         PowerUp::Growth => &assets.gem,
         PowerUp::Greed => &assets.coin,
         PowerUp::Revival => &assets.shrine,
+        PowerUp::AutoSpecial => assets.icon_named("persistence"),
     }
 }
 

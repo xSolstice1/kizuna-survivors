@@ -12,6 +12,8 @@ use crate::Vec2;
 pub const DT: f32 = 1.0 / 60.0;
 
 const PLAYER_RADIUS: f32 = 8.0;
+/// Reach for floor pickups and chests, so the player needn't stand exactly on them.
+const ITEM_GRAB: f32 = PLAYER_RADIUS + 20.0;
 const PROJECTILE_RADIUS: f32 = 4.0;
 const SEPARATION_NEIGHBOURS: u32 = 10;
 const MAX_ENEMIES: usize = 4000;
@@ -48,11 +50,13 @@ pub struct WorldConfig {
     pub ascension: u32,
     /// The hero's equipped gear.
     pub gear: Loadout,
+    /// Fire the special by itself when crowded or low on health (Shrine Shop unlock).
+    pub auto_special: bool,
 }
 
 impl Default for WorldConfig {
     fn default() -> Self {
-        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default(), stage: StageId::Shotengai, difficulty: Difficulty::Normal, ascension: 0, gear: Loadout::default() }
+        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default(), stage: StageId::Shotengai, difficulty: Difficulty::Normal, ascension: 0, gear: Loadout::default(), auto_special: false }
     }
 }
 
@@ -213,6 +217,8 @@ pub enum MarkerKind {
     Chest { tier: u8 },
     Shrine,
     Pickup(PickupKind),
+    /// A Sen coin on the ground.
+    Coin,
     /// Future objectives (escort targets, exits, ...): drawn as a pulsing star.
     Objective,
 }
@@ -332,7 +338,8 @@ pub struct Pool {
 pub enum ChestItem {
     LevelUp(Upgrade, u8),
     Awakening(WeaponKind),
-    Heal,
+    /// One of the maxed-out fallbacks (Onigiri, Sen Pouch, Blessing) and the amount it gave.
+    Extra(Upgrade, f32),
 }
 
 #[derive(Default)]
@@ -892,7 +899,7 @@ impl World {
         self.update_spirit_arts();
         self.update_effects();
         self.move_projectiles_and_hit();
-        if input.special {
+        if input.special || self.wants_auto_special() {
             let before = self.player.form;
             let used = self.specials_used;
             self.use_special();
@@ -1233,7 +1240,9 @@ impl World {
     fn director(&mut self) {
         let st = self.stage();
         let pace = st.pace(self.time);
-        let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * if st.in_crisis(self.time) { 1.35 } else { 1.0 };
+        let rung = ladder_rung(pace);
+        let basic = if rung > 0 { st.fodder_b } else { st.fodder };
+        let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * if st.in_crisis(self.time) { 1.35 } else { 1.0 } * LADDER_COUNT[rung];
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
             None if self.night_lord_spawned => 0,
@@ -1245,12 +1254,13 @@ impl World {
         let deficit = target.saturating_sub(self.enemies.len()).min(per_tick);
         for _ in 0..deficit {
             let r = self.rng.f32();
-            let (c, n) = (chochin_share(pace) * st.ranged_mult, nopperabo_share(pace));
+            let lift = LADDER_LIFT[rung];
+            let (c, n) = (chochin_share(pace) * st.ranged_mult * lift, nopperabo_share(pace) * lift);
             let kind = if r < c {
                 st.ranged
             } else if r < c + n {
                 st.blinker
-            } else if self.rng.f32() < kasa_share(pace) {
+            } else if rung > 0 || self.rng.f32() < kasa_share(pace) {
                 st.fodder_b
             } else {
                 st.fodder
@@ -1304,11 +1314,11 @@ impl World {
             }
             if self.rings_done < st.ring_times.len() && self.time >= st.ring_times[self.rings_done] {
                 self.rings_done += 1;
-                let n = (120.0 * self.cfg.difficulty.density()) as usize;
+                let n = (120.0 * self.cfg.difficulty.density() * LADDER_COUNT[rung]) as usize;
                 for k in 0..n {
                     let a = k as f32 / n as f32 * std::f32::consts::TAU;
                     let p = self.player.pos + Vec2::from_angle(a) * 270.0;
-                    self.spawn_enemy(st.fodder, p);
+                    self.spawn_enemy(basic, p);
                 }
             }
         }
@@ -2314,7 +2324,7 @@ impl World {
             }
         }
         let p = self.player.pos;
-        let grab = PLAYER_RADIUS + 12.0;
+        let grab = ITEM_GRAB;
         let Some(i) = self.pickups.iter().position(|(c, _)| (*c - p).length_sq() < grab * grab) else { return };
         let (pos, kind) = self.pickups.swap_remove(i);
         match kind {
@@ -2575,6 +2585,7 @@ impl World {
         out.extend(self.chests.iter().map(|(p, t)| MapMarker { pos: *p, kind: MarkerKind::Chest { tier: *t } }));
         out.extend(self.shrine.map(|p| MapMarker { pos: p, kind: MarkerKind::Shrine }));
         out.extend(self.pickups.iter().map(|(p, k)| MapMarker { pos: *p, kind: MarkerKind::Pickup(*k) }));
+        out.extend(self.coins.iter().map(|(p, _)| MapMarker { pos: *p, kind: MarkerKind::Coin }));
         out
     }
 
@@ -4041,7 +4052,7 @@ impl World {
 
     fn collect_chests(&mut self) {
         let p = self.player.pos;
-        let grab = PLAYER_RADIUS + 10.0;
+        let grab = ITEM_GRAB;
         if let Some(i) = self.chests.iter().position(|(c, _)| (*c - p).length_sq() < grab * grab) {
             let (_, tier) = self.chests.swap_remove(i);
             self.open_chest(tier);
@@ -4063,12 +4074,12 @@ impl World {
             .collect()
     }
 
-    /// Rolls the reward count (85% 1 / 10% 2 / 4% 3 / 1% 5, at least `min_rewards`), then fills it:
-    /// an Awakening first if one is eligible, then levels for owned items.
+    /// Rolls the reward count (85% 1 / 10% 2 / 4% 3 / 1% 5 at the start, about 50/33/13/3 from
+    /// 10:00, at least `min_rewards`), then fills it: an Awakening first if one is eligible, then levels.
     pub fn open_chest(&mut self, min_rewards: u8) {
         self.chests_opened += 1;
-        // Luck pushes the roll toward the rarer reward counts.
-        let roll = 1.0 - (1.0 - self.rng.f32()) / (1.0 + self.bonus.luck);
+        // Luck and time push the roll toward the rarer reward counts.
+        let roll = 1.0 - (1.0 - self.rng.f32()) / (1.0 + self.bonus.luck + chest_time_luck(self.stage().pace(self.time)));
         let extra = self.cfg.gear.unique(Unique::TreasureSense) as u8;
         let tier = chest_roll(roll).max(min_rewards) + extra;
         if self.cfg.stress.is_none() && self.rng.f32() < 0.05 * (1.0 + self.bonus.gear_find) {
@@ -4086,12 +4097,16 @@ impl World {
             items.push(ChestItem::Awakening(k));
         }
         while items.len() < tier as usize {
-            let mut pool: Vec<Upgrade> = Vec::new();
-            pool.extend(self.weapons.iter().filter(|w| w.level < MAX_LEVEL && !w.extra).map(|w| Upgrade::Weapon(w.kind)));
-            pool.extend(self.passives.iter().filter(|(k, l)| *l < passive_max(*k)).map(|(k, _)| Upgrade::Passive(*k)));
+            // Chests level what you own first, then fill empty slots.
+            let mut pool = self.upgrade_pool(false);
             if pool.is_empty() {
-                self.heal(30.0);
-                items.push(ChestItem::Heal);
+                pool = self.upgrade_pool(true);
+            }
+            if pool.is_empty() {
+                let u = MAXED_FALLBACKS[(self.rng.next_u32() as usize) % MAXED_FALLBACKS.len()];
+                let amount = self.fallback_amount(u);
+                self.apply_upgrade(u);
+                items.push(ChestItem::Extra(u, amount));
                 continue;
             }
             let u = pool[(self.rng.next_u32() as usize) % pool.len()];
@@ -4105,8 +4120,33 @@ impl World {
         self.chest_result = None;
     }
 
+    fn special_ready(&self) -> bool {
+        self.player.special >= 1.0 && self.player.form <= 0.0
+    }
+
+    /// Summed `Rank::threat` of live enemies within `radius` of the player. Uses this tick's
+    /// grid, so call it before `remove_dead_enemies`.
+    fn threat_near(&self, radius: f32) -> f32 {
+        let (p, e, r2) = (self.player.pos, &self.enemies, radius * radius);
+        let mut threat = 0.0;
+        self.grid.for_each_near(p, radius, |i| {
+            let i = i as usize;
+            if e.hp[i] > 0.0 && (e.pos[i] - p).length_sq() < r2 {
+                threat += e.kind[i].rank().threat();
+            }
+        });
+        threat
+    }
+
+    fn wants_auto_special(&self) -> bool {
+        if !self.cfg.auto_special || !self.special_ready() {
+            return false;
+        }
+        self.player.hp < self.player.max_hp * AUTO_SPECIAL_HP && self.threat_near(AUTO_SPECIAL_RADIUS) >= AUTO_SPECIAL_THREAT
+    }
+
     fn use_special(&mut self) {
-        if self.player.special < 1.0 || self.player.form > 0.0 {
+        if !self.special_ready() {
             return;
         }
         self.player.special = 0.0;
@@ -4218,32 +4258,33 @@ impl World {
         self.events.push(Event::ShrineChosen(ev));
     }
 
-    fn make_offer(&mut self) {
+    /// Levels for owned weapons and passives, plus new ones for empty slots when `new_items`.
+    fn upgrade_pool(&self, new_items: bool) -> Vec<Upgrade> {
         let mut pool: Vec<Upgrade> = Vec::new();
-        for w in &self.weapons {
-            if w.level < MAX_LEVEL && !w.extra {
-                pool.push(Upgrade::Weapon(w.kind));
-            }
+        pool.extend(self.weapons.iter().filter(|w| w.level < MAX_LEVEL && !w.extra).map(|w| Upgrade::Weapon(w.kind)));
+        pool.extend(self.passives.iter().filter(|(k, l)| *l < passive_max(*k)).map(|(k, _)| Upgrade::Passive(*k)));
+        if !new_items {
+            return pool;
         }
         let hero = hero_def(self.cfg.hero);
         if self.weapons.iter().filter(|w| !w.extra).count() < hero.weapon_slots {
             pool.extend(hero.weapon_pool().into_iter().filter(|k| self.weapon_level(*k) == 0).map(Upgrade::Weapon));
         }
-        for (k, l) in &self.passives {
-            if *l < passive_max(*k) {
-                pool.push(Upgrade::Passive(*k));
-            }
-        }
         if self.passives.len() < hero.passive_slots {
             pool.extend(ALL_PASSIVES.iter().filter(|k| self.passive_level(**k) == 0).map(|k| Upgrade::Passive(*k)));
         }
+        pool
+    }
+
+    fn make_offer(&mut self) {
+        let mut pool = self.upgrade_pool(true);
         let mut offer = Vec::new();
         while offer.len() < 3 && !pool.is_empty() {
             let i = (self.rng.next_u32() as usize) % pool.len();
             offer.push(pool.swap_remove(i));
         }
         if offer.is_empty() {
-            offer.push(Upgrade::Heal);
+            offer = MAXED_FALLBACKS.to_vec();
         }
         self.offer = Some(offer);
     }
@@ -4253,7 +4294,7 @@ impl World {
         match u {
             Upgrade::Weapon(k) => self.weapon_level(k) + 1,
             Upgrade::Passive(k) => self.passive_level(k) + 1,
-            Upgrade::Heal => 1,
+            Upgrade::Heal | Upgrade::Sen | Upgrade::Blessing => 1,
         }
     }
 
@@ -4269,6 +4310,22 @@ impl World {
         if self.pending_levels > 0 {
             self.make_offer();
         }
+    }
+
+    /// What a maxed-out fallback gives right now: HP healed, Sen, or damage fraction gained.
+    /// The one place to tune how they scale over a run.
+    pub fn fallback_amount(&self, u: Upgrade) -> f32 {
+        match u {
+            Upgrade::Heal => self.player.max_hp * ONIGIRI_HEAL,
+            Upgrade::Sen => SEN_POUCH * self.cfg.difficulty.greed() * (1.0 + self.stage().pace(self.time) / SEN_POUCH_RAMP),
+            Upgrade::Blessing => BLESSING_DAMAGE - 1.0,
+            _ => 0.0,
+        }
+    }
+
+    /// Card text for `u`, with live amounts for the maxed-out fallbacks.
+    pub fn describe_upgrade(&self, u: Upgrade, next_level: u8) -> String {
+        if MAXED_FALLBACKS.contains(&u) { describe_fallback(u, self.fallback_amount(u)) } else { u.describe(next_level) }
     }
 
     fn apply_upgrade(&mut self, u: Upgrade) {
@@ -4287,7 +4344,9 @@ impl World {
                     self.heal(20.0);
                 }
             }
-            Upgrade::Heal => self.heal(30.0),
+            Upgrade::Heal => self.heal(self.fallback_amount(u)),
+            Upgrade::Sen => self.gain_sen(self.fallback_amount(u).round() as u32),
+            Upgrade::Blessing => self.mods.damage *= 1.0 + self.fallback_amount(u),
         }
     }
 
@@ -4947,6 +5006,61 @@ mod tests {
     }
 
     #[test]
+    fn maxed_fallbacks_scale_with_the_run() {
+        let mut w = World::new(WorldConfig::default());
+        w.player.max_hp = 1200.0;
+        assert_eq!(w.fallback_amount(Upgrade::Heal), 1200.0 * ONIGIRI_HEAL);
+        assert!(w.describe_upgrade(Upgrade::Heal, 1).contains("360"), "{}", w.describe_upgrade(Upgrade::Heal, 1));
+        let early = w.fallback_amount(Upgrade::Sen);
+        w.time = 600.0;
+        let late = w.fallback_amount(Upgrade::Sen);
+        assert!(late > early * 2.0, "Sen pouch should grow over the run: {early} -> {late}");
+        let before = w.sen;
+        w.apply_upgrade(Upgrade::Sen);
+        assert_eq!(w.sen - before, late.round() as u32);
+    }
+
+    #[test]
+    fn threat_counts_live_enemies_in_range_by_rank() {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        let p = w.player.pos;
+        for n in 0..12 {
+            w.spawn_enemy(EnemyKind::Wisp, p + Vec2::from_angle(n as f32) * 60.0);
+            w.spawn_enemy(EnemyKind::Wisp, p + Vec2::from_angle(n as f32) * 600.0);
+        }
+        w.spawn_enemy(EnemyKind::Oni, p + Vec2::new(0.0, 80.0));
+        w.enemies.hp[0] = 0.0;
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        assert_eq!(w.threat_near(AUTO_SPECIAL_RADIUS), 11.0 + Rank::Elite.threat());
+    }
+
+    #[test]
+    fn late_rings_are_thinned_like_the_ladder() {
+        let mut w = World::new(WorldConfig::default());
+        let at = w.stage().ring_times[0];
+        assert!(ladder_rung(w.stage().pace(at)) > 0, "first ring should land on a later rung");
+        w.step(Input::default());
+        w.enemies = Enemies::default();
+        w.time = at;
+        w.step(Input::default());
+        let p = w.player.pos;
+        let ring = w.enemies.pos.iter().filter(|e| ((**e - p).length() - 270.0).abs() < 20.0).count();
+        let want = (120.0 * w.cfg.difficulty.density() * LADDER_COUNT[1]) as usize;
+        assert!(ring <= want + 2, "ring spawned {ring}, expected about {want}");
+    }
+
+    #[test]
+    fn items_are_grabbed_from_a_short_walk_away() {
+        let mut w = World::new(WorldConfig::default());
+        w.step(Input::default());
+        w.pickups.push((w.player.pos + Vec2::new(25.0, 0.0), PickupKind::OniSake));
+        w.chests.push((w.player.pos + Vec2::new(0.0, -25.0), 1));
+        w.step(Input::default());
+        assert!(w.pickups.is_empty(), "pickup 25px away should be grabbed");
+        assert!(w.chests.is_empty(), "chest 25px away should be opened");
+    }
+
+    #[test]
     fn map_markers_cover_everything_on_the_field() {
         let mut w = World::new(WorldConfig::default());
         w.spawn_enemy(EnemyKind::Wisp, Vec2::new(50.0, 0.0));
@@ -4955,10 +5069,12 @@ mod tests {
         w.chests.push((Vec2::new(10.0, 10.0), 3));
         w.shrine = Some(Vec2::new(-40.0, 0.0));
         w.pickups.push((Vec2::new(0.0, 60.0), PickupKind::OniSake));
+        w.coins.push((Vec2::new(-60.0, 0.0), 5));
         let m = w.map_markers();
         let has = |k: MarkerKind| m.iter().any(|x| x.kind == k);
         assert!(has(MarkerKind::Enemy) && has(MarkerKind::Elite) && has(MarkerKind::MiniBoss));
         assert!(has(MarkerKind::Chest { tier: 3 }) && has(MarkerKind::Shrine) && has(MarkerKind::Pickup(PickupKind::OniSake)));
+        assert!(has(MarkerKind::Coin), "Sen coins should show on the map");
         let obstacles = w.map_obstacles(Vec2::new(-2000.0, -2000.0), Vec2::new(2000.0, 2000.0));
         assert!(!obstacles.is_empty(), "the stage's props should be reported to the map");
     }
@@ -5140,5 +5256,89 @@ mod tests {
                 awakened
             );
         }
+    }
+
+    #[test]
+    fn vitality_raises_max_hp_for_the_rest_of_the_run() {
+        let mut w = play(3, 60 * 10);
+        let before = w.player.max_hp;
+        w.offer = Some(vec![Upgrade::Passive(PassiveKind::Vitality)]);
+        w.pending_levels = 1;
+        w.choose(0);
+        for _ in 0..60 * 5 {
+            w.step(Input::default());
+        }
+        assert_eq!(w.player.max_hp, before + 20.0);
+    }
+
+    #[test]
+    fn chests_fill_free_slots_before_falling_back_to_onigiri() {
+        let mut w = World::new(WorldConfig::default());
+        w.weapons[0].level = MAX_LEVEL;
+        w.open_chest(3);
+        let res = w.chest_result.take().unwrap();
+        assert!(!res.iter().any(|i| matches!(i, ChestItem::Extra(..))), "free slots left, but the chest gave a fallback: {res:?}");
+    }
+
+    #[test]
+    fn chests_get_richer_as_the_night_goes_on() {
+        let single_share = |t: f32| {
+            let mut w = World::new(WorldConfig::default());
+            w.time = t;
+            let n = 4000;
+            let singles = (0..n)
+                .filter(|_| {
+                    w.open_chest(1);
+                    w.chest_result.take().unwrap().len() == 1
+                })
+                .count();
+            singles as f32 / n as f32
+        };
+        let (early, late) = (single_share(0.0), single_share(600.0));
+        assert!((early - 0.85).abs() < 0.03, "early single-reward share {early}");
+        assert!((late - 0.5).abs() < 0.04, "10:00 single-reward share {late}");
+        assert_eq!(chest_tier(EnemyKind::Oni), 2, "elite chests hold at least two rewards");
+    }
+
+    #[test]
+    fn basic_fodder_stops_spawning_after_five_minutes() {
+        let mut w = World::new(WorldConfig::default());
+        w.time = 400.0;
+        w.boss_spawned = true;
+        for _ in 0..120 {
+            w.director();
+        }
+        let fodder = w.stage().fodder;
+        assert!(w.enemies.len() > 50);
+        assert!(!w.enemies.kind.contains(&fodder), "basic fodder spawned past 5:00");
+    }
+
+    #[test]
+    fn auto_special_fires_only_when_unlocked_and_in_trouble() {
+        let mut w = play(9, 60 * 20);
+        w.cfg.hero = HeroId::Kaede; // plain Barrier special
+        w.player.special = 1.0;
+        w.player.hp = w.player.max_hp * 0.3;
+        w.step(Input::default());
+        assert_eq!(w.specials_used, 0, "fired without being unlocked");
+        w.cfg.auto_special = true;
+        let crowd = |w: &mut World| {
+            w.enemies = Enemies::default();
+            for n in 0..AUTO_SPECIAL_THREAT as usize {
+                w.spawn_enemy(EnemyKind::Wisp, w.player.pos + Vec2::from_angle(n as f32) * 60.0);
+            }
+            w.enemies.hp.iter_mut().for_each(|h| *h = 1e9);
+        };
+        w.player.hp = w.player.max_hp;
+        crowd(&mut w);
+        w.step(Input::default());
+        assert_eq!(w.specials_used, 0, "fired at full health just for a crowd");
+        w.player.hp = w.player.max_hp * 0.3;
+        w.enemies = Enemies::default();
+        w.step(Input::default());
+        assert_eq!(w.specials_used, 0, "fired at low health with nobody around");
+        crowd(&mut w);
+        w.step(Input::default());
+        assert_eq!(w.specials_used, 1, "low health and a crowd should trigger it");
     }
 }

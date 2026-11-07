@@ -23,7 +23,17 @@ use render::{Assets, Fx};
 
 fn window_conf() -> Conf {
     // high_dpi: render at the device's real pixel density (sharp text on phones and retina screens).
-    Conf { window_title: "Kizuna Survivors".into(), window_width: 1280, window_height: 720, high_dpi: true, ..Default::default() }
+    let mut conf = Conf { window_title: "Kizuna Survivors".into(), window_width: 1280, window_height: 720, high_dpi: true, ..Default::default() };
+    if perf_stage().is_some() {
+        conf.platform.swap_interval = Some(0); // vsync off so frame time is real work
+    }
+    conf
+}
+
+/// Dev perf harness (native): `KZ_PERF=<stage key>` plays a 2000-enemy stress fight,
+/// prints the average frame time and exits.
+fn perf_stage() -> Option<sim::campaign::StageId> {
+    std::env::var("KZ_PERF").ok().map(|k| sim::campaign::StageId::from_key(&k).unwrap_or(sim::campaign::StageId::Shotengai))
 }
 
 #[derive(PartialEq)]
@@ -58,6 +68,12 @@ fn read_input() -> Input {
     Input { move_dir: d, ..Default::default() }
 }
 
+fn toggle_auto_special(profile: &mut Profile, world: &mut World) {
+    profile.auto_special_off = !profile.auto_special_off;
+    world.cfg.auto_special = profile.auto_special();
+    save::store(profile);
+}
+
 fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
     let seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
     {
@@ -71,6 +87,7 @@ fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
         difficulty: profile.difficulty,
         ascension,
         gear: profile.loadout(profile.selected),
+        auto_special: profile.auto_special(),
         ..Default::default()
     })
     }
@@ -117,9 +134,29 @@ async fn main() {
     macroquad::logging::info!("audio ready in {:.2}s", get_time() - t_audio);
     // Which run-end jingle has played (so it plays once).
     let mut jingle_played = false;
+    let perf = perf_stage();
+    let (mut perf_frames, mut perf_ms, mut perf_cpu) = (0u32, 0.0f64, 0.0f64);
+    if let Some(st) = perf {
+        profile.stage = st;
+        stress = Some(Stress { enemies: 2000, projectiles: 4000 });
+        world = new_world(stress, &profile);
+        screen = Screen::Playing;
+    }
 
     loop {
         let dt = get_frame_time().min(0.1);
+        let frame_start = get_time();
+        if let Some(st) = perf {
+            perf_frames += 1;
+            if perf_frames > 240 {
+                perf_ms += get_frame_time() as f64 * 1000.0;
+            }
+            if perf_frames == 240 + 900 {
+                let avg = perf_ms / 900.0;
+                println!("KZ_PERF {}: {avg:.2} ms/frame ({:.0} fps), {:.2} ms CPU, {} enemies, {} projectiles", st.key(), 1000.0 / avg, perf_cpu / 900.0, world.enemies.len(), world.projectiles.len());
+                return;
+            }
+        }
         // UI draws in virtual 1280x720 pixels (scaled down on small screens).
         kit::begin_ui();
         let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
@@ -256,6 +293,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::N) {
             fx.show_numbers = !fx.show_numbers;
+        }
+        if is_key_pressed(KeyCode::U) && profile.rank(sim::meta::PowerUp::AutoSpecial) > 0 {
+            toggle_auto_special(&mut profile, &mut world);
         }
         let mut toggle_stress = false;
         let mut dev_run: Option<devmenu::DevAction> = None;
@@ -407,7 +447,7 @@ async fn main() {
         stage_art.draw_vignette();
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {
-            ui::hud(&world, &assets);
+            ui::hud(&world, &assets, touch.active);
             map_opened_now = false;
             if !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false, false) {
                 map_open = true;
@@ -471,8 +511,13 @@ async fn main() {
                 dev_pending = Some(a);
             }
         } else if screen == Screen::Paused {
-            match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume, dev.unlocked) {
+            let auto_special = (profile.rank(sim::meta::PowerUp::AutoSpecial) > 0).then_some(profile.auto_special());
+            match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume, dev.unlocked, auto_special) {
                 Some(ui::PauseAction::Dev) => dev.open = true,
+                Some(ui::PauseAction::AutoSpecial) => {
+                    audio.play(synth::Sfx::Click);
+                    toggle_auto_special(&mut profile, &mut world);
+                }
                 Some(ui::PauseAction::Resume) => {
                     audio.play(synth::Sfx::Click);
                     screen = Screen::Playing;
@@ -500,6 +545,14 @@ async fn main() {
             }
         }
 
+        if perf_frames > 240 {
+            perf_cpu += (get_time() - frame_start) * 1000.0;
+        }
+        if perf_frames == 600 {
+            if let Ok(path) = std::env::var("KZ_SHOT") {
+                get_screen_data().export_png(&path);
+            }
+        }
         next_frame().await
     }
 }

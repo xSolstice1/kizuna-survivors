@@ -221,7 +221,7 @@ impl ChestAnim {
             let (upgrade, title, sub) = match *item {
                 ChestItem::Awakening(k) => (Upgrade::Weapon(k), awakened_name(k).to_string(), "AWAKENED!".to_string()),
                 ChestItem::LevelUp(u, lvl) => (u, u.name().to_string(), format!("Lv {lvl}")),
-                ChestItem::Heal => (Upgrade::Heal, "Onigiri".to_string(), "+30 HP".to_string()),
+                ChestItem::Extra(u, amount) => (u, u.name().to_string(), sim::content::describe_fallback(u, amount)),
             };
             let icon = assets.icon(upgrade);
             if awaken {

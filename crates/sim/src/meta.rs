@@ -74,9 +74,10 @@ pub enum PowerUp {
     Growth,
     Greed,
     Revival,
+    AutoSpecial,
 }
 
-pub const ALL_POWERUPS: [PowerUp; 11] = [
+pub const ALL_POWERUPS: [PowerUp; 12] = [
     PowerUp::Might,
     PowerUp::Armor,
     PowerUp::MaxHp,
@@ -88,6 +89,7 @@ pub const ALL_POWERUPS: [PowerUp; 11] = [
     PowerUp::Growth,
     PowerUp::Greed,
     PowerUp::Revival,
+    PowerUp::AutoSpecial,
 ];
 
 impl PowerUp {
@@ -107,6 +109,7 @@ impl PowerUp {
             PowerUp::Growth => "Growth",
             PowerUp::Greed => "Greed",
             PowerUp::Revival => "Revival",
+            PowerUp::AutoSpecial => "Auto Special",
         }
     }
     /// Save-file key (stable; never rename).
@@ -123,6 +126,7 @@ impl PowerUp {
             PowerUp::Growth => "growth",
             PowerUp::Greed => "greed",
             PowerUp::Revival => "revival",
+            PowerUp::AutoSpecial => "auto_special",
         }
     }
     pub fn max_rank(self) -> u8 {
@@ -130,7 +134,7 @@ impl PowerUp {
             PowerUp::Might | PowerUp::Recovery | PowerUp::Growth | PowerUp::Greed => 5,
             PowerUp::Armor | PowerUp::MaxHp => 3,
             PowerUp::Cooldown | PowerUp::Area | PowerUp::MoveSpeed | PowerUp::Magnet => 2,
-            PowerUp::Revival => 1,
+            PowerUp::Revival | PowerUp::AutoSpecial => 1,
         }
     }
     fn base_cost(self) -> u32 {
@@ -140,6 +144,7 @@ impl PowerUp {
             PowerUp::MaxHp | PowerUp::Recovery | PowerUp::MoveSpeed | PowerUp::Magnet => 100,
             PowerUp::Growth | PowerUp::Greed => 120,
             PowerUp::Revival => 1000,
+            PowerUp::AutoSpecial => 800,
         }
     }
     /// What one rank gives.
@@ -157,6 +162,7 @@ impl PowerUp {
             PowerUp::Growth => b.growth = 0.03,
             PowerUp::Greed => b.greed = 0.10,
             PowerUp::Revival => b.revivals = 1,
+            PowerUp::AutoSpecial => {}
         }
         b
     }
@@ -173,6 +179,7 @@ impl PowerUp {
             PowerUp::Growth => "+3% experience per rank.",
             PowerUp::Greed => "+10% Sen per rank.",
             PowerUp::Revival => "Get back up once per run with half health.",
+            PowerUp::AutoSpecial => "Your special fires by itself when you're below 40% health and surrounded. Toggle it in the pause menu or with U.",
         }
     }
 }
@@ -249,6 +256,7 @@ pub struct Profile {
     /// Settings (0..=1).
     pub music_volume: f32,
     pub sfx_volume: f32,
+    pub auto_special_off: bool,
 }
 
 impl Default for Profile {
@@ -298,6 +306,7 @@ impl Default for Profile {
             next_item: 1,
             music_volume: 0.6,
             sfx_volume: 0.8,
+            auto_special_off: false,
         }
     }
 }
@@ -333,6 +342,10 @@ impl Profile {
         let owned: u32 = self.ranks.iter().map(|r| *r as u32).sum();
         let base = p.base_cost() * (self.rank(p) as u32 + 1);
         base + base * owned / 10
+    }
+
+    pub fn auto_special(&self) -> bool {
+        self.rank(PowerUp::AutoSpecial) > 0 && !self.auto_special_off
     }
 
     pub fn can_buy(&self, p: PowerUp) -> bool {
@@ -658,7 +671,7 @@ impl Profile {
         s += &format!("awakenings={}\n", join(&self.awakenings_found));
         s += &format!("passives={}\n", join(&self.passives_found));
         s += &format!("shrines={}\n", join(&self.shrines_found));
-        s += &format!("music_volume={}\nsfx_volume={}\n", self.music_volume, self.sfx_volume);
+        s += &format!("music_volume={}\nsfx_volume={}\nauto_special_off={}\n", self.music_volume, self.sfx_volume, self.auto_special_off as u8);
         s += &format!(
             "wins={}\ndeaths={}\ndawn_outs={}\nbest_kills={}\ntime_played={}\nsen_earned={}\nchests={}\nshrines_taken={}\nawakened_total={}\nspecials={}\n",
             self.wins, self.deaths, self.dawn_outs, self.best_kills, self.time_played, self.sen_earned, self.chests_opened, self.shrines_taken, self.awakenings, self.specials_used
@@ -761,6 +774,7 @@ impl Profile {
                         }
                     }
                 }
+                "auto_special_off" => p.auto_special_off = v == "1",
                 "music_volume" => p.music_volume = v.parse::<f32>().unwrap_or(0.6).clamp(0.0, 1.0),
                 "sfx_volume" => p.sfx_volume = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
                 _ => {
@@ -861,6 +875,8 @@ mod tests {
     fn profile_round_trips() {
         let mut p = Profile { sen: 1234, spent: 300, runs: 3, total_kills: 99_999, best_time: 612.5, best_level: 41, great_onis: 2, night_lords: 1, ..Default::default() };
         p.ranks[PowerUp::Greed.index()] = 4;
+        p.ranks[PowerUp::AutoSpecial.index()] = 1;
+        p.auto_special_off = true;
         p.unlocked.push(HeroId::Kuon);
         p.selected = HeroId::Kuon;
         p.enemy_kills[2] = 77;
@@ -880,7 +896,7 @@ mod tests {
         p.stage = StageId::ShrineValley;
         p.difficulty = Difficulty::Nightmare;
         assert_eq!(Profile::parse(&p.serialize()), p);
-        assert_eq!(Profile::parse("garbage\nsen=abc\nrank.might=99"), Profile { ranks: { let mut r = [0; 11]; r[0] = 5; r }, ..Default::default() });
+        assert_eq!(Profile::parse("garbage\nsen=abc\nrank.might=99"), Profile { ranks: { let mut r = [0; ALL_POWERUPS.len()]; r[0] = 5; r }, ..Default::default() });
     }
 
     #[test]
