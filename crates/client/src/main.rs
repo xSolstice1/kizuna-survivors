@@ -32,8 +32,15 @@ fn window_conf() -> Conf {
 
 /// Dev perf harness (native): `KZ_PERF=<stage key>` plays a 2000-enemy stress fight,
 /// prints the average frame time and exits.
+/// On the web, a `kz_perf=<stage>` line in the save does the same (for headless tests), and
+/// `kz_perf_real` picks the realistic late-night scene.
 fn perf_stage() -> Option<sim::campaign::StageId> {
-    std::env::var("KZ_PERF").ok().map(|k| sim::campaign::StageId::from_key(&k).unwrap_or(sim::campaign::StageId::Shotengai))
+    let from_save = save::raw().lines().find_map(|l| l.strip_prefix("kz_perf=").map(str::to_string));
+    std::env::var("KZ_PERF").ok().or(from_save).map(|k| sim::campaign::StageId::from_key(&k).unwrap_or(sim::campaign::StageId::Shotengai))
+}
+
+fn perf_real() -> bool {
+    std::env::var("KZ_PERF_REAL").is_ok() || save::raw().lines().any(|l| l.trim() == "kz_perf_real")
 }
 
 #[derive(PartialEq)]
@@ -116,6 +123,7 @@ async fn main() {
     let mut draw_state = armory::DrawState::default();
     let mut dev = devmenu::DevMenu::default();
     let mut stats_scroll = menu::StripScroll::default();
+    let mut world_rt: Option<RenderTarget> = None;
     let mut dev_pending: Option<devmenu::DevAction> = None;
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
@@ -123,6 +131,10 @@ async fn main() {
     let mut touch = touch::TouchControls::default();
 
     kit::init();
+    // One shared atlas for every sprite and font glyph: draws stop switching textures, so a
+    // frame is a handful of GPU draw calls instead of hundreds (the big cost in browsers).
+    set_default_filter_mode(FilterMode::Linear);
+    build_textures_atlas();
     ui::loading();
     next_frame().await;
     let t_boot = get_time();
@@ -136,10 +148,21 @@ async fn main() {
     let mut jingle_played = false;
     let perf = perf_stage();
     let (mut perf_frames, mut perf_ms, mut perf_cpu) = (0u32, 0.0f64, 0.0f64);
+    let mut perf_parts = [0.0f64; 5];
     if let Some(st) = perf {
         profile.stage = st;
-        stress = Some(Stress { enemies: 2000, projectiles: 4000 });
-        world = new_world(stress, &profile);
+        if perf_real() {
+            // A realistic late night: full awakened loadout at 22:00, the player can't die.
+            world = new_world(None, &profile);
+            world.debug_max_loadout();
+            world.debug_awaken_all();
+            world.time = 22.0 * 60.0;
+            world.player.max_hp = 1e9;
+            world.player.hp = 1e9;
+        } else {
+            stress = Some(Stress { enemies: 2000, projectiles: 4000 });
+            world = new_world(stress, &profile);
+        }
         screen = Screen::Playing;
     }
 
@@ -147,13 +170,26 @@ async fn main() {
         let dt = get_frame_time().min(0.1);
         let frame_start = get_time();
         if let Some(st) = perf {
+            // Keep the scene in play: take level-ups and chests automatically.
+            if world.offer.is_some() {
+                world.choose(0);
+            }
+            if world.chest_result.is_some() {
+                world.close_chest();
+                chest_anim = None;
+            }
+            if world.shrine_offer.is_some() {
+                world.choose_shrine(None);
+            }
             perf_frames += 1;
-            if perf_frames > 240 {
+            if perf_frames > 60 {
                 perf_ms += get_frame_time() as f64 * 1000.0;
             }
-            if perf_frames == 240 + 900 {
-                let avg = perf_ms / 900.0;
-                println!("KZ_PERF {}: {avg:.2} ms/frame ({:.0} fps), {:.2} ms CPU, {} enemies, {} projectiles", st.key(), 1000.0 / avg, perf_cpu / 900.0, world.enemies.len(), world.projectiles.len());
+            if perf_frames == 60 + 300 {
+                let avg = perf_ms / 300.0;
+                macroquad::logging::info!("KZ_PERF {}: {avg:.2} ms/frame ({:.0} fps), {:.2} ms CPU, {} enemies, {} projectiles", st.key(), 1000.0 / avg, perf_cpu / 360.0, world.enemies.len(), world.projectiles.len());
+                let n = perf_frames as f64;
+                macroquad::logging::info!("KZ_PERF parts (ms): sim {:.2} world {:.2} hud {:.2} minimap {:.2} rest-ui {:.2}", perf_parts[0] / n, perf_parts[1] / n, perf_parts[2] / n, perf_parts[3] / n, perf_parts[4] / n);
                 return;
             }
         }
@@ -408,7 +444,9 @@ async fn main() {
             let t0 = get_time();
             let mut steps = 0;
             while acc >= DT && steps < 4 && !world.paused() {
+                let t_s = get_time();
                 world.step(input);
+                perf_parts[0] += (get_time() - t_s) * 1000.0;
                 fx.absorb(&world.events);
                 audio.absorb(&world.events);
                 // Delivered exactly once, even if the sim steps several times this frame.
@@ -437,8 +475,19 @@ async fn main() {
 
         // --- Render ---
         clear_background(Color::from_rgba(28, 24, 40, 255));
-        let cam = render::camera_for(&world, &fx);
-        render::draw_world(&world, &assets, &stage_art, &fx, &cam, now);
+        // The world renders at CSS-pixel resolution (not device pixels): ~4x fewer pixels on
+        // retina screens and phones. The HUD and text stay at full resolution.
+        let (tw, th) = (screen_width().max(1.0) as u32, screen_height().max(1.0) as u32);
+        if world_rt.as_ref().is_none_or(|rt: &RenderTarget| rt.texture.width() as u32 != tw || rt.texture.height() as u32 != th) {
+            let rt = render_target(tw, th);
+            rt.texture.set_filter(FilterMode::Linear);
+            world_rt = Some(rt);
+        }
+        let mut cam = render::camera_for(&world, &fx);
+        cam.render_target = world_rt.clone();
+        let t_w = get_time();
+        render::draw_world(&world, &assets, &stage_art, &fx, &cam, now, world_rt.as_ref());
+        perf_parts[1] += (get_time() - t_w) * 1000.0;
         set_default_camera();
         if world.stage().mechanic == sim::campaign::Mechanic::Downpour {
             let pp = cam.world_to_screen(vec2(world.player.pos.x, world.player.pos.y));
@@ -447,9 +496,14 @@ async fn main() {
         stage_art.draw_vignette();
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {
+            let t_h = get_time();
             ui::hud(&world, &assets, touch.active);
+            perf_parts[2] += (get_time() - t_h) * 1000.0;
             map_opened_now = false;
-            if !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false, false) {
+            let t_m = get_time();
+            let clicked = !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false, false);
+            perf_parts[3] += (get_time() - t_m) * 1000.0;
+            if clicked {
                 map_open = true;
                 map_opened_now = true;
             }
@@ -545,7 +599,7 @@ async fn main() {
             }
         }
 
-        if perf_frames > 240 {
+        if perf_frames > 60 {
             perf_cpu += (get_time() - frame_start) * 1000.0;
         }
         if perf_frames == 600 {

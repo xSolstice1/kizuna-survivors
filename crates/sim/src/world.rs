@@ -18,9 +18,9 @@ const PROJECTILE_RADIUS: f32 = 4.0;
 const SEPARATION_NEIGHBOURS: u32 = 10;
 const MAX_ENEMIES: usize = 4000;
 /// When this many gems are on the field, nearby gems merge into higher-value ones...
-const GEM_MERGE_AT: usize = 400;
+const GEM_MERGE_AT: usize = 220;
 /// ...until at most this many remain.
-const GEM_MERGE_TO: usize = 250;
+const GEM_MERGE_TO: usize = 140;
 const ORB_RADIUS: f32 = 8.0;
 const ORB_ORBIT: f32 = 46.0;
 const FIELD_RADIUS: f32 = 44.0;

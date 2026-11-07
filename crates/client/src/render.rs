@@ -105,6 +105,8 @@ pub struct Assets {
     /// Campaign enemies, indexed like `ALL_ENEMIES` (None for the prologue's own sprites).
     world_enemies: Vec<Option<Texture2D>>,
     gear_icons: Vec<(&'static str, Texture2D)>,
+    /// Soft round shadow, batched under crowds.
+    pub shadow: Texture2D,
 }
 
 impl Assets {
@@ -207,6 +209,21 @@ impl Assets {
             ("relic_w5", sprites::art("icons/relic_w5")),
             ],
             world_enemies: sim::content::ALL_ENEMIES.iter().map(|k| world_enemy_src(*k).map(sprites::art)).collect(),
+            shadow: {
+                let (w, h) = (32u16, 16u16);
+                let mut px = vec![0u8; w as usize * h as usize * 4];
+                for y in 0..h {
+                    for x in 0..w {
+                        let (dx, dy) = ((x as f32 + 0.5) / w as f32 * 2.0 - 1.0, (y as f32 + 0.5) / h as f32 * 2.0 - 1.0);
+                        let d = (dx * dx + dy * dy).sqrt();
+                        let i = (y as usize * w as usize + x as usize) * 4;
+                        px[i + 3] = ((1.0 - d).clamp(0.0, 1.0).powf(0.6) * 255.0) as u8;
+                    }
+                }
+                let t = Texture2D::from_rgba8(w, h, &px);
+                t.set_filter(FilterMode::Linear);
+                t
+            },
             gear_icons: vec![
             ("lantern_heart", sprites::art("exotic/lantern_heart")),
             ("jeweled_branch", sprites::art("exotic/jeweled_branch")),
@@ -422,12 +439,13 @@ pub struct Fx {
     pub accent: Color,
     /// Lightning flash, 0..1, decays.
     pub flash: f32,
+    number_tick: u32,
     /// Equipment drops: (pos, rarity, age).
     gear_drops: Vec<(Vec2, sim::gear::Rarity, f32)>,
 }
 
-const MAX_NUMBERS: usize = 120;
-const MAX_PARTICLES: usize = 800;
+const MAX_NUMBERS: usize = 40;
+const MAX_PARTICLES: usize = 360;
 
 impl Fx {
     pub fn new() -> Self {
@@ -478,7 +496,9 @@ impl Fx {
     pub fn absorb(&mut self, events: &[Event]) {
         for ev in events {
             match *ev {
-                Event::Hit { pos, amount, crit } if self.show_numbers => {
+                // Numbers are sampled so crowds don't bury the screen: crits and big hits always
+                // show, ordinary hits one in six.
+                Event::Hit { pos, amount, crit } if self.show_numbers && (crit || amount >= 150.0 || { self.number_tick = self.number_tick.wrapping_add(1); self.number_tick % 6 == 0 }) => {
                     if self.numbers.len() >= MAX_NUMBERS {
                         self.numbers.remove(0);
                     }
@@ -791,7 +811,7 @@ impl<'a> Sprites<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, flip: bool, accent: Color, time: f64, sprites: &mut Sprites<'a>) {
+fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, flip: bool, accent: Color, time: f64, sprites: &mut Sprites<'a>, shadows: &mut Sprites<'a>, shadow: &'a Texture2D) {
     use sim::content::{enemy_def, Ai, Rank};
     let e = &world.enemies;
     let (pos, kind) = (e.pos[i], e.kind[i]);
@@ -839,7 +859,8 @@ fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, 
     } else if matches!(ai, Ai::Ranged { .. }) {
         draw_circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
     }
-    draw_ellipse(pos.x, pos.y + h * 0.25 - 1.0, w * 0.32, (w * 0.09).max(2.5), 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+    let (sw, sh) = (w * 0.7, (w * 0.2).max(5.0));
+    shadows.push(shadow, pos.x - sw / 2.0, pos.y + h * 0.25 - 1.0 - sh / 2.0, Color::new(0.0, 0.0, 0.0, 0.4), DrawTextureParams { dest_size: Some(vec2(sw, sh)), ..Default::default() });
     sprites.push(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
 }
 
@@ -976,8 +997,11 @@ pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
     Camera2D { target: vec2(p.x.round(), p.y.round()) + jitter, zoom: vec2(2.0 / sw, 2.0 / sh), ..Default::default() }
 }
 
-pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx: &Fx, cam: &Camera2D, time: f64) {
+pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx: &Fx, cam: &Camera2D, time: f64, target: Option<&RenderTarget>) {
     set_camera(cam);
+    if target.is_some() {
+        clear_background(Color::from_rgba(28, 24, 40, 255));
+    }
     stage.draw_ground(world.cfg.stage, cam, time);
     let p = world.player.pos;
     let view = view_rect(cam);
@@ -1044,6 +1068,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
 
     let e = &world.enemies;
     let mut sprites = Sprites::new();
+    let mut shadows = Sprites::new();
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
         let pos = e.pos[i];
@@ -1103,7 +1128,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
         let kind = e.kind[i];
         if let Some(t) = &a.world_enemies[kind.index()] {
-            draw_world_enemy(world, i, t, tint, flip, fx.accent, time, &mut sprites);
+            draw_world_enemy(world, i, t, tint, flip, fx.accent, time, &mut sprites, &mut shadows, &a.shadow);
             continue;
         }
         let (tex, half, bottom) = match e.kind[i] {
@@ -1123,6 +1148,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
         sprites.push(tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
     }
+    shadows.flush();
     sprites.flush();
 
     // Player: walk cycle while moving, blink during i-frames.
@@ -1701,6 +1727,12 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
     draw_drops(world, a, fx, &view, time);
 
+    // The world was drawn into a screen-resolution target (cheap on high-DPI screens):
+    // put it on screen before the crisp overlays.
+    if let Some(rt) = target {
+        set_default_camera();
+        draw_texture_ex(&rt.texture, 0.0, 0.0, WHITE, DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), flip_y: true, ..Default::default() });
+    }
     // Damage numbers are drawn in screen space so the text stays crisp.
     // Screen-space overlays use the virtual UI space so they scale with the rest of the UI.
     kit::begin_ui();

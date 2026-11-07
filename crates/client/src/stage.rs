@@ -216,7 +216,7 @@ impl StageArt {
             for tx in 0..cols {
                 let (t, _) = self.tile(stage, tx + 3, ty + 5);
                 let (dw, dh) = (s.min(w - tx as f32 * s), s.min(h - ty as f32 * s));
-                let src = Rect::new(0.0, 0.0, TILE * dw / s * crate::sprites::UP, TILE * dh / s * crate::sprites::UP);
+                let src = Rect::new(0.5, 0.5, TILE * dw / s * crate::sprites::UP - 1.0, TILE * dh / s * crate::sprites::UP - 1.0);
                 draw_texture_ex(t, x + tx as f32 * s, y + ty as f32 * s, WHITE, DrawTextureParams { dest_size: Some(vec2(dw, dh)), source: Some(src), ..Default::default() });
             }
         }
@@ -232,7 +232,9 @@ impl StageArt {
         for ty in ty0..=ty0 + (sh / TILE) as i32 + 1 {
             for tx in tx0..=tx0 + (sw / TILE) as i32 + 1 {
                 let (t, decal) = self.tile(stage, tx, ty);
-                draw_texture_ex(t, tx as f32 * TILE, ty as f32 * TILE, WHITE, DrawTextureParams { dest_size: Some(vec2(TILE, TILE)), ..Default::default() });
+                // Inset half a texel: tiles live in the shared atlas, and linear filtering must not
+                // sample a neighbour (that shows as seams).
+                draw_texture_ex(t, tx as f32 * TILE, ty as f32 * TILE, WHITE, DrawTextureParams { dest_size: Some(vec2(TILE, TILE)), source: Some(Rect::new(0.5, 0.5, t.width() - 1.0, t.height() - 1.0)), ..Default::default() });
                 if decal {
                     decals.push(vec2(tx as f32 * TILE + TILE / 2.0, ty as f32 * TILE + TILE / 2.0));
                 }

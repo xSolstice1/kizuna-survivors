@@ -65,7 +65,7 @@ pub fn draw_circle_lines(x: f32, y: f32, r: f32, thickness: f32, c: Color) {
 }
 
 fn circle_sides(r: f32) -> u8 {
-    (r * 0.6).clamp(12.0, 96.0) as u8
+    (r * 0.25).clamp(8.0, 40.0) as u8
 }
 
 /// Clips drawing to a rectangle in virtual UI coordinates (None = no clip).
@@ -99,7 +99,11 @@ fn with_font<R>(size: f32, f: impl FnOnce(Option<&Font>) -> R) -> R {
 /// sharp at any UI scale. Sizes are quantised to keep the glyph atlas small.
 fn raster(size: f32) -> (u16, f32) {
     // UI units -> CSS pixels (ui_scale) -> device pixels (dpi).
-    let phys = ((size * ui_scale() * screen_dpi_scale()) / 2.0).round().max(4.0) * 2.0;
+    // Coarse steps: every new raster size adds glyphs to the shared atlas, and each addition
+    // re-uploads the whole atlas to the GPU, so keep the set of sizes small.
+    let want = size * ui_scale() * screen_dpi_scale();
+    let step = if want < 24.0 { 2.0 } else if want < 48.0 { 4.0 } else { 8.0 };
+    let phys = (want / step).round().max(2.0) * step;
     (phys as u16, size / phys)
 }
 

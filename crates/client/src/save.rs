@@ -52,3 +52,8 @@ pub fn load() -> Profile {
 pub fn store(p: &Profile) {
     backend::write(&p.serialize());
 }
+
+/// The raw saved text (dev hooks read flags from it).
+pub fn raw() -> String {
+    backend::read()
+}
