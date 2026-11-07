@@ -58,6 +58,12 @@ fn read_input() -> Input {
     Input { move_dir: d, ..Default::default() }
 }
 
+fn toggle_auto_special(profile: &mut Profile, world: &mut World) {
+    profile.auto_special_off = !profile.auto_special_off;
+    world.cfg.auto_special = profile.auto_special();
+    save::store(profile);
+}
+
 fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
     let seed = (macroquad::miniquad::date::now() * 1000.0) as u64;
     {
@@ -71,6 +77,7 @@ fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
         difficulty: profile.difficulty,
         ascension,
         gear: profile.loadout(profile.selected),
+        auto_special: profile.auto_special(),
         ..Default::default()
     })
     }
@@ -257,6 +264,9 @@ async fn main() {
         if is_key_pressed(KeyCode::N) {
             fx.show_numbers = !fx.show_numbers;
         }
+        if is_key_pressed(KeyCode::U) && profile.rank(sim::meta::PowerUp::AutoSpecial) > 0 {
+            toggle_auto_special(&mut profile, &mut world);
+        }
         let mut toggle_stress = false;
         let mut dev_run: Option<devmenu::DevAction> = None;
         if screen == Screen::Paused && dev.open {
@@ -407,7 +417,7 @@ async fn main() {
         stage_art.draw_vignette();
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {
-            ui::hud(&world, &assets);
+            ui::hud(&world, &assets, touch.active);
             map_opened_now = false;
             if !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false, false) {
                 map_open = true;
@@ -471,8 +481,13 @@ async fn main() {
                 dev_pending = Some(a);
             }
         } else if screen == Screen::Paused {
-            match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume, dev.unlocked) {
+            let auto_special = (profile.rank(sim::meta::PowerUp::AutoSpecial) > 0).then_some(profile.auto_special());
+            match ui::pause(&world, &assets, &mut profile.music_volume, &mut profile.sfx_volume, dev.unlocked, auto_special) {
                 Some(ui::PauseAction::Dev) => dev.open = true,
+                Some(ui::PauseAction::AutoSpecial) => {
+                    audio.play(synth::Sfx::Click);
+                    toggle_auto_special(&mut profile, &mut world);
+                }
                 Some(ui::PauseAction::Resume) => {
                     audio.play(synth::Sfx::Click);
                     screen = Screen::Playing;

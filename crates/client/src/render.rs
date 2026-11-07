@@ -335,6 +335,8 @@ impl Assets {
                 PassiveKind::Guard => "guard",
             },
             Upgrade::Heal => "onigiri",
+            Upgrade::Sen => return &self.coin,
+            Upgrade::Blessing => "might",
         };
         &self.icons.iter().find(|(n, _)| *n == key).expect("icon").1
     }
@@ -982,63 +984,11 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let t = (st.delay / 0.6).clamp(0.0, 1.0);
         draw_circle_lines(st.pos.x, st.pos.y, st.radius * (0.4 + 0.6 * t), 1.5, Color::new(1.0, 0.95, 0.5, 0.7));
     }
-    // Gems: tier by value (merged gems are worth more and look it).
-    for (g, &v) in world.gems.pos.iter().zip(&world.gems.value) {
-        let (size, tint) = match v {
-            0..=4 => (7.0, WHITE),
-            5..=24 => (9.0, Color::new(0.45, 1.0, 0.45, 1.0)),
-            25..=99 => (11.0, Color::new(1.0, 0.4, 0.45, 1.0)),
-            _ => (14.0, Color::new(1.0, 0.85, 0.3, 1.0)),
-        };
-        if v >= 25 {
-            let pulse = 0.2 + 0.1 * (time * 4.0 + g.x as f64).sin() as f32;
-            draw_circle(g.x, g.y, size * 0.9, Color::new(tint.r, tint.g, tint.b, pulse));
-        }
-        draw_texture_ex(
-            &a.gem,
-            (g.x - size / 2.0).round(),
-            (g.y - size / 2.0).round(),
-            tint,
-            DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() },
-        );
-    }
     if let Some(s) = world.shrine {
         let pulse = 0.5 + 0.5 * (time * 3.0).sin() as f32;
         draw_rectangle(s.x - 5.0, s.y - 120.0, 10.0, 120.0, Color::new(1.0, 0.9, 0.6, 0.10 + 0.06 * pulse));
         draw_circle(s.x, s.y, 22.0 + 3.0 * pulse, Color::new(1.0, 0.85, 0.5, 0.16 + 0.08 * pulse));
         draw_texture_ex(&a.shrine, (s.x - 16.0).round(), (s.y - 30.0).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(32.0, 36.0)), ..Default::default() });
-    }
-    for (c, tier) in &world.chests {
-        let bob = ((time * 3.0).sin() * 1.5) as f32;
-        let size = if *tier >= 3 { 2.0 } else { 1.0 };
-        // Beacon like the floor pickups: gold for chests, a taller cycling pillar for boss chests.
-        let t = time as f32;
-        let col = if *tier >= 3 {
-            let hcyc = (t * 0.5).fract();
-            let ch = |o: f32| 0.6 + 0.4 * ((hcyc + o) * std::f32::consts::TAU).cos();
-            Color::new(ch(0.0), ch(0.33), ch(0.67), 1.0)
-        } else {
-            Color::new(1.0, 0.82, 0.35, 1.0)
-        };
-        let pulse = 0.5 + 0.5 * (t * 4.0 + c.x * 0.1).sin();
-        let ph = if *tier >= 3 { 220.0 } else { 150.0 };
-        draw_rectangle(c.x - 7.0 * size, c.y - ph, 14.0 * size, ph, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
-        draw_rectangle(c.x - 2.0 * size, c.y - ph, 4.0 * size, ph, Color::new(col.r, col.g, col.b, 0.2 + 0.1 * pulse));
-        draw_ellipse(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, Color::new(col.r, col.g, col.b, 0.22));
-        draw_ellipse_lines(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.85));
-        for i in 0..5 {
-            let rise = (t * 0.8 + i as f32 * 0.2).fract();
-            let x = c.x + ((i as f32 * 2.3 + t).sin()) * 10.0 * size;
-            draw_rectangle(x, c.y - 6.0 - rise * 46.0 * size, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - rise));
-        }
-        draw_circle(c.x, c.y + 2.0, 10.0 * size, Color::new(1.0, 0.85, 0.4, 0.12 + 0.06 * (time * 5.0).sin() as f32));
-        draw_texture_ex(
-            &a.chest,
-            (c.x - 7.0 * size).round(),
-            (c.y - 9.0 * size + bob).round(),
-            WHITE,
-            DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
-        );
     }
     for wl in &world.wells {
         draw_well(vec2(wl.pos.x, wl.pos.y), wl.radius, wl.life / wl.max_life, time as f32);
@@ -1058,15 +1008,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_ellipse(x, y, 5.0, 6.0, 0.0, Color::new(0.95, 0.92, 0.86, fade));
         draw_circle(x, y, 2.5, Color::new(0.55, 0.82, 1.0, fade));
         draw_rectangle(x - 2.0, y + 6.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
-    }
-    for (c, k) in &world.pickups {
-        draw_pickup(a, vec2(c.x, c.y), *k, time as f32);
-    }
-    for (c, v) in &world.coins {
-        let size = if *v >= 50 { 16.0 } else if *v >= 5 { 12.0 } else { 10.0 };
-        let bob = ((time * 4.0 + c.x as f64).sin() * 1.0) as f32;
-        draw_circle(c.x, c.y, size * 0.7, Color::new(1.0, 0.85, 0.3, 0.15));
-        draw_texture_ex(&a.coin, (c.x - size / 2.0).round(), (c.y - size / 2.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
     }
 
     let e = &world.enemies;
@@ -1693,13 +1634,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Enemy fireballs: drawn above everything so they always read as danger.
     draw_hazards(world, time as f32);
     draw_art(world, time as f32);
-    for (pos, r, age) in &fx.gear_drops {
-        let c = crate::armory::rarity_color(*r);
-        let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
-        let h = 70.0 + 30.0 * r.index() as f32;
-        draw_rectangle(pos.x - 3.0, pos.y - h * a.sqrt(), 6.0, h * a.sqrt(), Color::new(c.r, c.g, c.b, 0.5 * a));
-        draw_circle(pos.x, pos.y, 10.0 + 6.0 * age, Color::new(c.r, c.g, c.b, 0.3 * a));
-    }
     for s in &world.shots {
         let r = sim::content::SHOT_RADIUS;
         let flick = 0.8 + 0.2 * (time as f32 * 20.0 + s.pos.x).sin();
@@ -1722,6 +1656,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         c.a = alpha;
         draw_rectangle(pt.pos.x - 1.0, pt.pos.y - 1.0, 2.0, 2.0, c);
     }
+    draw_drops(world, a, fx, time);
 
     // Damage numbers are drawn in screen space so the text stays crisp.
     // Screen-space overlays use the virtual UI space so they scale with the rest of the UI.
@@ -1759,42 +1694,18 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             draw_texture_ex(&a.shrine, tip.x - d.x * 34.0 - 12.0, tip.y - d.y * 34.0 - 14.0, Color::new(1.0, 1.0, 1.0, 0.85), DrawTextureParams { dest_size: Some(vec2(24.0, 27.0)), ..Default::default() });
         }
     }
-    // Off-screen chests get a gold arrow at the screen edge.
-    for (c, tier) in &world.chests {
-        let sp = kit::to_ui(cam.world_to_screen(vec2(c.x, c.y)));
-        let (w, h) = (kit::screen_width(), kit::screen_height());
-        if sp.x < 0.0 || sp.y < 0.0 || sp.x > w || sp.y > h {
-            let ctr = vec2(w / 2.0, h / 2.0);
-            let d = (sp - ctr).normalize_or_zero();
-            let t = ((w / 2.0 - 34.0) / d.x.abs().max(1e-3)).min((h / 2.0 - 34.0) / d.y.abs().max(1e-3));
-            let tip = ctr + d * t;
-            let side = vec2(-d.y, d.x);
-            let pulse = 0.7 + 0.3 * (time * 6.0).sin() as f32;
-            let col = Color::new(1.0, 0.82, 0.35, pulse);
-            let bc = vec2(tip.x - d.x * 24.0, tip.y - d.y * 24.0);
-            draw_circle(bc.x, bc.y, 15.0, Color::new(0.05, 0.04, 0.1, 0.85));
-            draw_circle_lines(bc.x, bc.y, 15.0, if *tier >= 3 { 3.0 } else { 2.0 }, col);
-            draw_texture_ex(&a.chest, bc.x - 10.0, bc.y - 8.0, WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 17.0)), ..Default::default() });
-            draw_triangle(tip + d * 10.0, tip - d * 4.0 + side * 7.0, tip - d * 4.0 - side * 7.0, col);
-        }
+    // Off-screen drops get a badge and an arrow at the screen edge; chests last, on top.
+    let pulse = 0.7 + 0.3 * (time * 6.0).sin() as f32;
+    let ui = |c: &sim::Vec2| kit::to_ui(cam.world_to_screen(vec2(c.x, c.y)));
+    for (c, _) in world.coins.iter().filter(|(_, v)| *v >= 50) {
+        edge_badge(ui(c), &a.coin, vec2(18.0, 18.0), Color::new(1.0, 0.85, 0.3, pulse), 2.0);
     }
-    // Off-screen pickups get a small coloured arrow at the screen edge.
     for (c, k) in &world.pickups {
-        let sp = kit::to_ui(cam.world_to_screen(vec2(c.x, c.y)));
-        let (w, h) = (kit::screen_width(), kit::screen_height());
-        if sp.x < 0.0 || sp.y < 0.0 || sp.x > w || sp.y > h {
-            let ctr = vec2(w / 2.0, h / 2.0);
-            let d = (sp - ctr).normalize_or_zero();
-            let t = ((w / 2.0 - 34.0) / d.x.abs().max(1e-3)).min((h / 2.0 - 34.0) / d.y.abs().max(1e-3));
-            let tip = ctr + d * t;
-            let side = vec2(-d.y, d.x);
-            let col = pickup_color(*k);
-            let pulse = 0.7 + 0.3 * (time * 6.0).sin() as f32;
-            draw_circle(tip.x - d.x * 24.0, tip.y - d.y * 24.0, 15.0, Color::new(0.05, 0.04, 0.1, 0.85));
-            draw_circle_lines(tip.x - d.x * 24.0, tip.y - d.y * 24.0, 15.0, 2.0, Color::new(col.r, col.g, col.b, pulse));
-            draw_texture_ex(a.pickup(*k), tip.x - d.x * 24.0 - 10.0, tip.y - d.y * 24.0 - 10.0, WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
-            draw_triangle(tip + d * 10.0, tip - d * 4.0 + side * 7.0, tip - d * 4.0 - side * 7.0, Color::new(col.r, col.g, col.b, pulse));
-        }
+        let col = pickup_color(*k);
+        edge_badge(ui(c), a.pickup(*k), vec2(20.0, 20.0), Color::new(col.r, col.g, col.b, pulse), 2.0);
+    }
+    for (c, tier) in &world.chests {
+        edge_badge(ui(c), &a.chest, vec2(20.0, 17.0), Color::new(1.0, 0.82, 0.35, pulse), if *tier >= 3 { 3.0 } else { 2.0 });
     }
     if let Some((line, left)) = &fx.bark {
         let s = kit::to_ui(cam.world_to_screen(vec2(p.x, p.y - 34.0)));
@@ -2086,6 +1997,102 @@ fn draw_curse_motes(p: sim::Vec2, t: f32, mukade: bool) {
     }
 }
 
+/// Everything the player can pick up, drawn above enemies and effects so it stays readable.
+fn draw_drops(world: &World, a: &Assets, fx: &Fx, time: f64) {
+    // Gems tier by value (merged gems are worth more and look it).
+    for (g, &v) in world.gems.pos.iter().zip(&world.gems.value) {
+        let (size, tint) = match v {
+            0..=4 => (7.0, WHITE),
+            5..=24 => (9.0, Color::new(0.45, 1.0, 0.45, 1.0)),
+            25..=99 => (11.0, Color::new(1.0, 0.4, 0.45, 1.0)),
+            _ => (14.0, Color::new(1.0, 0.85, 0.3, 1.0)),
+        };
+        if v >= 25 {
+            let pulse = 0.2 + 0.1 * (time * 4.0 + g.x as f64).sin() as f32;
+            draw_circle(g.x, g.y, size * 0.9, Color::new(tint.r, tint.g, tint.b, pulse));
+            draw_circle_lines(g.x, g.y, size * 0.9, 1.5, tint);
+        }
+        draw_texture_ex(
+            &a.gem,
+            (g.x - size / 2.0).round(),
+            (g.y - size / 2.0).round(),
+            tint,
+            DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() },
+        );
+    }
+    for (c, v) in &world.coins {
+        let size = if *v >= 50 { 16.0 } else if *v >= 5 { 12.0 } else { 10.0 };
+        let bob = ((time * 4.0 + c.x as f64).sin() * 1.0) as f32;
+        backing(vec2(c.x, c.y + bob), size * 0.75, Color::new(1.0, 0.85, 0.3, 1.0), 0.8);
+        draw_texture_ex(&a.coin, (c.x - size / 2.0).round(), (c.y - size / 2.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
+    }
+    for (c, k) in &world.pickups {
+        draw_pickup(a, vec2(c.x, c.y), *k, time as f32);
+    }
+    for (c, tier) in &world.chests {
+        let bob = ((time * 3.0).sin() * 1.5) as f32;
+        let size = if *tier >= 3 { 2.0 } else { 1.0 };
+        // Beacon like the floor pickups: gold for chests, a taller cycling pillar for boss chests.
+        let t = time as f32;
+        let col = if *tier >= 3 {
+            let hcyc = (t * 0.5).fract();
+            let ch = |o: f32| 0.6 + 0.4 * ((hcyc + o) * std::f32::consts::TAU).cos();
+            Color::new(ch(0.0), ch(0.33), ch(0.67), 1.0)
+        } else {
+            Color::new(1.0, 0.82, 0.35, 1.0)
+        };
+        let pulse = 0.5 + 0.5 * (t * 4.0 + c.x * 0.1).sin();
+        let ph = if *tier >= 3 { 220.0 } else { 150.0 };
+        draw_rectangle(c.x - 7.0 * size, c.y - ph, 14.0 * size, ph, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
+        draw_rectangle(c.x - 2.0 * size, c.y - ph, 4.0 * size, ph, Color::new(col.r, col.g, col.b, 0.2 + 0.1 * pulse));
+        draw_ellipse(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, Color::new(col.r, col.g, col.b, 0.22));
+        draw_ellipse_lines(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.85));
+        for i in 0..5 {
+            let rise = (t * 0.8 + i as f32 * 0.2).fract();
+            let x = c.x + ((i as f32 * 2.3 + t).sin()) * 10.0 * size;
+            draw_rectangle(x, c.y - 6.0 - rise * 46.0 * size, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - rise));
+        }
+        backing(vec2(c.x, c.y - 3.0 * size + bob), 11.0 * size, col, 0.6 + 0.4 * pulse);
+        draw_texture_ex(
+            &a.chest,
+            (c.x - 7.0 * size).round(),
+            (c.y - 9.0 * size + bob).round(),
+            WHITE,
+            DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
+        );
+    }
+    for (pos, r, age) in &fx.gear_drops {
+        let c = crate::armory::rarity_color(*r);
+        let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
+        let h = 70.0 + 30.0 * r.index() as f32;
+        draw_rectangle(pos.x - 3.0, pos.y - h * a.sqrt(), 6.0, h * a.sqrt(), Color::new(c.r, c.g, c.b, 0.5 * a));
+        draw_circle(pos.x, pos.y, 10.0 + 6.0 * age, Color::new(c.r, c.g, c.b, 0.3 * a));
+    }
+}
+/// A dark disc with a coloured rim behind a drop, so it reads over bright effects.
+fn backing(c: Vec2, r: f32, col: Color, alpha: f32) {
+    draw_circle(c.x, c.y, r, Color::new(0.04, 0.03, 0.08, 0.7));
+    draw_circle_lines(c.x, c.y, r, 1.5, Color::new(col.r, col.g, col.b, alpha));
+}
+
+/// When `sp` (UI space) is off screen: a badge with `tex` and an arrow at the edge pointing to it.
+fn edge_badge(sp: Vec2, tex: &Texture2D, size: Vec2, col: Color, rim: f32) {
+    let (w, h) = (kit::screen_width(), kit::screen_height());
+    if sp.x >= 0.0 && sp.y >= 0.0 && sp.x <= w && sp.y <= h {
+        return;
+    }
+    let ctr = vec2(w / 2.0, h / 2.0);
+    let d = (sp - ctr).normalize_or_zero();
+    let t = ((w / 2.0 - 34.0) / d.x.abs().max(1e-3)).min((h / 2.0 - 34.0) / d.y.abs().max(1e-3));
+    let tip = ctr + d * t;
+    let side = vec2(-d.y, d.x);
+    let bc = tip - d * 24.0;
+    draw_circle(bc.x, bc.y, 15.0, Color::new(0.05, 0.04, 0.1, 0.85));
+    draw_circle_lines(bc.x, bc.y, 15.0, rim, col);
+    draw_texture_ex(tex, bc.x - size.x / 2.0, bc.y - size.y / 2.0, WHITE, DrawTextureParams { dest_size: Some(size), ..Default::default() });
+    draw_triangle(tip + d * 10.0, tip - d * 4.0 + side * 7.0, tip - d * 4.0 - side * 7.0, col);
+}
+
 pub fn pickup_color(k: PickupKind) -> Color {
     match k {
         PickupKind::Feast => Color::new(0.45, 1.0, 0.55, 1.0),
@@ -2106,8 +2113,8 @@ fn draw_pickup(a: &Assets, c: Vec2, k: PickupKind, t: f32) {
     draw_rectangle(c.x - 2.0, c.y - 140.0, 4.0, 140.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
     draw_ellipse(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, Color::new(col.r, col.g, col.b, 0.25));
     draw_ellipse_lines(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.8));
-    draw_circle(c.x, c.y - 10.0, 14.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
     let bob = (t * 3.0 + c.y * 0.1).sin() * 2.5;
+    backing(vec2(c.x, c.y - 10.0 + bob), 13.0, col, 0.6 + 0.4 * pulse);
     draw_texture_ex(a.pickup(k), (c.x - 10.0).round(), (c.y - 20.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
     for i in 0..4 {
         let ph = (t * 0.8 + i as f32 * 0.25).fract();

@@ -40,6 +40,12 @@ pub const MIDBOSS_AT: f32 = 480.0;
 /// Kills needed to fill the special meter.
 pub const SPECIAL_KILLS: f32 = 120.0;
 pub const BARRIER_RADIUS: f32 = 170.0;
+/// Auto special fires below this share of max HP, or with this many enemies within the radius.
+pub const AUTO_SPECIAL_HP: f32 = 0.4;
+/// A crowd: this much `Rank::threat` within `AUTO_SPECIAL_RADIUS`, e.g. 20 fodder,
+/// 3 elites and 2 fodder, or any boss.
+pub const AUTO_SPECIAL_THREAT: f32 = 20.0;
+pub const AUTO_SPECIAL_RADIUS: f32 = 200.0;
 pub const BARRIER_DAMAGE: f32 = 60.0;
 pub const BARRIER_IFRAMES: f32 = 1.5;
 
@@ -1022,9 +1028,31 @@ pub fn passive_max(kind: PassiveKind) -> u8 {
 pub enum Upgrade {
     Weapon(WeaponKind),
     Passive(PassiveKind),
-    /// Fallback once everything is maxed.
+    /// The three fallbacks once everything is maxed.
     Heal,
+    Sen,
+    Blessing,
 }
+
+pub const MAXED_FALLBACKS: [Upgrade; 3] = [Upgrade::Heal, Upgrade::Sen, Upgrade::Blessing];
+
+/// Card text for a maxed-out fallback that gives `amount` (see `World::fallback_amount`).
+pub fn describe_fallback(u: Upgrade, amount: f32) -> String {
+    match u {
+        Upgrade::Heal => format!("Restore {amount:.0} HP ({:.0}% of max).", ONIGIRI_HEAL * 100.0),
+        Upgrade::Sen => format!("+{amount:.0} Sen."),
+        Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Stacks.", amount * 100.0),
+        _ => u.describe(1),
+    }
+}
+
+/// Share of max HP an Onigiri restores.
+pub const ONIGIRI_HEAL: f32 = 0.3;
+/// Sen Pouch at the start of a run; it gains this much again every `SEN_POUCH_RAMP` seconds of pace.
+pub const SEN_POUCH: f32 = 25.0;
+pub const SEN_POUCH_RAMP: f32 = 300.0;
+/// Run damage multiplier per Blessing taken (stacks).
+pub const BLESSING_DAMAGE: f32 = 1.03;
 
 impl Upgrade {
     pub fn name(self) -> &'static str {
@@ -1066,6 +1094,8 @@ impl Upgrade {
             Upgrade::Passive(PassiveKind::Recovery) => "Recovery",
             Upgrade::Passive(PassiveKind::Guard) => "Guard",
             Upgrade::Heal => "Onigiri",
+            Upgrade::Sen => "Sen Pouch",
+            Upgrade::Blessing => "Kizuna Blessing",
         }
     }
 
@@ -1167,7 +1197,9 @@ impl Upgrade {
                 PassiveKind::Guard => "Take 1 less damage per hit.",
             }
             .into(),
-            Upgrade::Heal => "Restore 30 HP.".into(),
+            Upgrade::Heal => format!("Restore {:.0}% of max HP.", ONIGIRI_HEAL * 100.0),
+            Upgrade::Sen => "Sen that grows as the night goes on.".into(),
+            Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Stacks.", (BLESSING_DAMAGE - 1.0) * 100.0),
         }
     }
 }
@@ -1185,6 +1217,11 @@ pub fn chest_roll(r: f32) -> u8 {
     } else {
         5
     }
+}
+
+/// Extra chest luck that ramps in over the first 10 minutes of stage pace, in step with the spawn ladder.
+pub fn chest_time_luck(t: f32) -> f32 {
+    (t / 600.0).min(1.0) * 2.3
 }
 
 pub fn chest_rarity(count: usize) -> &'static str {
@@ -1329,6 +1366,16 @@ pub fn min_alive(t: f32) -> usize {
 pub fn refill_per_tick(t: f32) -> usize {
     4 + (t / 45.0) as usize
 }
+
+/// Spawn ladder rung: 0 until 5:00, 1 until 10:00, then 2. From rung 1 the basic fodder
+/// stops spawning and the crowd thins out, with stronger kinds taking its place.
+pub fn ladder_rung(t: f32) -> usize {
+    if t < 300.0 { 0 } else if t < 600.0 { 1 } else { 2 }
+}
+/// Ranged / blinker share multiplier per rung.
+pub const LADDER_LIFT: [f32; 3] = [1.0, 2.0, 3.0];
+/// Alive-count multiplier per rung; tougher kinds keep total enemy HP about the same.
+pub const LADDER_COUNT: [f32; 3] = [1.0, 0.6, 0.6];
 
 /// Share of new spawns that are Kasa (umbrella) instead of Wisp.
 pub fn kasa_share(t: f32) -> f32 {

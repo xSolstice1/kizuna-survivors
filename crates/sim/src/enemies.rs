@@ -84,6 +84,18 @@ pub enum Rank {
     Final,
 }
 
+impl Rank {
+    /// How much one enemy of this rank adds to a crowd, in fodder-equivalents.
+    /// Any mini-boss or boss in range is a crowd on its own.
+    pub fn threat(self) -> f32 {
+        match self {
+            Rank::Fodder => 1.0,
+            Rank::Elite => 6.0,
+            Rank::Mini | Rank::Boss | Rank::Final => 20.0,
+        }
+    }
+}
+
 /// What an ordinary ranged enemy fires.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Volley {
@@ -330,7 +342,7 @@ impl EnemyKind {
 /// Minimum rewards in the chest dropped on death (0 = no chest).
 pub fn chest_tier(kind: EnemyKind) -> u8 {
     match kind.rank() {
-        Rank::Elite => 1,
+        Rank::Elite => 2,
         Rank::Mini | Rank::Boss => 3,
         _ => 0,
     }

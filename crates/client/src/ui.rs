@@ -70,7 +70,8 @@ fn portrait(assets: &Assets, world: &World, cx: f32, cy: f32, r: f32) {
 
 // ───────────────────────── HUD ─────────────────────────
 
-pub fn hud(world: &World, assets: &Assets) {
+/// `touch`: on-screen controls are showing, so skip keyboard hints.
+pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let w = screen_width();
     let p = &world.player;
     let hero = hero_def(world.cfg.hero);
@@ -108,8 +109,14 @@ pub fn hud(world: &World, assets: &Assets) {
             let full = p.special >= 1.0;
             let glow = if full { 0.75 + 0.25 * (t * 6.0).sin() } else { 1.0 };
             kit::bar(92.0, 62.0, 206.0, 10.0, p.special, Color::new(glow, 0.85 * glow, 0.45 * glow, 1.0), Color::new(0.1, 0.08, 0.16, 0.95));
-            let label = if full { format!("{}  READY  [Space]", hero.special_name.to_uppercase()) } else { hero.special_name.to_uppercase() };
-            kit::text(&label, 94.0, 90.0, fit_size(&label, 210.0, 14.0), if full { Color::new(1.0, 0.9, 0.5, glow) } else { FAINT });
+            let label = hero.special_name.to_uppercase();
+            let ready = Color::new(1.0, 0.9, 0.5, glow);
+            let room = if touch { 210.0 } else { 210.0 - keycap(298.0, 78.0, full, glow) - 6.0 };
+            kit::text(&label, 94.0, 90.0, fit_size(&label, room, 14.0), if full { ready } else { FAINT });
+            if full && !touch {
+                let prompt = format!("Press SPACE: {}", hero.special_name);
+                kit::text_fit_centered(&prompt, w / 2.0, screen_height() - 40.0, w - 40.0, 20.0, ready);
+            }
         }
     }
 
@@ -168,25 +175,27 @@ pub fn hud(world: &World, assets: &Assets) {
     centered(&fmt_time(world.time), 60.0, 36.0, if night { Color::new(1.0, 0.55, 0.45, 1.0) } else { INK });
     let sub = if !night { format!("{} in {}", st.final_boss.short_name(), fmt_time(st.final_at - world.time)) } else { format!("dawn in {}", fmt_time(st.limit - world.time)) };
     kit::text_fit_centered(&sub, w / 2.0, 77.0, tw - 16.0, 13.0, if night { Color::new(1.0, 0.6, 0.5, 0.8 + 0.2 * (t * 4.0).sin()) } else { DIM });
+    stage_progress(world, w / 2.0, screen_height() - 26.0);
 
-    // Boss bar.
+    // Boss bar, below the timer.
     if let Some((_, frac, kind)) = world.boss() {
         let (bw, bx) = (460.0, (w - 460.0) / 2.0);
+        let by = 14.0;
         let name = match kind {
             EnemyKind::NightLord => "NIGHT LORD  ·  CHOCHIN DAIMYO".to_string(),
             k => k.name().to_uppercase(),
         };
-        kit::panel_ex(bx - 10.0, 90.0, bw + 20.0, 40.0, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
-        kit::text_fit_centered(&name, w / 2.0, 106.0, bw, 14.0, Color::new(1.0, 0.75, 0.75, 1.0));
+        kit::panel_ex(bx - 10.0, 90.0 + by, bw + 20.0, 40.0, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
+        kit::text_fit_centered(&name, w / 2.0, 106.0 + by, bw, 14.0, Color::new(1.0, 0.75, 0.75, 1.0));
         // Phase pips for bosses that fight in phases.
         let phases = sim::content::boss_phases(kind, world.cfg.difficulty.extra_phases());
         if kind != EnemyKind::NightLord && kind != EnemyKind::GreatOni && phases > 1 {
             for k in 1..phases {
                 let x = bx + bw * (1.0 - k as f32 / phases as f32);
-                draw_line(x, 111.0, x, 123.0, 2.0, Color::new(1.0, 0.9, 0.7, 0.8));
+                draw_line(x, 111.0 + by, x, 123.0 + by, 2.0, Color::new(1.0, 0.9, 0.7, 0.8));
             }
         }
-        kit::bar(bx, 112.0, bw, 10.0, frac, Color::new(0.9, 0.22, 0.28, 1.0), Color::new(0.2, 0.04, 0.08, 1.0));
+        kit::bar(bx, 112.0 + by, bw, 10.0, frac, Color::new(0.9, 0.22, 0.28, 1.0), Color::new(0.2, 0.04, 0.08, 1.0));
     }
 
     // Stat chips, top-right.
@@ -198,6 +207,47 @@ pub fn hud(world: &World, assets: &Assets) {
     let x = w - 14.0 - cw;
     kit::chip(x, 60.0, "SEN", &sen, GOLD);
     draw_texture_ex(&assets.coin, x - 22.0, 66.0, WHITE, DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() });
+}
+
+/// A SPACE key badge ending at `right`; dim while charging, pulsing gold when ready. Returns its width.
+fn keycap(right: f32, y: f32, ready: bool, glow: f32) -> f32 {
+    let kw = kit::measure("SPACE", 11).width + 12.0;
+    let x = right - kw;
+    let edge = if ready { Color::new(1.0, 0.85, 0.45, glow) } else { Color::new(1.0, 1.0, 1.0, 0.3) };
+    kit::rounded(x, y, kw, 17.0, 4.0, Color::new(0.1, 0.08, 0.16, 0.95));
+    kit::rounded_outline(x, y, kw, 17.0, 4.0, 1.5, edge);
+    kit::text("SPACE", x + 6.0, y + 13.0, 11.0, if ready { edge } else { DIM });
+    kw
+}
+
+/// The night's timeline along the bottom edge: shrines (gold) and bosses (red) up to the final boss,
+/// then a countdown to dawn.
+fn stage_progress(world: &World, cx: f32, y: f32) {
+    let st = world.stage();
+    let (bw, h) = (360.0, 6.0);
+    let x0 = cx - bw / 2.0;
+    let track = Color::new(0.06, 0.05, 0.11, 0.85);
+    if world.time >= st.final_at {
+        let left = ((st.limit - world.time) / (st.limit - st.final_at)).clamp(0.0, 1.0);
+        kit::bar(x0, y, bw, h, left, Color::new(1.0, 0.45, 0.4, 1.0), track);
+        return;
+    }
+    kit::bar(x0, y, bw, h, world.time / st.final_at, SKY, track);
+    let at = |t: f32| x0 + bw * (t / st.final_at).clamp(0.0, 1.0);
+    let mark = |t: f32, tall: f32, c: Color| {
+        let c = if world.time >= t { Color::new(c.r, c.g, c.b, 0.35) } else { c };
+        draw_rectangle(at(t) - 1.5, y - tall, 3.0, h + 2.0 * tall, c);
+    };
+    for &t in st.shrine_times {
+        mark(t, 2.0, GOLD);
+    }
+    let boss = Color::new(1.0, 0.35, 0.35, 1.0);
+    mark(st.mini_at, 4.0, boss);
+    if let Some((_, t)) = st.boss {
+        mark(t, 4.0, boss);
+    }
+    mark(st.final_at, 6.0, boss);
+    draw_circle(at(world.time), y + h / 2.0, 5.0, INK);
 }
 
 // ───────────────────────── Level-up ─────────────────────────
@@ -230,6 +280,8 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usi
             Upgrade::Weapon(_) => (SAKURA, format!("LEVEL {lvl}")),
             Upgrade::Passive(_) => (SKY, format!("LEVEL {lvl}")),
             Upgrade::Heal => (JADE, "FOOD".to_string()),
+            Upgrade::Sen => (JADE, "SEN".to_string()),
+            Upgrade::Blessing => (JADE, "BLESSING".to_string()),
         };
         if hover {
             kit::rounded(x - 6.0, y - 6.0, cw + 12.0, ch + 12.0, 16.0, Color::new(accent.r, accent.g, accent.b, 0.15 + 0.05 * (t * 6.0).sin()));
@@ -243,14 +295,14 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usi
         kit::text(&format!("{}", i + 1), x + cw - 27.0, y + 38.0, 16.0, DIM);
         // Icon + name + tag chip.
         let max = u.max_level();
-        kit::icon_slot(x + 16.0, y + 24.0, 60.0, Some(assets.icon(u)), lvl.saturating_sub(1), if u == Upgrade::Heal { 0 } else { max }, false);
+        kit::icon_slot(x + 16.0, y + 24.0, 60.0, Some(assets.icon(u)), lvl.saturating_sub(1), if sim::content::MAXED_FALLBACKS.contains(&u) { 0 } else { max }, false);
         kit::text_fit(u.name(), x + 90.0, y + 50.0, cw - 140.0, 22.0, INK);
         let tw = kit::measure(&tag, 13).width + 16.0;
         kit::rounded(x + 90.0, y + 60.0, tw, 20.0, 10.0, Color::new(accent.r, accent.g, accent.b, 0.22));
         kit::text(&tag, x + 98.0, y + 75.0, 13.0, accent);
         // Description.
         let mut ly = y + 116.0;
-        for line in wrap(&u.describe(lvl), cw - 32.0, 16) {
+        for line in wrap(&world.describe_upgrade(u, lvl), cw - 32.0, 16) {
             kit::text(&line, x + 16.0, ly, 16.0, Color::new(0.9, 0.9, 0.96, 1.0));
             ly += 21.0;
         }
@@ -345,6 +397,8 @@ pub enum PauseAction {
     /// Volume changed (save it).
     Volume,
     Dev,
+    /// Flip Auto Special on/off.
+    AutoSpecial,
 }
 
 /// Small 0..=1 slider. Returns true if changed.
@@ -363,7 +417,8 @@ fn mini_slider(label: &str, x: f32, y: f32, w: f32, v: &mut f32) -> bool {
     (*v - before).abs() > 1e-6
 }
 
-pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev: bool) -> Option<PauseAction> {
+/// `auto_special` is `None` until Auto Special is bought, then whether it's on.
+pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev: bool, auto_special: Option<bool>) -> Option<PauseAction> {
     dim_screen(0.7);
     let (w, h) = (screen_width(), screen_height());
     let hero = hero_def(world.cfg.hero);
@@ -481,6 +536,13 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev
     kit::panel_title("SOUND", rx + 18.0, by + 210.0, 16.0, GOLD);
     let mut changed = mini_slider("Music", rx + 30.0, by + 224.0, rw - 60.0, music);
     changed |= mini_slider("Effects", rx + 30.0, by + 256.0, rw - 60.0, sfx);
+    // A button, not just the U key, so touch players can switch it too.
+    if let Some(on) = auto_special {
+        let label = format!("Auto Special: {}  [U]", if on { "ON" } else { "OFF" });
+        if kit::button(Rect::new(rx + 30.0, by + 292.0, bw, 40.0), &label, true, if on { Style::Primary } else { Style::Secondary }) {
+            action = Some(PauseAction::AutoSpecial);
+        }
+    }
     kit::text("Esc resume  ·  R restart  ·  Q give up  ·  N damage numbers", rx + 30.0, by + panel_h - 240.0, 13.0, FAINT);
     if changed && action.is_none() {
         action = Some(PauseAction::Volume);
@@ -589,7 +651,7 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
 
     let mut action = None;
     let by = py + ph - 76.0;
-    if kit::button(Rect::new(w / 2.0 - 250.0, by, 240.0, 52.0), "Try again", true, Style::Primary) || is_key_pressed(KeyCode::R) {
+    if kit::button(Rect::new(w / 2.0 - 250.0, by, 240.0, 52.0), if won { "Play again" } else { "Try again" }, true, Style::Primary) || is_key_pressed(KeyCode::R) {
         action = Some(ResultsAction::Retry);
     }
     if kit::button(Rect::new(w / 2.0 + 10.0, by, 240.0, 52.0), "Main menu", true, Style::Secondary) || is_key_pressed(KeyCode::M) || is_key_pressed(KeyCode::Escape) {
@@ -654,7 +716,7 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
         let a1 = c + vec2(mx.x - p.x, mx.y - p.y) * scale;
         draw_rectangle_lines(a0.x, a0.y, a1.x - a0.x, a1.y - a0.y, 2.0, Color::new(1.0, 0.85, 0.5, 0.5));
     }
-    // Markers, drawn by kind (ordinary enemies first so important ones sit on top).
+    // Markers by layer: ordinary enemies, then bosses and the shrine, then drops on top.
     let pulse = 0.6 + 0.4 * (get_time() as f32 * 5.0).sin();
     // The sprite of whatever elite / boss the stage fields.
     let st = world.stage();
@@ -663,7 +725,14 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
         (0..e.len()).filter(|&i| e.kind[i].is_boss()).min_by(|&a, &b| (e.pos[a] - q).length_sq().partial_cmp(&(e.pos[b] - q).length_sq()).unwrap()).map(|i| e.kind[i])
     };
     let mut markers = world.map_markers();
-    markers.sort_by_key(|m| !matches!(m.kind, sim::MarkerKind::Enemy));
+    markers.sort_by_key(|m| match m.kind {
+        sim::MarkerKind::Enemy => 0,
+        sim::MarkerKind::Coin => 2,
+        sim::MarkerKind::Pickup(_) => 3,
+        sim::MarkerKind::Chest { .. } => 4,
+        _ => 1,
+    });
+    let dark = Color::new(0.04, 0.03, 0.08, 0.85);
     for m in markers {
         let Some(q) = to_map(m.pos) else { continue };
         match m.kind {
@@ -690,6 +759,7 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
             }
             sim::MarkerKind::Chest { tier } => {
                 let s = if tier >= 3 { 1.5 } else { 1.0 };
+                draw_circle(q.x, q.y, 5.5 * s, dark);
                 draw_rectangle(q.x - 3.0 * s, q.y - 2.5 * s, 6.0 * s, 5.0 * s, Color::new(1.0, 0.8, 0.3, pulse));
             }
             sim::MarkerKind::Shrine => {
@@ -697,11 +767,20 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
             }
             sim::MarkerKind::Pickup(k) => {
                 let col = crate::render::pickup_color(k);
+                draw_circle(q.x, q.y, if big { 10.0 } else { 6.0 }, dark);
                 if big {
                     draw_texture_ex(assets.pickup(k), q.x - 8.0, q.y - 8.0, WHITE, DrawTextureParams { dest_size: Some(vec2(16.0, 16.0)), ..Default::default() });
                 } else {
                     draw_circle(q.x, q.y, 3.5, col);
                     draw_circle_lines(q.x, q.y, 5.0, 1.0, Color::new(col.r, col.g, col.b, pulse));
+                }
+            }
+            sim::MarkerKind::Coin => {
+                if big {
+                    draw_texture_ex(&assets.coin, q.x - 5.0, q.y - 5.0, WHITE, DrawTextureParams { dest_size: Some(vec2(10.0, 10.0)), ..Default::default() });
+                } else {
+                    draw_circle(q.x, q.y, 2.5, dark);
+                    draw_circle(q.x, q.y, 1.5, GOLD);
                 }
             }
             sim::MarkerKind::Objective => draw_poly(q.x, q.y, 5, 5.0 + 2.0 * pulse, 0.0, GOLD),
@@ -719,7 +798,7 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
     if big {
         // Legend.
         let ly = y + size + 26.0;
-        let items: [(&str, Color); 7] = [
+        let items: [(&str, Color); 8] = [
             ("you", INK),
             ("Otherworlders", Color::new(1.0, 0.25, 0.3, 1.0)),
             ("elite", Color::new(1.0, 0.45, 0.35, 1.0)),
@@ -727,6 +806,7 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
             ("boss", Color::new(1.0, 0.5, 0.2, 1.0)),
             ("chest", GOLD),
             ("pickup", JADE),
+            ("sen", Color::new(1.0, 0.85, 0.3, 1.0)),
         ];
         let widths: Vec<f32> = items.iter().map(|(l, _)| kit::measure(l, 15).width + 40.0).collect();
         let mut lx = (w - widths.iter().sum::<f32>()) / 2.0;
