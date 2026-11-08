@@ -5,7 +5,7 @@ use macroquad::prelude::*;
 use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
-use sim::content::{EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
+use sim::content::{Element, EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
 use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
@@ -377,6 +377,8 @@ struct DamageNumber {
     amount: f32,
     age: f32,
     crit: bool,
+    elem: Option<Element>,
+    mult: f32,
 }
 
 struct Particle {
@@ -499,11 +501,11 @@ impl Fx {
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
                 // show, ordinary hits one in six.
-                Event::Hit { pos, amount, crit } if self.show_numbers && (crit || amount >= 150.0 || { self.number_tick = self.number_tick.wrapping_add(1); self.number_tick % 6 == 0 }) => {
+                Event::Hit { pos, amount, crit, elem, mult } if self.show_numbers && (crit || amount >= 150.0 || { self.number_tick = self.number_tick.wrapping_add(1); self.number_tick % 6 == 0 }) => {
                     if self.numbers.len() >= MAX_NUMBERS {
                         self.numbers.remove(0);
                     }
-                    self.numbers.push(DamageNumber { pos: vec2(pos.x, pos.y - 8.0), amount, age: 0.0, crit });
+                    self.numbers.push(DamageNumber { pos: vec2(pos.x, pos.y - 8.0), amount, age: 0.0, crit, elem, mult });
                 }
                 Event::Kill { pos, kind } => {
                     let (n, color) = match kind {
@@ -1764,6 +1766,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let alpha = 1.0 - (n.age / 0.6).powi(2);
         let txt = format!("{:.0}", n.amount);
         let (size, c) = if n.crit { (24.0, Color::new(1.0, 0.8, 0.25, alpha)) } else { (18.0, Color::new(1.0, 1.0, 1.0, alpha)) };
+        let (size, c) = match n.elem {
+            Some(e) if n.mult > 1.0 => {
+                let ec = crate::ui::element_color(e);
+                (size * 1.2, Color::new(ec.r, ec.g, ec.b, alpha))
+            }
+            _ if n.mult < 1.0 => (size, Color::new(kit::FAINT.r, kit::FAINT.g, kit::FAINT.b, alpha)),
+            _ => (size, c),
+        };
         kit::text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, size, Color::new(0.0, 0.0, 0.0, alpha));
         kit::text(&txt, s.x - 5.0, s.y, size, c);
     }

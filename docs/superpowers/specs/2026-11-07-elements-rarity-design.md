@@ -407,3 +407,31 @@ None.
   edge; ultimate alert plays a dedicated `Sfx::Rise`; `mouse_moved` moved up with the helpers; debug overlay at
   `kit::MARGIN`. Still open: no T1 doc comments restated a name (none deleted); `BOSS_HP` shortcut and the Haru / Kaede
   melee lever above.
+
+## Carried into phase 5
+
+- Phase 4 final values: `PROC_CHANCE` 0.15, `BURN_SECONDS` 3.0, `BURN_SHARE` 0.3, `BURN_TICK` 0.5, `SOAK_SECONDS` 4.0,
+  `SOAK_ELECTRIC` 1.3, `CHAIN_RANGE` 90.0, `CHAIN_SHARE` 0.5, `STAGGER_SECONDS` 0.4, `KNOCK_EXTRA` 220.0,
+  `SLOW_SECONDS` 2.0, `SLOW_FACTOR` 0.65, `DRAIN_HEAL` 0.5, `ELEM_STRONG` 1.5, `ELEM_WEAK` 0.75,
+  `ELEM_INTO_RARE` 0.9, `ELEM_FROM_RARE` 1.15, `ELEM_RARE_CLASH` 1.5, `AFFINITY_DAMAGE` 1.1. No tuning was needed.
+- Weapon, enemy and world element tables as built: see "Element tables" in the phase 4 plan.
+- Measured (Normal, 10 seeds, vs `73ca295`): shrine_valley every hero within 2 wins in both blocks; no stage lost
+  more than 3 for Ren or Riku; Light and Darkness heroes never beat the median delta by more than 2. Details in the
+  plan's "Measured".
+- Deferred to phase 5: gear elements and elemental resistance (cap 60% total); Arsenal takes its weapon's element;
+  Set takes its set's element; items get an element on load, deterministically from the item id. Eclipse unique
+  damage currently inherits the triggering hit's element advantage: revisit with gear elements.
+- Rulings made in phase 4: PurificationWave is Water (Light is Legendary+ only); GravityWell is Darkness (Kuon's
+  signature is off-affinity, as are Ren's Ofuda and Mika's StarFall); bosses ignore stagger; on-hit effects take the
+  raw pre-multiplier hit (burn ticks are Fire hits, chain hits are Electric hits); a refreshed burn takes the new
+  hit's dps, not the max; ultimates also get the x1.1 affinity.
+- Open rechecks: Kuon 10/10 on seeds 41-50 again; Haru, Kaede, Mika, Nanami and Yuzu unmeasured; `BOSS_HP` stays a
+  `shortcut:` until human playtests. Spec inconsistency for phase 6: Shrine Valley's new enemies are drafted Wind
+  while the world is Earth, and Ember Leaf's are Earth/Fire/Water while the world is Wind. Reconcile before phase 6.
+- Client follow-ups: no visual for burn, soak, slow, stagger or mark on enemies; replace picker not screenshotted.
+- Burn ticks and chain hits go through `apply_hit`, so they roll crits, can spawn Eclipse, advance ThousandCounter and
+  consume Light marks; revisit with gear elements.
+- Playtest watch items next to `BOSS_HP`: Darkness drain sustain scales with hits per second (GravityWell, Hannya
+  aura), lever is a drain cooldown; Ice slow applies at full strength to bosses, lever is a weaker boss slow.
+- Client duplications: the element name is measured twice in the replace picker; the Affinity text format is
+  duplicated between the armory and the menu.

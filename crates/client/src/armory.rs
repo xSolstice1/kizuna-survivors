@@ -281,6 +281,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
             (def.archetype.to_string(), crate::menu::ACCENT, 13),
             (format!("Starts with {}", Upgrade::Weapon(def.signature).name()), INK, 12),
             (format!("Innate: {}", def.innate_text), JADE, 12),
+            (format!("Affinity: {} +10%", def.element.name()), crate::ui::element_color(def.element), 12),
             (crate::menu::special_text(&def), GOLD, 12),
         ]
     } else if soon {

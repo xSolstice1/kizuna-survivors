@@ -520,7 +520,7 @@ async fn main() {
         if ult_alert.update(ult_ready, alert_blocked, dt) {
             audio.play(synth::Sfx::Rise);
         }
-        ui::ult_alert(&ult_alert, ui::special_color(sim::content::hero_def(world.cfg.hero).special), touch.active, ult_ready && !alert_blocked);
+        ui::ult_alert(&ult_alert, ui::element_color(sim::content::hero_def(world.cfg.hero).element), touch.active, ult_ready && !alert_blocked);
         if dev.show_fps || stress.is_some() {
             ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
         }

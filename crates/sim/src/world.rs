@@ -78,7 +78,7 @@ pub enum RunState {
 /// Things that happened this tick, for rendering/audio. Cleared every step.
 #[derive(Clone, Copy, Debug)]
 pub enum Event {
-    Hit { pos: Vec2, amount: f32, crit: bool },
+    Hit { pos: Vec2, amount: f32, crit: bool, elem: Option<Element>, mult: f32 },
     /// Equipment dropped (auto-collected).
     GearDrop { pos: Vec2, rarity: Rarity },
     Kill { pos: Vec2, kind: EnemyKind },
@@ -181,6 +181,7 @@ pub struct Tether {
     damage: f32,
     reach: f32,
     heals: bool,
+    pub elem: Option<Element>,
 }
 
 /// A Lantern Vigil soul-lantern on the ground.
@@ -193,6 +194,7 @@ pub struct Lantern {
     tick: f32,
     damage: f32,
     slows: bool,
+    pub elem: Option<Element>,
 }
 
 /// A lingering Moonsever scar that keeps cutting.
@@ -203,6 +205,7 @@ pub struct Scar {
     pub life: f32,
     tick: f32,
     damage: f32,
+    pub elem: Option<Element>,
 }
 
 /// Something the minimap should show. Stages and modes add markers here; the UI draws
@@ -249,6 +252,7 @@ pub struct MirageClone {
     speed: f32,
     /// Formation slot around the player while idle.
     slot: f32,
+    pub elem: Option<Element>,
 }
 
 /// Enemy fireball.
@@ -313,6 +317,7 @@ pub struct Wave {
     pub damage: f32,
     /// Purification Wave: blasts enemies back harder and erases fireballs it passes.
     pub purify: bool,
+    pub elem: Option<Element>,
 }
 
 /// Star Fall strike waiting to land.
@@ -322,6 +327,7 @@ pub struct Strike {
     pub delay: f32,
     pub radius: f32,
     pub damage: f32,
+    pub elem: Option<Element>,
 }
 
 /// Burning ground from Flame Pool.
@@ -333,6 +339,7 @@ pub struct Pool {
     pub max_life: f32,
     tick: f32,
     pub damage: f32,
+    pub elem: Option<Element>,
 }
 
 /// One reward from an opened chest.
@@ -376,6 +383,14 @@ pub struct Enemies {
     /// Seconds left of a committed move (dash, charge); the move's direction.
     pub ai_busy: Vec<f32>,
     pub ai_aux: Vec<Vec2>,
+    /// Element statuses: seconds left of each, plus the burn's damage per second.
+    pub burn: Vec<f32>,
+    pub burn_dps: Vec<f32>,
+    pub soak: Vec<f32>,
+    pub stagger: Vec<f32>,
+    pub slow: Vec<f32>,
+    /// Light: the next hit on this enemy crits.
+    pub marked: Vec<bool>,
 }
 
 impl Enemies {
@@ -408,6 +423,12 @@ impl Enemies {
         self.phase.swap_remove(i);
         self.ai_busy.swap_remove(i);
         self.ai_aux.swap_remove(i);
+        self.burn.swap_remove(i);
+        self.burn_dps.swap_remove(i);
+        self.soak.swap_remove(i);
+        self.stagger.swap_remove(i);
+        self.slow.swap_remove(i);
+        self.marked.swap_remove(i);
     }
 }
 
@@ -452,6 +473,7 @@ pub struct Well {
     pub radius: f32,
     damage: f32,
     tick: f32,
+    pub elem: Option<Element>,
 }
 
 /// Burst / blast looks (shared by the sim events and the renderer).
@@ -486,6 +508,7 @@ pub struct Blast {
     pub style: u8,
     /// Leaves burning ground.
     burns: bool,
+    pub elem: Option<Element>,
 }
 
 #[derive(Default)]
@@ -506,6 +529,7 @@ pub struct Projectiles {
     pub last_hit: Vec<u32>,
     /// Max turn rate toward the nearest enemy, radians/second (0 = straight).
     pub homing: Vec<f32>,
+    pub elem: Vec<Option<Element>>,
 }
 
 impl Projectiles {
@@ -516,10 +540,10 @@ impl Projectiles {
         self.pos.is_empty()
     }
     fn push(&mut self, pos: Vec2, vel: Vec2, life: f32, damage: f32, pierce: u8, homing: f32) {
-        self.push_kind(ProjKind::Talisman, PROJECTILE_RADIUS, pos, vel, life, damage, pierce, homing);
+        self.push_kind(ProjKind::Talisman, PROJECTILE_RADIUS, pos, vel, life, damage, pierce, homing, None);
     }
     #[allow(clippy::too_many_arguments)]
-    fn push_kind(&mut self, kind: ProjKind, radius: f32, pos: Vec2, vel: Vec2, life: f32, damage: f32, pierce: u8, homing: f32) {
+    fn push_kind(&mut self, kind: ProjKind, radius: f32, pos: Vec2, vel: Vec2, life: f32, damage: f32, pierce: u8, homing: f32, elem: Option<Element>) {
         self.kind.push(kind);
         self.radius.push(radius);
         self.charge.push(0.0);
@@ -532,6 +556,7 @@ impl Projectiles {
         self.pierce.push(pierce);
         self.last_hit.push(u32::MAX);
         self.homing.push(homing);
+        self.elem.push(elem);
     }
     fn swap_remove(&mut self, i: usize) {
         self.kind.swap_remove(i);
@@ -546,6 +571,7 @@ impl Projectiles {
         self.pierce.swap_remove(i);
         self.last_hit.swap_remove(i);
         self.homing.swap_remove(i);
+        self.elem.swap_remove(i);
     }
 }
 
@@ -620,6 +646,7 @@ pub struct World {
     /// Half the visible world size; the client sets it each frame.
     pub view_half: Vec2,
     reach_scale: f32,
+    hero_element: Element,
     pub player: Player,
     pub weapons: Vec<OwnedWeapon>,
     pub passives: Vec<(PassiveKind, u8)>,
@@ -781,6 +808,7 @@ impl World {
             cfg,
             view_half: DEFAULT_VIEW_HALF,
             reach_scale: hero.reach,
+            hero_element: hero.element,
             player: Player {
                 pos: Vec2::ZERO,
                 facing: Vec2::new(1.0, 0.0),
@@ -931,6 +959,7 @@ impl World {
         self.update_hazards();
         self.update_gear();
         self.update_pickups();
+        self.tick_statuses();
         // Everything that reads the grid must run before this: removal reorders
         // the enemy arrays and invalidates the grid's indices.
         self.remove_dead_enemies();
@@ -1262,6 +1291,12 @@ impl World {
         e.phase.push(0);
         e.ai_busy.push(0.0);
         e.ai_aux.push(Vec2::ZERO);
+        e.burn.push(0.0);
+        e.burn_dps.push(0.0);
+        e.soak.push(0.0);
+        e.stagger.push(0.0);
+        e.slow.push(0.0);
+        e.marked.push(false);
     }
 
     fn spawn_boss(&mut self, kind: EnemyKind) {
@@ -1650,7 +1685,7 @@ impl World {
             for k in 0..self.scratch.len() {
                 let j = self.scratch[k] as usize;
                 let dir = self.enemies.pos[j] - pos;
-                self.hurt_enemy(j, dmg, dir);
+                self.hurt_enemy(j, dmg, dir, None);
             }
         }
         for (pos, radius, kind, friendly) in fired {
@@ -1663,7 +1698,7 @@ impl World {
                     let j = self.scratch[k] as usize;
                     if !self.enemies.kind[j].is_boss() {
                         let dir = self.enemies.pos[j] - pos;
-                        self.hurt_enemy(j, blast, dir);
+                        self.hurt_enemy(j, blast, dir, None);
                     }
                 }
             }
@@ -1687,7 +1722,7 @@ impl World {
         let frozen = self.freeze > 0.0;
         // Pass 1: desired velocity = seek player + separation from grid neighbours.
         for i in 0..e.pos.len() {
-            if frozen && !e.kind[i].is_boss() {
+            if (frozen || e.stagger[i] > 0.0) && !e.kind[i].is_boss() {
                 e.vel[i] = Vec2::ZERO;
                 continue;
             }
@@ -1906,8 +1941,8 @@ impl World {
         // Pass 2: integrate, then slide around props (bosses smash straight through).
         let stage_id = self.cfg.stage;
         for i in 0..e.pos.len() {
-            let v = e.vel[i] + e.push[i];
-            e.pos[i] += v * DT;
+            let slow = if e.slow[i] > 0.0 { SLOW_FACTOR } else { 1.0 };
+            e.pos[i] += (e.vel[i] * slow + e.push[i]) * DT;
             if !e.kind[i].is_boss() {
                 let before = e.pos[i];
                 let after = stage::resolve_local(stage_id, before, e.radius[i]);
@@ -1933,12 +1968,12 @@ impl World {
     }
 
     fn burst_projectile(&mut self, i: usize) {
-        let (c, r, dmg, kind) = (self.projectiles.pos[i], self.projectiles.burst[i], self.projectiles.damage[i], self.projectiles.kind[i]);
+        let (c, r, dmg, kind, elem) = (self.projectiles.pos[i], self.projectiles.burst[i], self.projectiles.damage[i], self.projectiles.kind[i], self.projectiles.elem[i]);
         self.query_circle(c, r);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - c;
-            self.hurt_enemy(j, dmg, dir);
+            self.hurt_enemy(j, dmg, dir, elem);
         }
         let st = match kind {
             ProjKind::Seal => style::SEAL,
@@ -1952,7 +1987,7 @@ impl World {
             let a0 = self.rng.range(0.0, std::f32::consts::TAU);
             for k in 0..3 {
                 let a = a0 + k as f32 * std::f32::consts::TAU / 3.0;
-                self.projectiles.push_kind(ProjKind::Spark, 5.0, c, Vec2::from_angle(a) * 240.0, 0.6, dmg * 0.4, 3, 5.0);
+                self.projectiles.push_kind(ProjKind::Spark, 5.0, c, Vec2::from_angle(a) * 240.0, 0.6, dmg * 0.4, 3, 5.0, elem);
             }
         }
     }
@@ -1975,6 +2010,7 @@ impl World {
             self.sig_timers[ti] = every * self.haste();
             let s = self.stats_of(&w);
             let dmg = s.damage * might;
+            let elem = Some(w.kind.element());
             let area = s.area * self.area_mult();
             let loud = every >= 0.3; // continuous streams don't announce every shot
             match w.kind {
@@ -1982,7 +2018,7 @@ impl World {
                     // Seal Storm: a stream of homing seals that explode.
                     let d = self.aim_dir();
                     let a = d.y.atan2(d.x) + self.rng.range(-0.5, 0.5);
-                    self.projectiles.push_kind(ProjKind::Seal, 6.0, p, Vec2::from_angle(a) * 380.0, 1.6, dmg * 0.9, 1, 10.0);
+                    self.projectiles.push_kind(ProjKind::Seal, 6.0, p, Vec2::from_angle(a) * 380.0, 1.6, dmg * 0.9, 1, 10.0, elem);
                     let last = self.projectiles.len() - 1;
                     self.projectiles.burst[last] = 28.0 * area;
                 }
@@ -1992,7 +2028,7 @@ impl World {
                     for k in 0..6 {
                         let a = rot + k as f32 * std::f32::consts::TAU / 6.0;
                         let to = p + Vec2::from_angle(a) * 340.0;
-                        self.hurt_along(p, to, 12.0, dmg * 2.5);
+                        self.hurt_along(p, to, 12.0, dmg * 2.5, elem);
                         self.events.push(Event::Beam { from: p, to, style: style::MOON });
                     }
                 }
@@ -2001,42 +2037,42 @@ impl World {
                     for arm in 0..2 {
                         let a = self.time * 7.0 + arm as f32 * std::f32::consts::PI;
                         let v = Vec2::from_angle(a) * 210.0 + Vec2::from_angle(a + 1.4) * 60.0;
-                        self.projectiles.push_kind(ProjKind::Petal, 5.0, p, v, 1.3, dmg * 1.4, 3, 0.0);
+                        self.projectiles.push_kind(ProjKind::Petal, 5.0, p, v, 1.3, dmg * 1.4, 3, 0.0, elem);
                     }
                 }
                 WeaponKind::ThunderChain => {
                     // Heavenfall: sky lightning on a random nearby enemy.
                     if let Some(t) = self.random_targets(320.0, 1).first().copied() {
-                        self.blasts.push(Blast { pos: t, delay: 0.12, max_delay: 0.12, radius: 46.0 * area, damage: dmg * 1.4, style: style::SKYBOLT, burns: false });
+                        self.blasts.push(Blast { pos: t, delay: 0.12, max_delay: 0.12, radius: 46.0 * area, damage: dmg * 1.4, style: style::SKYBOLT, burns: false, elem });
                     }
                 }
                 WeaponKind::Taiko => {
                     // Festival Quake: a colossal shockwave.
-                    self.waves.push(Wave { center: p, radius: 0.0, max_radius: 320.0 * area, speed: 420.0, damage: dmg * 1.8, purify: false });
+                    self.waves.push(Wave { center: p, radius: 0.0, max_radius: 320.0 * area, speed: 420.0, damage: dmg * 1.8, purify: false, elem });
                     self.events.push(Event::Burst { pos: p, radius: 60.0, style: style::QUAKE });
                 }
                 WeaponKind::StarFall => {
                     // Meteor: a giant meteor on the thickest part of the horde, leaving a crater.
                     if let Some(t) = self.random_targets(300.0, 1).first().copied() {
-                        self.blasts.push(Blast { pos: t, delay: 0.7, max_delay: 0.7, radius: 110.0 * area, damage: dmg * 3.0, style: style::METEOR, burns: true });
+                        self.blasts.push(Blast { pos: t, delay: 0.7, max_delay: 0.7, radius: 110.0 * area, damage: dmg * 3.0, style: style::METEOR, burns: true, elem });
                     }
                 }
                 WeaponKind::FlamePool => {
                     // Foxfire Trail: burning ground under the player's feet.
-                    self.pools.push(Pool { pos: p, radius: 30.0 * area, life: 2.4, max_life: 2.4, tick: 0.0, damage: dmg });
+                    self.pools.push(Pool { pos: p, radius: 30.0 * area, life: 2.4, max_life: 2.4, tick: 0.0, damage: dmg, elem });
                 }
                 WeaponKind::FoxfireOrb => {
                     // Comet Rain: five blue comets fall on the horde.
                     for t in self.random_targets(320.0, 5) {
                         let d = self.rng.range(0.4, 0.9);
-                        self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 50.0 * area, damage: dmg * 1.3, style: style::COMET, burns: false });
+                        self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 50.0 * area, damage: dmg * 1.3, style: style::COMET, burns: false, elem });
                     }
                 }
                 WeaponKind::GaleShuriken => {
                     // Cyclone: a ring of shuriken bursts out and returns.
                     for k in 0..10 {
                         let a = k as f32 / 10.0 * std::f32::consts::TAU;
-                        self.projectiles.push_kind(ProjKind::Shuriken, 9.0 * area, p, Vec2::from_angle(a) * 300.0, s.duration * self.persistence(), dmg, 255, 0.0);
+                        self.projectiles.push_kind(ProjKind::Shuriken, 9.0 * area, p, Vec2::from_angle(a) * 300.0, s.duration * self.persistence(), dmg, 255, 0.0, elem);
                     }
                 }
                 WeaponKind::FoxMirage => {
@@ -2045,7 +2081,7 @@ impl World {
                     for c in clones {
                         if let Some(j) = self.nearest_index(c, 220.0, &[]) {
                             let d = (self.enemies.pos[j] - c).normalize_or_zero();
-                            self.projectiles.push_kind(ProjKind::Foxfire, 6.0, c, d * 280.0, 1.2, dmg * 1.5, 1, 0.0);
+                            self.projectiles.push_kind(ProjKind::Foxfire, 6.0, c, d * 280.0, 1.2, dmg * 1.5, 1, 0.0, elem);
                             let last = self.projectiles.len() - 1;
                             self.projectiles.burst[last] = 30.0 * area;
                         }
@@ -2054,7 +2090,7 @@ impl World {
                 WeaponKind::GraveCleaver => {
                     // Judgement: a colossal slow crescent.
                     let d = self.aim_dir();
-                    self.projectiles.push_kind(ProjKind::CrescentWave, 42.0 * area, p + d * 20.0, d * 230.0, 1.6, dmg * 3.0, 255, 0.0);
+                    self.projectiles.push_kind(ProjKind::CrescentWave, 42.0 * area, p + d * 20.0, d * 230.0, 1.6, dmg * 3.0, 255, 0.0, elem);
                     self.events.push(Event::Slash { pos: p, dir: d, radius: 90.0, full: true });
                 }
                 WeaponKind::LanternVigil => {
@@ -2063,21 +2099,21 @@ impl World {
                     for l in lanterns {
                         if let Some(j) = self.nearest_index(l, 200.0, &[]) {
                             let d = (self.enemies.pos[j] - l).normalize_or_zero();
-                            self.projectiles.push_kind(ProjKind::SpiritBolt, 5.0, l + Vec2::new(0.0, -12.0), d * 320.0, 0.9, dmg * 0.9, 2, 6.0);
+                            self.projectiles.push_kind(ProjKind::SpiritBolt, 5.0, l + Vec2::new(0.0, -12.0), d * 320.0, 0.9, dmg * 0.9, 2, 6.0, elem);
                         }
                     }
                 }
                 WeaponKind::YinYangOrbs => {
                     // Yin-Yang Crash: a giant orb crashes onto the horde.
                     if let Some(t) = self.random_targets(300.0, 1).first().copied() {
-                        self.blasts.push(Blast { pos: t, delay: 0.6, max_delay: 0.6, radius: 90.0 * area, damage: dmg * 4.0, style: style::YINYANG, burns: false });
+                        self.blasts.push(Blast { pos: t, delay: 0.6, max_delay: 0.6, radius: 90.0 * area, damage: dmg * 4.0, style: style::YINYANG, burns: false, elem });
                     }
                 }
                 WeaponKind::SpiritSeal => {
                     // Seal Ring: a full ring of seal orbs.
                     for k in 0..14 {
                         let a = k as f32 / 14.0 * std::f32::consts::TAU;
-                        self.projectiles.push_kind(ProjKind::SealOrb, 7.0, p, Vec2::from_angle(a) * 300.0, 1.8, dmg, 1, 5.0);
+                        self.projectiles.push_kind(ProjKind::SealOrb, 7.0, p, Vec2::from_angle(a) * 300.0, 1.8, dmg, 1, 5.0, elem);
                         let last = self.projectiles.len() - 1;
                         self.projectiles.burst[last] = 26.0 * area;
                     }
@@ -2085,14 +2121,14 @@ impl World {
                 WeaponKind::GravityWell => {
                     // Event Horizon: a vast singularity.
                     if let Some(t) = self.random_targets(260.0, 1).first().copied() {
-                        self.wells.push(Well { pos: t, life: 1.6, max_life: 1.6, radius: 170.0 * area, damage: dmg * 2.0, tick: 0.0 });
+                        self.wells.push(Well { pos: t, life: 1.6, max_life: 1.6, radius: 170.0 * area, damage: dmg * 2.0, tick: 0.0, elem });
                     }
                 }
                 WeaponKind::RepulsionStar => {
                     // Red Nova: a ring of crimson stars.
                     for k in 0..10 {
                         let a = k as f32 / 10.0 * std::f32::consts::TAU;
-                        self.projectiles.push_kind(ProjKind::RedStar, 10.0 * area, p, Vec2::from_angle(a) * 340.0, 1.3, dmg, 255, 0.0);
+                        self.projectiles.push_kind(ProjKind::RedStar, 10.0 * area, p, Vec2::from_angle(a) * 340.0, 1.3, dmg, 255, 0.0, elem);
                     }
                 }
                 WeaponKind::VoidLance => {
@@ -2100,12 +2136,12 @@ impl World {
                     let d = self.aim_dir();
                     for k in -1..=1 {
                         let a = d.y.atan2(d.x) + k as f32 * 0.55;
-                        self.projectiles.push_kind(ProjKind::VoidOrb, 26.0 * area, p, Vec2::from_angle(a) * 170.0, 3.0, dmg * 1.3, 255, 0.0);
+                        self.projectiles.push_kind(ProjKind::VoidOrb, 26.0 * area, p, Vec2::from_angle(a) * 170.0, 3.0, dmg * 1.3, 255, 0.0, elem);
                     }
                 }
                 WeaponKind::CrimsonTendrils => {
                     // Hundred Lashes: twelve tendrils tear through everything around.
-                    self.lash_targets(p, 160.0 * area, 12, dmg * 1.2);
+                    self.lash_targets(p, 160.0 * area, 12, dmg * 1.2, elem);
                 }
                 WeaponKind::MukadeSpines => {
                     // Marching Spine: a line of spines crawls out along the aim.
@@ -2113,7 +2149,7 @@ impl World {
                     for k in 0..9 {
                         let pos = p + d * (40.0 + 34.0 * k as f32);
                         let delay = 0.12 + 0.07 * k as f32;
-                        self.blasts.push(Blast { pos, delay, max_delay: delay, radius: 34.0 * area, damage: dmg * 1.5, style: style::SPINE, burns: false });
+                        self.blasts.push(Blast { pos, delay, max_delay: delay, radius: 34.0 * area, damage: dmg * 1.5, style: style::SPINE, burns: false, elem });
                     }
                 }
                 WeaponKind::Devour => {
@@ -2123,7 +2159,7 @@ impl World {
                     for idx in 0..n {
                         let j = self.scratch[idx] as usize;
                         let dir = p - self.enemies.pos[j];
-                        self.hurt_enemy(j, dmg * 2.0, dir * 0.5);
+                        self.hurt_enemy(j, dmg * 2.0, dir * 0.5, elem);
                     }
                     self.heal((n as f32 * 0.5).min(15.0));
                     self.events.push(Event::Devour { pos: p, radius: 200.0 * area });
@@ -2132,7 +2168,7 @@ impl World {
                     // Fang Ring: a ring of homing fangs.
                     for k in 0..12 {
                         let a = k as f32 / 12.0 * std::f32::consts::TAU;
-                        self.projectiles.push_kind(ProjKind::Fang, 6.0, p, Vec2::from_angle(a) * 280.0, 1.6, dmg, 1, 7.0);
+                        self.projectiles.push_kind(ProjKind::Fang, 6.0, p, Vec2::from_angle(a) * 280.0, 1.6, dmg, 1, 7.0, elem);
                         let last = self.projectiles.len() - 1;
                         self.projectiles.burst[last] = 26.0 * area;
                     }
@@ -2142,7 +2178,7 @@ impl World {
                     for k in 0..12 {
                         let a = k as f32 / 12.0 * std::f32::consts::TAU + self.time;
                         let to = p + Vec2::from_angle(a) * 300.0;
-                        self.hurt_along(p, to, 12.0, dmg * 0.8);
+                        self.hurt_along(p, to, 12.0, dmg * 0.8, elem);
                         self.events.push(Event::Iai { from: p, to });
                     }
                 }
@@ -2165,17 +2201,17 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - b.pos;
-                self.hurt_enemy(j, b.damage, dir);
+                self.hurt_enemy(j, b.damage, dir, b.elem);
             }
             if b.burns {
-                self.pools.push(Pool { pos: b.pos, radius: b.radius * 0.6, life: 3.0, max_life: 3.0, tick: 0.0, damage: b.damage * 0.08 });
+                self.pools.push(Pool { pos: b.pos, radius: b.radius * 0.6, life: 3.0, max_life: 3.0, tick: 0.0, damage: b.damage * 0.08, elem: b.elem });
             }
             self.events.push(Event::Burst { pos: b.pos, radius: b.radius, style: b.style });
         }
     }
 
     /// Lashes up to `n` distinct nearby enemies with tendrils that pierce along the line.
-    fn lash_targets(&mut self, from: Vec2, reach: f32, n: u32, dmg: f32) {
+    fn lash_targets(&mut self, from: Vec2, reach: f32, n: u32, dmg: f32, elem: Option<Element>) {
         let mut taken: Vec<u32> = Vec::new();
         for _ in 0..n {
             let Some(j) = self.nearest_index(from, reach, &taken) else { break };
@@ -2183,7 +2219,7 @@ impl World {
             let to = self.enemies.pos[j];
             // Reach a little past the target so the lash pierces whatever is behind it.
             let tip = from + (to - from).normalize_or_zero() * ((to - from).length() + 20.0);
-            self.hurt_along(from, tip, 8.0, dmg);
+            self.hurt_along(from, tip, 8.0, dmg, elem);
             self.events.push(Event::Lash { from, to: tip });
         }
     }
@@ -2208,13 +2244,14 @@ impl World {
         self.player.form -= DT;
         let p = self.player.pos;
         let power = self.fox_power();
+        let elem = Some(self.hero_element);
         // Ofuda Storm: a stream of homing talismans in every direction.
         self.divine_ofuda -= DT;
         while self.divine_ofuda <= 0.0 {
             self.divine_ofuda += DIVINE_OFUDA_EVERY;
             for _ in 0..3 {
                 let a = self.rng.range(0.0, std::f32::consts::TAU);
-                self.projectiles.push_kind(ProjKind::Seal, 6.0, p, Vec2::from_angle(a) * 360.0, 1.6, DIVINE_OFUDA_DAMAGE * power, 1, 9.0);
+                self.projectiles.push_kind(ProjKind::Seal, 6.0, p, Vec2::from_angle(a) * 360.0, 1.6, DIVINE_OFUDA_DAMAGE * power, 1, 9.0, elem);
                 let last = self.projectiles.len() - 1;
                 self.projectiles.burst[last] = 22.0;
             }
@@ -2225,7 +2262,7 @@ impl World {
             self.divine_orb = DIVINE_ORB_EVERY;
             for t in self.random_targets(340.0, 3) {
                 let d = self.rng.range(0.35, 0.7);
-                self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 80.0, damage: DIVINE_ORB_DAMAGE * power, style: style::YINYANG, burns: false });
+                self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 80.0, damage: DIVINE_ORB_DAMAGE * power, style: style::YINYANG, burns: false, elem });
             }
         }
         // Spirit-seal barrage: rings of orbs in every direction.
@@ -2235,7 +2272,7 @@ impl World {
             let rot = self.time;
             for k in 0..18 {
                 let a = rot + k as f32 / 18.0 * std::f32::consts::TAU;
-                self.projectiles.push_kind(ProjKind::SealOrb, 8.0, p, Vec2::from_angle(a) * 260.0, 1.8, DIVINE_RING_DAMAGE * power, 1, 2.0);
+                self.projectiles.push_kind(ProjKind::SealOrb, 8.0, p, Vec2::from_angle(a) * 260.0, 1.8, DIVINE_RING_DAMAGE * power, 1, 2.0, elem);
                 let last = self.projectiles.len() - 1;
                 self.projectiles.burst[last] = 26.0;
             }
@@ -2251,7 +2288,7 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - p;
-                self.hurt_enemy(j, DIVINE_FINALE_DAMAGE * power, dir);
+                self.hurt_enemy(j, DIVINE_FINALE_DAMAGE * power, dir, elem);
                 self.enemies.push[j] += dir.normalize_or_zero() * (450.0 * self.enemies.knock[j]);
             }
             self.shots.clear();
@@ -2278,6 +2315,7 @@ impl World {
         self.player.form -= DT;
         let c = self.domain_center;
         let power = self.fox_power();
+        let elem = Some(self.hero_element);
         // Waves of spatial collapse over everything inside.
         self.fox_tick -= DT;
         if self.fox_tick <= 0.0 {
@@ -2286,7 +2324,7 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - c;
-                self.hurt_enemy(j, DOMAIN_WAVE_DAMAGE * power, dir * 0.0);
+                self.hurt_enemy(j, DOMAIN_WAVE_DAMAGE * power, dir * 0.0, elem);
             }
         }
         if !self.domain_charging && self.player.form <= DOMAIN_FINALE_CHARGE {
@@ -2298,7 +2336,7 @@ impl World {
             // Void Lance: Maximum, erasing everything along its line.
             let p = self.player.pos;
             let d = self.aim_dir();
-            self.projectiles.push_kind(ProjKind::VoidOrb, DOMAIN_FINALE_RADIUS, p, d * 260.0, 4.0, DOMAIN_FINALE_DAMAGE * power, 255, 0.0);
+            self.projectiles.push_kind(ProjKind::VoidOrb, DOMAIN_FINALE_RADIUS, p, d * 260.0, 4.0, DOMAIN_FINALE_DAMAGE * power, 255, 0.0, elem);
             self.events.push(Event::VoidMaximum { pos: p });
         }
     }
@@ -2310,11 +2348,12 @@ impl World {
         self.fox_tick = 0.0;
         self.hannya_beam = 0.4; // eruption timer
         let dmg = MUKADE_BURST_DAMAGE * self.fox_power();
+        let elem = Some(self.hero_element);
         self.query_circle(p, MUKADE_BURST_RADIUS);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - p;
-            self.hurt_enemy(j, dmg, dir);
+            self.hurt_enemy(j, dmg, dir, elem);
             self.enemies.push[j] += dir.normalize_or_zero() * (400.0 * self.enemies.knock[j]);
         }
         let r2 = MUKADE_BURST_RADIUS * MUKADE_BURST_RADIUS;
@@ -2329,6 +2368,7 @@ impl World {
         }
         self.player.form -= DT;
         let power = self.fox_power();
+        let elem = Some(self.hero_element);
         let p = self.player.pos;
         self.heal(MUKADE_REGEN * DT);
         // Tendril barrage.
@@ -2338,7 +2378,7 @@ impl World {
             let picks = self.random_targets(MUKADE_LASH_REACH, MUKADE_LASHES);
             for t in picks {
                 let tip = p + (t - p).normalize_or_zero() * ((t - p).length() + 20.0);
-                self.hurt_along(p, tip, 9.0, MUKADE_LASH_DAMAGE * power);
+                self.hurt_along(p, tip, 9.0, MUKADE_LASH_DAMAGE * power, elem);
                 self.events.push(Event::Lash { from: p, to: tip });
             }
         }
@@ -2352,7 +2392,7 @@ impl World {
                 let r = 90.0 + 70.0 * (k % 2) as f32;
                 let pos = p + Vec2::from_angle(a) * r;
                 let d = 0.15 + 0.04 * k as f32;
-                self.blasts.push(Blast { pos, delay: d, max_delay: d, radius: 48.0, damage: MUKADE_ERUPT_DAMAGE * power, style: style::SPINE, burns: false });
+                self.blasts.push(Blast { pos, delay: d, max_delay: d, radius: 48.0, damage: MUKADE_ERUPT_DAMAGE * power, style: style::SPINE, burns: false, elem });
             }
         }
         if self.player.form <= 0.0 {
@@ -2400,7 +2440,7 @@ impl World {
                     if !self.enemies.kind[j].is_boss() && self.in_view(self.enemies.pos[j], self.enemies.radius[j]) {
                         let dir = self.enemies.pos[j] - p;
                         let hp = self.enemies.hp[j];
-                        self.apply_hit(j, hp + 1.0, dir);
+                        self.apply_hit(j, hp + 1.0, dir, None);
                     }
                 }
                 self.shots.clear();
@@ -2430,14 +2470,14 @@ impl World {
                 wl.tick = 0.25;
                 for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
-                    self.hurt_enemy(j, wl.damage * 0.25, Vec2::ZERO);
+                    self.hurt_enemy(j, wl.damage * 0.25, Vec2::ZERO, wl.elem);
                 }
             }
             if wl.life <= 0.0 {
                 self.query_circle(wl.pos, wl.radius * 0.8);
                 for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
-                    self.hurt_enemy(j, wl.damage, Vec2::ZERO);
+                    self.hurt_enemy(j, wl.damage, Vec2::ZERO, wl.elem);
                 }
                 self.events.push(Event::WellCollapse { pos: wl.pos, radius: wl.radius });
                 self.wells.swap_remove(i);
@@ -2473,7 +2513,7 @@ impl World {
             self.enemies.push[j] += to_player.normalize_or_zero() * 9.0 * self.enemies.knock[j].max(0.2); // ~60 px/s drag once push decay settles
             if t.tick <= 0.0 {
                 t.tick = 0.25;
-                self.hurt_enemy(j, t.damage, to_player);
+                self.hurt_enemy(j, t.damage, to_player, t.elem);
                 if t.heals && self.enemies.hp[j] <= 0.0 {
                     self.heal(1.0);
                 }
@@ -2497,7 +2537,7 @@ impl World {
                 for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
                     let dir = self.enemies.pos[j] - l.pos;
-                    self.hurt_enemy(j, l.damage, dir);
+                    self.hurt_enemy(j, l.damage, dir, l.elem);
                     if l.slows {
                         self.enemies.push[j] = self.enemies.push[j] * 0.5 - self.enemies.vel[j] * 0.3;
                     }
@@ -2519,7 +2559,7 @@ impl World {
             }
             if s.tick <= 0.0 {
                 s.tick = 0.3;
-                self.hurt_along(s.from, s.to, 10.0, s.damage);
+                self.hurt_along(s.from, s.to, 10.0, s.damage, s.elem);
             }
             self.scars[i] = s;
             i += 1;
@@ -2550,7 +2590,7 @@ impl World {
                 for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
                     let dir = self.enemies.pos[j] - c.pos;
-                    self.hurt_enemy(j, c.damage * 2.0, dir);
+                    self.hurt_enemy(j, c.damage * 2.0, dir, c.elem);
                 }
                 self.events.push(Event::ClonePopped { pos: c.pos, radius: c.pop_radius });
                 self.clones.swap_remove(i);
@@ -2578,7 +2618,7 @@ impl World {
                 self.query_circle(hit, 20.0);
                 for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
-                    self.hurt_enemy(j, c.damage, c.facing);
+                    self.hurt_enemy(j, c.damage, c.facing, c.elem);
                 }
                 self.events.push(Event::CloneStrike { pos: hit });
             }
@@ -2614,11 +2654,12 @@ impl World {
         self.fox_tick = 0.0;
         self.fox_volley = 0.4;
         let dmg = FOX_BLAST_DAMAGE * self.fox_power();
+        let elem = Some(self.hero_element);
         self.query_circle(p, FOX_BLAST_RADIUS);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - p;
-            self.hurt_enemy(j, dmg, dir);
+            self.hurt_enemy(j, dmg, dir, elem);
             self.enemies.push[j] += dir.normalize_or_zero() * (420.0 * self.enemies.knock[j]);
         }
         let r2 = FOX_BLAST_RADIUS * FOX_BLAST_RADIUS;
@@ -2681,11 +2722,12 @@ impl World {
         self.hannya_step = 0.9;
         self.finale_charging = false;
         let dmg = HANNYA_ONSET_DAMAGE * self.fox_power();
+        let elem = Some(self.hero_element);
         self.query_circle(p, HANNYA_ONSET_RADIUS);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - p;
-            self.hurt_enemy(j, dmg, dir);
+            self.hurt_enemy(j, dmg, dir, elem);
             self.enemies.push[j] += dir.normalize_or_zero() * (380.0 * self.enemies.knock[j]);
         }
         let r2 = HANNYA_ONSET_RADIUS * HANNYA_ONSET_RADIUS;
@@ -2694,7 +2736,7 @@ impl World {
     }
 
     /// Damages every enemy within `width` of the segment once.
-    fn hurt_along(&mut self, from: Vec2, to: Vec2, width: f32, dmg: f32) {
+    fn hurt_along(&mut self, from: Vec2, to: Vec2, width: f32, dmg: f32, elem: Option<Element>) {
         let d = to - from;
         let len = d.length().max(1.0);
         let steps = (len / 40.0).ceil() as usize;
@@ -2708,7 +2750,7 @@ impl World {
                 let t = ((e - from).dot_with(d) / (len * len)).clamp(0.0, 1.0);
                 if (from + d * t - e).length() <= width + self.enemies.radius[j] && !self.dead.contains(&j) {
                     self.dead.push(j);
-                    self.hurt_enemy(j, dmg, d);
+                    self.hurt_enemy(j, dmg, d, elem);
                 }
             }
         }
@@ -2716,6 +2758,7 @@ impl World {
     }
 
     fn update_hannya(&mut self) {
+        let elem = Some(self.hero_element);
         // Afterimages explode even if the form just ended.
         let mut k = 0;
         while k < self.afterimages.len() {
@@ -2727,7 +2770,7 @@ impl World {
                 for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
                     let dir = self.enemies.pos[j] - c;
-                    self.hurt_enemy(j, dmg, dir);
+                    self.hurt_enemy(j, dmg, dir, elem);
                 }
                 self.events.push(Event::AfterimageBlast { pos: c, radius: HANNYA_AFTERIMAGE_RADIUS });
             } else {
@@ -2748,7 +2791,7 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - p;
-                self.hurt_enemy(j, HANNYA_AURA_DAMAGE * power, dir);
+                self.hurt_enemy(j, HANNYA_AURA_DAMAGE * power, dir, elem);
             }
         }
         // Rending Beams in every direction.
@@ -2759,7 +2802,7 @@ impl World {
             for b in 0..HANNYA_BEAMS {
                 let a = self.beam_rot + b as f32 / HANNYA_BEAMS as f32 * std::f32::consts::TAU;
                 let to = p + Vec2::from_angle(a) * HANNYA_BEAM_LENGTH;
-                self.hurt_along(p, to, 9.0, HANNYA_BEAM_DAMAGE * power);
+                self.hurt_along(p, to, 9.0, HANNYA_BEAM_DAMAGE * power, elem);
                 self.events.push(Event::Beam { from: p, to, style: style::CRIMSON });
             }
         }
@@ -2768,7 +2811,7 @@ impl World {
         if self.hannya_wave <= 0.0 {
             self.hannya_wave = HANNYA_WAVE_EVERY;
             let d = self.aim_dir();
-            self.projectiles.push_kind(ProjKind::CrescentWave, 18.0, p, d * 360.0, 0.8, HANNYA_WAVE_DAMAGE * power, 255, 0.0);
+            self.projectiles.push_kind(ProjKind::CrescentWave, 18.0, p, d * 360.0, 0.8, HANNYA_WAVE_DAMAGE * power, 255, 0.0, elem);
             self.events.push(Event::Slash { pos: p, dir: d, radius: 46.0, full: false });
         }
         // Shadow Step: a crimson afterimage dashes into the horde and explodes there.
@@ -2793,7 +2836,7 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - c;
-                self.hurt_enemy(j, HANNYA_FINALE_DAMAGE * power, dir);
+                self.hurt_enemy(j, HANNYA_FINALE_DAMAGE * power, dir, elem);
                 self.enemies.push[j] += dir.normalize_or_zero() * (450.0 * self.enemies.knock[j]);
             }
             self.shots.clear();
@@ -2807,6 +2850,7 @@ impl World {
         }
         self.player.form -= DT;
         let power = self.fox_power();
+        let elem = Some(self.hero_element);
         let p = self.player.pos;
         // Tails + aura tick.
         self.fox_tick -= DT;
@@ -2826,7 +2870,7 @@ impl World {
                     let close = (root + d * t - e).length() <= 9.0 + self.enemies.radius[j];
                     if close && !self.dead.contains(&j) {
                         self.dead.push(j);
-                        self.hurt_enemy(j, FOX_TAIL_DAMAGE * power, e - p);
+                        self.hurt_enemy(j, FOX_TAIL_DAMAGE * power, e - p, elem);
                     }
                 }
             }
@@ -2834,7 +2878,7 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - p;
-                self.hurt_enemy(j, FOX_AURA_DAMAGE * power, dir);
+                self.hurt_enemy(j, FOX_AURA_DAMAGE * power, dir, elem);
             }
             self.dead.clear();
         }
@@ -2846,7 +2890,7 @@ impl World {
             let rot = self.fox_volleys as f32 * 0.31;
             for k in 0..FOX_ORBS {
                 let a = rot + k as f32 / FOX_ORBS as f32 * std::f32::consts::TAU;
-                self.projectiles.push_kind(ProjKind::GoldenOrb, 13.0, p, Vec2::from_angle(a) * 250.0, 1.8, FOX_ORB_DAMAGE * power, 255, 0.0);
+                self.projectiles.push_kind(ProjKind::GoldenOrb, 13.0, p, Vec2::from_angle(a) * 250.0, 1.8, FOX_ORB_DAMAGE * power, 255, 0.0, elem);
             }
             self.events.push(Event::FoxVolley);
         }
@@ -2876,19 +2920,97 @@ impl World {
         d.x.abs() <= half.x + radius && d.y.abs() <= half.y + radius
     }
 
-    fn hurt_enemy(&mut self, j: usize, amount: f32, dir: Vec2) {
+    fn hurt_enemy(&mut self, j: usize, amount: f32, dir: Vec2, elem: Option<Element>) {
         // Reach rule (spec "Attack reach").
-        if self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
-            self.apply_hit(j, amount, dir);
+        if !self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
+            return;
+        }
+        self.apply_hit(j, amount, dir, elem);
+        if let Some(elem) = elem {
+            if self.rng.f32() < PROC_CHANCE {
+                self.on_hit_effect(j, elem, amount, dir);
+            }
         }
     }
 
-    fn apply_hit(&mut self, j: usize, amount: f32, dir: Vec2) {
-        let mut amount = amount;
+    /// `amount` is the raw hit, before element, affinity and crit multipliers.
+    fn on_hit_effect(&mut self, j: usize, elem: Element, amount: f32, dir: Vec2) {
+        let e = &mut self.enemies;
+        match elem {
+            Element::Fire => {
+                e.burn[j] = BURN_SECONDS;
+                e.burn_dps[j] = amount * BURN_SHARE / BURN_SECONDS;
+            }
+            Element::Water => e.soak[j] = SOAK_SECONDS,
+            Element::Electric => {
+                if let Some(k) = self.chain_target(j) {
+                    self.events.push(Event::Bolt { from: self.enemies.pos[j], to: self.enemies.pos[k] });
+                    self.apply_hit(k, amount * CHAIN_SHARE, dir, Some(Element::Electric));
+                }
+            }
+            Element::Earth => {
+                if !e.kind[j].is_boss() {
+                    e.stagger[j] = STAGGER_SECONDS;
+                }
+            }
+            Element::Wind => e.push[j] += dir.normalize_or_zero() * (KNOCK_EXTRA * e.knock[j]),
+            Element::Ice => e.slow[j] = SLOW_SECONDS,
+            Element::Light => e.marked[j] = true,
+            Element::Darkness => self.heal(DRAIN_HEAL),
+        }
+    }
+
+    fn chain_target(&self, j: usize) -> Option<usize> {
+        let e = &self.enemies;
+        let from = e.pos[j];
+        let mut best: Option<(f32, usize)> = None;
+        self.grid.for_each_near(from, CHAIN_RANGE, |k| {
+            let k = k as usize;
+            let d2 = (e.pos[k] - from).length_sq();
+            if k != j
+                && e.hp[k] > 0.0
+                && d2 <= CHAIN_RANGE * CHAIN_RANGE
+                && self.in_reach(e.pos[k], e.radius[k])
+                && best.is_none_or(|(b, _)| d2 < b) {
+                best = Some((d2, k));
+            }
+        });
+        best.map(|(_, k)| k)
+    }
+
+    fn tick_statuses(&mut self) {
+        for j in 0..self.enemies.len() {
+            let e = &mut self.enemies;
+            for t in [&mut e.soak[j], &mut e.stagger[j], &mut e.slow[j]] {
+                *t = (*t - DT).max(0.0);
+            }
+            if e.burn[j] <= 0.0 || e.hp[j] <= 0.0 {
+                continue;
+            }
+            let before = e.burn[j];
+            e.burn[j] = (before - DT).max(0.0);
+            let ticked = (e.burn[j] / BURN_TICK).ceil() < (before / BURN_TICK).ceil();
+            let (pos, radius, tick) = (e.pos[j], e.radius[j], e.burn_dps[j] * BURN_TICK);
+            if ticked && self.in_reach(pos, radius) {
+                self.apply_hit(j, tick, Vec2::ZERO, Some(Element::Fire));
+            }
+        }
+    }
+
+    fn apply_hit(&mut self, j: usize, amount: f32, dir: Vec2, elem: Option<Element>) {
+        let mult = elem.map_or(1.0, |e| element_mult(e, self.enemies.kind[j].element()));
+        let mut amount = amount * mult;
+        if elem == Some(self.hero_element) {
+            amount *= AFFINITY_DAMAGE;
+        }
+        if elem == Some(Element::Electric) && self.enemies.soak[j] > 0.0 {
+            amount *= SOAK_ELECTRIC;
+        }
         if self.enemies.kind[j].rank() >= Rank::Elite {
             amount *= 1.0 + self.bonus.boss_damage;
         }
-        let mut crit = self.bonus.crit_chance > 0.0 && self.rng.f32() < self.bonus.crit_chance;
+        let marked = std::mem::take(&mut self.enemies.marked[j]);
+        let mut crit = marked || (self.bonus.crit_chance > 0.0 && self.rng.f32() < self.bonus.crit_chance);
         if self.cfg.gear.has(Exotic::ThousandCounter) {
             self.hit_count += 1;
             crit |= self.hit_count % 7 == 0;
@@ -2904,7 +3026,7 @@ impl World {
         e.hp[j] -= amount;
         e.flash[j] = 5;
         e.push[j] += dir.normalize_or_zero() * (150.0 * e.knock[j]);
-        self.events.push(Event::Hit { pos: e.pos[j], amount, crit });
+        self.events.push(Event::Hit { pos: e.pos[j], amount, crit, elem, mult });
     }
 
     /// Indices of enemies whose body overlaps a circle, into `self.scratch`.
@@ -2949,12 +3071,12 @@ impl World {
         item_power * self.might() * (1.0 + self.time / 450.0)
     }
 
-    fn nova(&mut self, c: Vec2, r: f32, dmg: f32, style: u8) {
+    fn nova(&mut self, c: Vec2, r: f32, dmg: f32, style: u8, elem: Option<Element>) {
         self.query_circle(c, r);
         for k in 0..self.scratch.len() {
             let j = self.scratch[k] as usize;
             let dir = self.enemies.pos[j] - c;
-            self.hurt_enemy(j, dmg, dir);
+            self.hurt_enemy(j, dmg, dir, elem);
         }
         self.events.push(Event::Burst { pos: c, radius: r, style });
     }
@@ -2966,7 +3088,7 @@ impl World {
             let j = self.scratch[k] as usize;
             if self.in_view(self.enemies.pos[j], self.enemies.radius[j]) {
                 let dir = self.enemies.pos[j] - c;
-                self.apply_hit(j, dmg, dir);
+                self.apply_hit(j, dmg, dir, None);
             }
         }
         self.events.push(Event::Burst { pos: c, radius: r, style });
@@ -3009,7 +3131,7 @@ impl World {
                         if let Some(j) = best {
                             let to = self.enemies.pos[j];
                             self.events.push(Event::Bolt { from: d, to });
-                            self.hurt_enemy(j, 30.0 * pw, to - d);
+                            self.hurt_enemy(j, 30.0 * pw, to - d, None);
                         }
                     }
                 }
@@ -3035,7 +3157,7 @@ impl World {
                     self.query_circle(fp, 18.0);
                     for k in 0..self.scratch.len() {
                         let j = self.scratch[k] as usize;
-                        self.hurt_enemy(j, 90.0 * pw * DT, fv);
+                        self.hurt_enemy(j, 90.0 * pw * DT, fv, None);
                     }
                 }
             }
@@ -3050,7 +3172,7 @@ impl World {
                         let to = self.enemies.pos[j] - p;
                         let n = to.normalize_or_zero();
                         if n.x * dir.x + n.y * dir.y > 0.2 {
-                            self.hurt_enemy(j, 70.0 * pw, to * 4.0);
+                            self.hurt_enemy(j, 70.0 * pw, to * 4.0, None);
                         }
                     }
                     self.events.push(Event::Slash { pos: p, dir, radius: r, full: false });
@@ -3063,7 +3185,7 @@ impl World {
                     for k in 0..self.scratch.len() {
                         let j = self.scratch[k] as usize;
                         let dir = self.enemies.pos[j] - p;
-                        self.hurt_enemy(j, 75.0 * pw * DT, dir);
+                        self.hurt_enemy(j, 75.0 * pw * DT, dir, None);
                     }
                 }
             }
@@ -3075,7 +3197,7 @@ impl World {
                         let e = &self.enemies;
                         let q = if e.is_empty() { p + Vec2::from_angle(self.rng.range(0.0, tau)) * 120.0 } else { e.pos[(self.rng.next_u32() as usize) % e.len()] };
                         let delay = 0.7 + self.rng.range(0.0, 0.5);
-                        self.blasts.push(Blast { pos: q, delay, max_delay: delay, radius: 70.0 * self.area_mult(), damage: 110.0 * pw, style: style::METEOR, burns: false });
+                        self.blasts.push(Blast { pos: q, delay, max_delay: delay, radius: 70.0 * self.area_mult(), damage: 110.0 * pw, style: style::METEOR, burns: false, elem: None });
                     }
                 }
             }
@@ -3094,7 +3216,7 @@ impl World {
                             best = (q, self.scratch.len());
                         }
                     }
-                    self.blasts.push(Blast { pos: best.0, delay: 0.6, max_delay: 0.6, radius: 115.0 * self.area_mult(), damage: 220.0 * pw, style: style::QUAKE, burns: false });
+                    self.blasts.push(Blast { pos: best.0, delay: 0.6, max_delay: 0.6, radius: 115.0 * self.area_mult(), damage: 220.0 * pw, style: style::QUAKE, burns: false, elem: None });
                 }
             }
             ArsenalArt::YinYangBreaker => {
@@ -3119,7 +3241,7 @@ impl World {
                     self.query_circle(op, 26.0);
                     for k in 0..self.scratch.len() {
                         let j = self.scratch[k] as usize;
-                        self.hurt_enemy(j, 170.0 * pw * DT, ov);
+                        self.hurt_enemy(j, 170.0 * pw * DT, ov, None);
                     }
                     self.shots.retain(|s| (s.pos - op).length_sq() > 32.0 * 32.0);
                 }
@@ -3129,7 +3251,7 @@ impl World {
                     a.timer = 4.0;
                     for k in 0..8 {
                         let to = p + Vec2::from_angle(k as f32 / 8.0 * tau + a.phase) * 280.0;
-                        self.hurt_along(p, to, 14.0, 90.0 * pw);
+                        self.hurt_along(p, to, 14.0, 90.0 * pw, None);
                         self.events.push(Event::ShadowStep { from: p, to });
                     }
                 }
@@ -3138,7 +3260,7 @@ impl World {
                 if fire {
                     a.timer = 4.0;
                     let r = 230.0 * self.area_mult();
-                    self.nova(p, r, 120.0 * pw, 1);
+                    self.nova(p, r, 120.0 * pw, 1, None);
                     self.shots.retain(|s| (s.pos - p).length_sq() > r * r);
                     self.events.push(Event::Slash { pos: p, dir: self.player.facing, radius: r, full: true });
                 }
@@ -3165,12 +3287,12 @@ impl World {
         if lantern && self.exo_timers[0] <= 0.0 {
             self.exo_timers[0] = 10.0;
             let d = 90.0 * self.gear_power(1.0);
-            self.nova(p, 170.0 * self.area_mult(), d, 2);
+            self.nova(p, 170.0 * self.area_mult(), d, 2, None);
         }
         if seals && self.exo_timers[1] <= 0.0 {
             self.exo_timers[1] = 2.0;
             let d = 20.0 * self.gear_power(1.0);
-            self.nova(p, 90.0 * self.area_mult(), d, style::FOXFIRE);
+            self.nova(p, 90.0 * self.area_mult(), d, style::FOXFIRE, None);
         }
         if regalia && self.exo_timers[2] <= 0.0 {
             self.exo_timers[2] = 30.0;
@@ -3203,7 +3325,7 @@ impl World {
             // Last Word.
             self.shots.clear();
             let d = 150.0 * self.gear_power(1.0);
-            self.nova(p, 320.0, d, style::PURIFY);
+            self.nova(p, 320.0, d, style::PURIFY, None);
         }
         if mask {
             self.mask = 6.0;
@@ -3224,7 +3346,7 @@ impl World {
             let to = self.enemies.pos[j];
             let d = 50.0 * self.gear_power(1.0);
             self.events.push(Event::Bolt { from: p, to });
-            self.hurt_enemy(j, d, to - p);
+            self.hurt_enemy(j, d, to - p, None);
         }
     }
 
@@ -3235,7 +3357,7 @@ impl World {
             for k in 0..self.scratch.len() {
                 let j = self.scratch[k] as usize;
                 let dir = self.enemies.pos[j] - pos;
-                self.hurt_enemy(j, dmg, dir);
+                self.hurt_enemy(j, dmg, dir, None);
             }
             self.events.push(Event::Burst { pos, radius: 40.0, style: 1 });
         }
@@ -3261,7 +3383,7 @@ impl World {
             for &j in near.iter().take((3.0 * tc) as usize) {
                 let to = self.enemies.pos[j];
                 self.events.push(Event::Bolt { from: p, to });
-                self.hurt_enemy(j, 45.0 * power, to - p);
+                self.hurt_enemy(j, 45.0 * power, to - p, None);
             }
         }
         let sb = self.cfg.gear.unique(Unique::Starburst);
@@ -3272,7 +3394,7 @@ impl World {
             for k in 0..self.scratch.len() {
                 let j = self.scratch[k] as usize;
                 let dir = self.enemies.pos[j] - p;
-                self.hurt_enemy(j, 35.0 * power, dir);
+                self.hurt_enemy(j, 35.0 * power, dir, None);
             }
             self.events.push(Event::Burst { pos: p, radius: r, style: 1 });
         }
@@ -3398,6 +3520,7 @@ impl World {
         for wi in 0..self.weapons.len() {
             let w = self.weapons[wi];
             let s = self.stats_of(&w);
+            let elem = Some(w.kind.element());
             match w.kind {
                 WeaponKind::Ofuda => {
                     let mut timer = w.timer - DT;
@@ -3415,7 +3538,7 @@ impl World {
                         for k in 0..s.amount {
                             let a = base + (k as f32 - (n - 1.0) / 2.0) * spread;
                             let life = 1.4 * self.persistence();
-                            self.projectiles.push(self.player.pos, Vec2::from_angle(a) * s.speed, life, s.damage * might, s.pierce, homing);
+                            self.projectiles.push_kind(ProjKind::Talisman, PROJECTILE_RADIUS, self.player.pos, Vec2::from_angle(a) * s.speed, life, s.damage * might, s.pierce, homing, elem);
                         }
                     }
                     self.weapons[wi].timer = timer;
@@ -3433,7 +3556,7 @@ impl World {
                             if self.enemies.orb_cd[j] == 0 {
                                 self.enemies.orb_cd[j] = rehit;
                                 let dir = self.enemies.pos[j] - self.player.pos;
-                                self.hurt_enemy(j, s.damage * might, dir);
+                                self.hurt_enemy(j, s.damage * might, dir, elem);
                             }
                         }
                     }
@@ -3451,7 +3574,7 @@ impl World {
                             if self.enemies.orb_cd[j] == 0 {
                                 self.enemies.orb_cd[j] = rehit;
                                 let dir = self.enemies.pos[j] - self.player.pos;
-                                self.hurt_enemy(j, s.damage * might, dir);
+                                self.hurt_enemy(j, s.damage * might, dir, elem);
                             }
                         }
                     }
@@ -3467,7 +3590,7 @@ impl World {
                         for idx in 0..self.scratch.len() {
                             let j = self.scratch[idx] as usize;
                             let dir = self.enemies.pos[j] - self.player.pos;
-                            self.hurt_enemy(j, s.damage * might, dir * 0.3);
+                            self.hurt_enemy(j, s.damage * might, dir * 0.3, elem);
                         }
                         if w.awakened {
                             self.heal(1.0);
@@ -3567,6 +3690,7 @@ impl World {
     fn fire_new_weapon(&mut self, w: &OwnedWeapon, s: &WeaponStats, might: f32) {
         let area = s.area * self.area_mult();
         let dmg = s.damage * might;
+        let elem = Some(w.kind.element());
         let p = self.player.pos;
         match w.kind {
             WeaponKind::ThunderChain => {
@@ -3579,7 +3703,7 @@ impl World {
                     let to = self.enemies.pos[j];
                     self.events.push(Event::Bolt { from, to });
                     hit.push(self.enemies.id[j]);
-                    self.hurt_enemy(j, dmg, to - from);
+                    self.hurt_enemy(j, dmg, to - from, elem);
                     from = to;
                     target = self.nearest_index(from, range, &hit);
                 }
@@ -3589,14 +3713,14 @@ impl World {
                 for n in 0..s.amount {
                     // Later waves start "behind" the first so they arrive as separate beats.
                     let start = -40.0 * n as f32;
-                    self.waves.push(Wave { center: p, radius: start, max_radius: 135.0 * area, speed: s.speed, damage: dmg, purify: false });
+                    self.waves.push(Wave { center: p, radius: start, max_radius: 135.0 * area, speed: s.speed, damage: dmg, purify: false, elem });
                 }
             }
             WeaponKind::StarFall => {
                 let r = 24.0 * area;
                 for pos in self.random_targets(260.0, s.amount) {
                     let delay = 0.45 + self.rng.range(0.0, 0.15);
-                    self.strikes.push(Strike { pos, delay, radius: r, damage: dmg });
+                    self.strikes.push(Strike { pos, delay, radius: r, damage: dmg, elem });
                 }
             }
             WeaponKind::Crescent => {
@@ -3612,7 +3736,7 @@ impl World {
                         let j = self.scratch[idx] as usize;
                         let to = (self.enemies.pos[j] - p).normalize_or_zero();
                         if w.awakened || to.x * d.x + to.y * d.y >= cone {
-                            self.hurt_enemy(j, dmg, to);
+                            self.hurt_enemy(j, dmg, to, elem);
                         }
                     }
                     self.events.push(Event::Slash { pos: p, dir: d, radius, full: w.awakened });
@@ -3620,7 +3744,7 @@ impl World {
                         // Moonlit Waves: eight crescents fly out of the full-circle cut.
                         for k in 0..8 {
                             let wd = Vec2::from_angle(k as f32 * std::f32::consts::FRAC_PI_4 + self.time);
-                            self.projectiles.push_kind(ProjKind::CrescentWave, 14.0 * area, p + wd * 24.0, wd * 330.0, 0.8, dmg * 0.7, 255, 0.0);
+                            self.projectiles.push_kind(ProjKind::CrescentWave, 14.0 * area, p + wd * 24.0, wd * 330.0, 0.8, dmg * 0.7, 255, 0.0, elem);
                         }
                         break; // the full circle already covers every direction
                     }
@@ -3630,7 +3754,7 @@ impl World {
                 self.events.push(Event::Fired(WeaponKind::FlamePool));
                 let r = 26.0 * area;
                 for pos in self.random_targets(220.0, s.amount) {
-                    self.pools.push(Pool { pos, radius: r, life: s.duration, max_life: s.duration, tick: 0.0, damage: dmg });
+                    self.pools.push(Pool { pos, radius: r, life: s.duration, max_life: s.duration, tick: 0.0, damage: dmg, elem });
                 }
             }
             WeaponKind::FoxfireOrb => {
@@ -3639,7 +3763,7 @@ impl World {
                 let (vel, life) = (self.player.facing * s.speed, 2.0 * self.persistence());
                 for n in 0..s.amount {
                     let pr = &mut self.projectiles;
-                    pr.push_kind(kind, 7.0, p, vel, life, dmg, 1, 0.0);
+                    pr.push_kind(kind, 7.0, p, vel, life, dmg, 1, 0.0, elem);
                     let last = pr.len() - 1;
                     // Extra orbs gather one after another.
                     pr.charge[last] = s.duration * (1.0 + 0.4 * n as f32);
@@ -3651,7 +3775,7 @@ impl World {
                 let life = s.duration * self.persistence();
                 for n in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU) + n as f32;
-                    self.projectiles.push_kind(ProjKind::Familiar, 6.0, p, Vec2::from_angle(a) * s.speed, life, dmg, s.pierce, 6.0);
+                    self.projectiles.push_kind(ProjKind::Familiar, 6.0, p, Vec2::from_angle(a) * s.speed, life, dmg, s.pierce, 6.0, elem);
                     if w.awakened {
                         // Kitsune Blaze: each spirit explodes in foxfire when it strikes.
                         let last = self.projectiles.len() - 1;
@@ -3674,7 +3798,7 @@ impl World {
                         let j = self.scratch[idx] as usize;
                         let to = (self.enemies.pos[j] - p).normalize_or_zero();
                         if w.awakened || to.x * d.x + to.y * d.y >= cone {
-                            self.hurt_enemy(j, dmg, to);
+                            self.hurt_enemy(j, dmg, to, elem);
                         }
                     }
                     self.events.push(Event::Slash { pos: p, dir: d, radius, full: w.awakened });
@@ -3682,7 +3806,7 @@ impl World {
                     let waves: &[f32] = if w.awakened { &[0.0, std::f32::consts::PI] } else { &[0.0] };
                     for t in waves {
                         let wd = Vec2::from_angle(d.y.atan2(d.x) + t);
-                        self.projectiles.push_kind(ProjKind::CrescentWave, 13.0 * area, p + wd * 20.0, wd * s.speed, 0.7, dmg * 0.6, 255, 0.0);
+                        self.projectiles.push_kind(ProjKind::CrescentWave, 13.0 * area, p + wd * 20.0, wd * s.speed, 0.7, dmg * 0.6, 255, 0.0, elem);
                     }
                     if w.awakened {
                         break;
@@ -3697,7 +3821,7 @@ impl World {
                     let Some(j) = self.nearest_index(p, reach, &taken) else { break };
                     let id = self.enemies.id[j];
                     taken.push(id);
-                    self.tethers.push(Tether { enemy: id, life: s.duration * self.persistence(), tick: 0.0, damage: dmg, reach: reach * 1.3, heals: w.awakened });
+                    self.tethers.push(Tether { enemy: id, life: s.duration * self.persistence(), tick: 0.0, damage: dmg, reach: reach * 1.3, heals: w.awakened, elem });
                 }
             }
             WeaponKind::LanternVigil => {
@@ -3707,7 +3831,7 @@ impl World {
                     let a = self.rng.range(0.0, std::f32::consts::TAU);
                     let d = self.rng.range(30.0, 110.0);
                     let pos = stage::resolve(self.cfg.stage, p + Vec2::from_angle(a) * d, 8.0);
-                    self.lanterns.push(Lantern { pos, life, max_life: life, radius: 46.0 * area, tick: 0.2, damage: dmg, slows: w.awakened });
+                    self.lanterns.push(Lantern { pos, life, max_life: life, radius: 46.0 * area, tick: 0.2, damage: dmg, slows: w.awakened, elem });
                 }
             }
             WeaponKind::IaiFlash => {
@@ -3718,23 +3842,23 @@ impl World {
                 for k in 0..s.amount {
                     let a = base.y.atan2(base.x) + (k as f32 - (n - 1.0) / 2.0) * 0.45;
                     let to = p + Vec2::from_angle(a) * len;
-                    self.hurt_along(p, to, 12.0, dmg);
+                    self.hurt_along(p, to, 12.0, dmg, elem);
                     self.events.push(Event::Iai { from: p, to });
                     if w.awakened {
-                        self.scars.push(Scar { from: p, to, life: 1.5, tick: 0.3, damage: dmg * 0.25 });
+                        self.scars.push(Scar { from: p, to, life: 1.5, tick: 0.3, damage: dmg * 0.25, elem });
                     }
                 }
             }
             WeaponKind::CrimsonTendrils => {
                 self.events.push(Event::Fired(WeaponKind::CrimsonTendrils));
                 let reach = 120.0 * area;
-                self.lash_targets(p, reach, s.amount, dmg);
+                self.lash_targets(p, reach, s.amount, dmg, elem);
             }
             WeaponKind::MukadeSpines => {
                 self.events.push(Event::Fired(WeaponKind::MukadeSpines));
                 for (k, t) in self.random_targets(240.0, s.amount).into_iter().enumerate() {
                     let d = 0.3 + 0.06 * k as f32;
-                    self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 30.0 * area, damage: dmg, style: style::SPINE, burns: false });
+                    self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 30.0 * area, damage: dmg, style: style::SPINE, burns: false, elem });
                 }
             }
             WeaponKind::Devour => {
@@ -3744,7 +3868,7 @@ impl World {
                 for idx in 0..n {
                     let j = self.scratch[idx] as usize;
                     let dir = p - self.enemies.pos[j];
-                    self.hurt_enemy(j, dmg, dir * 0.3);
+                    self.hurt_enemy(j, dmg, dir * 0.3, elem);
                 }
                 let per = if w.awakened { 1.0 } else { 0.5 };
                 self.heal((n as f32 * per).min(8.0));
@@ -3756,7 +3880,7 @@ impl World {
                 let n = s.amount as f32;
                 for k in 0..s.amount {
                     let a = d.y.atan2(d.x) + (k as f32 - (n - 1.0) / 2.0) * 0.35;
-                    self.projectiles.push_kind(ProjKind::Fang, 6.0, p, Vec2::from_angle(a) * s.speed, 1.6, dmg, 1, 7.0);
+                    self.projectiles.push_kind(ProjKind::Fang, 6.0, p, Vec2::from_angle(a) * s.speed, 1.6, dmg, 1, 7.0, elem);
                     let last = self.projectiles.len() - 1;
                     self.projectiles.burst[last] = 26.0 * area;
                 }
@@ -3766,7 +3890,7 @@ impl World {
                 let n = s.amount;
                 for k in 0..n {
                     let slot = k as f32 / n as f32 * std::f32::consts::TAU;
-                    self.projectiles.push_kind(ProjKind::SealOrb, 7.0, p, Vec2::from_angle(slot) * s.speed, 2.0, dmg, 1, 8.0);
+                    self.projectiles.push_kind(ProjKind::SealOrb, 7.0, p, Vec2::from_angle(slot) * s.speed, 2.0, dmg, 1, 8.0, elem);
                     let last = self.projectiles.len() - 1;
                     self.projectiles.charge[last] = s.duration + 0.05 * k as f32;
                     self.projectiles.burst[last] = 26.0 * area;
@@ -3774,15 +3898,15 @@ impl World {
             }
             WeaponKind::PurificationWave => {
                 self.events.push(Event::Fired(WeaponKind::PurificationWave));
-                self.waves.push(Wave { center: p, radius: 0.0, max_radius: 150.0 * area, speed: s.speed, damage: dmg, purify: true });
+                self.waves.push(Wave { center: p, radius: 0.0, max_radius: 150.0 * area, speed: s.speed, damage: dmg, purify: true, elem });
                 if w.awakened {
-                    self.waves.push(Wave { center: p, radius: -70.0, max_radius: 230.0 * area, speed: s.speed * 1.1, damage: dmg * 1.4, purify: true });
+                    self.waves.push(Wave { center: p, radius: -70.0, max_radius: 230.0 * area, speed: s.speed * 1.1, damage: dmg * 1.4, purify: true, elem });
                 }
             }
             WeaponKind::GravityWell => {
                 self.events.push(Event::Fired(WeaponKind::GravityWell));
                 for t in self.random_targets(260.0, s.amount) {
-                    self.wells.push(Well { pos: t, life: s.duration, max_life: s.duration, radius: 70.0 * area, damage: dmg, tick: 0.0 });
+                    self.wells.push(Well { pos: t, life: s.duration, max_life: s.duration, radius: 70.0 * area, damage: dmg, tick: 0.0, elem });
                 }
             }
             WeaponKind::RepulsionStar => {
@@ -3791,7 +3915,7 @@ impl World {
                 let n = s.amount as f32;
                 for k in 0..s.amount {
                     let a = d.y.atan2(d.x) + (k as f32 - (n - 1.0) / 2.0) * 0.3;
-                    self.projectiles.push_kind(ProjKind::RedStar, 10.0 * area, p, Vec2::from_angle(a) * s.speed, 1.4, dmg, 255, 0.0);
+                    self.projectiles.push_kind(ProjKind::RedStar, 10.0 * area, p, Vec2::from_angle(a) * s.speed, 1.4, dmg, 255, 0.0, elem);
                 }
             }
             WeaponKind::VoidLance => {
@@ -3800,7 +3924,7 @@ impl World {
                 let n = s.amount as f32;
                 for k in 0..s.amount {
                     let a = d.y.atan2(d.x) + (k as f32 - (n - 1.0) / 2.0) * 0.6;
-                    self.projectiles.push_kind(ProjKind::VoidOrb, 22.0 * area, p, Vec2::from_angle(a) * s.speed, 3.0, dmg, 255, 0.0);
+                    self.projectiles.push_kind(ProjKind::VoidOrb, 22.0 * area, p, Vec2::from_angle(a) * s.speed, 3.0, dmg, 255, 0.0, elem);
                 }
             }
             WeaponKind::FoxMirage => {
@@ -3822,6 +3946,7 @@ impl World {
                         pop_radius: 40.0 * area,
                         speed: s.speed,
                         slot,
+                        elem,
                     });
                     self.events.push(Event::CloneSummoned { pos });
                 }
@@ -3836,7 +3961,7 @@ impl World {
                 let n = s.amount as f32;
                 for k in 0..s.amount {
                     let a = base + (k as f32 - (n - 1.0) / 2.0) * 0.5;
-                    self.projectiles.push_kind(ProjKind::Shuriken, 10.0 * area, p, Vec2::from_angle(a) * s.speed, s.duration * self.persistence(), dmg, 255, 0.0);
+                    self.projectiles.push_kind(ProjKind::Shuriken, 10.0 * area, p, Vec2::from_angle(a) * s.speed, s.duration * self.persistence(), dmg, 255, 0.0, elem);
                 }
             }
             _ => {}
@@ -3862,7 +3987,7 @@ impl World {
                     let band = wv.radius - 12.0 - self.enemies.radius[j];
                     if self.enemies.wave_cd[j] == 0 && off.length_sq() >= band.max(0.0) * band.max(0.0) {
                         self.enemies.wave_cd[j] = 20;
-                        self.hurt_enemy(j, wv.damage, off * 2.0);
+                        self.hurt_enemy(j, wv.damage, off * 2.0, wv.elem);
                         if wv.purify {
                             self.enemies.push[j] += off.normalize_or_zero() * (380.0 * self.enemies.knock[j].max(0.3));
                         }
@@ -3888,7 +4013,7 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - st.pos;
-                self.hurt_enemy(j, st.damage, dir);
+                self.hurt_enemy(j, st.damage, dir, st.elem);
             }
             self.events.push(Event::Impact { pos: st.pos, radius: st.radius });
         }
@@ -3907,7 +4032,7 @@ impl World {
                 self.query_circle(pl.pos, pl.radius);
                 for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
-                    self.hurt_enemy(j, pl.damage, Vec2::ZERO);
+                    self.hurt_enemy(j, pl.damage, Vec2::ZERO, pl.elem);
                 }
             }
             self.pools[i] = pl;
@@ -4015,8 +4140,8 @@ impl World {
                     pierce = 0; // the burst below does the damage
                     break;
                 }
-                let (dmg, vel) = (self.projectiles.damage[i], self.projectiles.vel[i]);
-                self.hurt_enemy(j, dmg, vel);
+                let (dmg, vel, elem) = (self.projectiles.damage[i], self.projectiles.vel[i], self.projectiles.elem[i]);
+                self.hurt_enemy(j, dmg, vel, elem);
                 if self.projectiles.kind[i] == ProjKind::RedStar {
                     self.enemies.push[j] += vel.normalize_or_zero() * (420.0 * self.enemies.knock[j].max(0.3));
                 }
@@ -4267,10 +4392,11 @@ impl World {
         let p = self.player.pos;
         self.query_circle(p, BARRIER_RADIUS);
         let dmg = BARRIER_DAMAGE * self.might();
+        let elem = Some(self.hero_element);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - p;
-            self.hurt_enemy(j, dmg, dir);
+            self.hurt_enemy(j, dmg, dir, elem);
             self.enemies.push[j] += dir.normalize_or_zero() * (320.0 * self.enemies.knock[j]);
         }
         let r2 = BARRIER_RADIUS * BARRIER_RADIUS;
@@ -4650,7 +4776,11 @@ mod tests {
 
     /// Plays a run with a circling player that always takes the first offer.
     fn play(seed: u64, ticks: u32) -> World {
-        let mut w = World::new(WorldConfig { seed, ..Default::default() });
+        play_as(HeroId::Ren, seed, ticks)
+    }
+
+    fn play_as(hero: HeroId, seed: u64, ticks: u32) -> World {
+        let mut w = World::new(WorldConfig { seed, hero, ..Default::default() });
         for t in 0..ticks {
             if w.offer.is_some() {
                 w.bot_pick();
@@ -4670,25 +4800,292 @@ mod tests {
         w
     }
 
-    fn hit_hp_lost(w: &mut World) -> f32 {
+    fn hit_hp_lost(w: &mut World, elem: Option<Element>) -> f32 {
         let before = w.enemies.hp[0];
-        w.hurt_enemy(0, 5.0, Vec2::new(1.0, 0.0));
+        w.hurt_enemy(0, 5.0, Vec2::new(1.0, 0.0), elem);
         before - w.enemies.hp[0]
     }
 
     #[test]
     fn out_of_reach_enemies_take_no_damage() {
         let mut w = world_with_enemy_at(REACH_HALF.x + 40.0);
-        assert_eq!(hit_hp_lost(&mut w), 0.0);
+        assert_eq!(hit_hp_lost(&mut w, None), 0.0);
         w.enemies.pos[0] = w.player.pos + Vec2::new(100.0, 0.0);
-        assert!(hit_hp_lost(&mut w) > 0.0);
+        assert!(hit_hp_lost(&mut w, None) > 0.0);
     }
 
     #[test]
     fn reach_ignores_extra_screen_width() {
         let mut w = world_with_enemy_at(REACH_HALF.x + 40.0);
         w.view_half = Vec2::new(900.0, 180.0);
-        assert_eq!(hit_hp_lost(&mut w), 0.0);
+        assert_eq!(hit_hp_lost(&mut w, None), 0.0);
+    }
+
+    #[test]
+    fn element_multiplies_damage() {
+        let lost = |kind: EnemyKind, hero: HeroId, elem: Option<Element>| {
+            let mut w = World::new(WorldConfig { hero, ..Default::default() });
+            w.spawn_enemy(kind, w.player.pos + Vec2::new(40.0, 0.0));
+            let hp = hit_hp_lost(&mut w, elem);
+            let mult = w.events.iter().find_map(|e| if let Event::Hit { mult, .. } = e { Some(*mult) } else { None });
+            (hp, mult.unwrap())
+        };
+        assert_eq!(lost(EnemyKind::Wisp, HeroId::Ren, None), (5.0, 1.0));
+        assert_eq!(lost(EnemyKind::Wisp, HeroId::Ren, Some(Element::Water)), (7.5, 1.5));
+        assert_eq!(lost(EnemyKind::Wisp, HeroId::Ren, Some(Element::Ice)).0, 3.75);
+        assert!((lost(EnemyKind::Nopperabo, HeroId::Riku, Some(Element::Fire)).0 - 5.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn every_weapon_hit_carries_its_element() {
+        for k in ALL_WEAPONS {
+            for awakened in [false, true] {
+                let mut w = World::new(WorldConfig { seed: 5, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+                w.time = AWAKEN_FROM + 1.0;
+                w.weapons = vec![OwnedWeapon { kind: k, level: MAX_LEVEL, awakened, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
+                for n in 0..12 {
+                    let a = n as f32 / 12.0 * std::f32::consts::TAU;
+                    w.spawn_enemy(EnemyKind::Oni, w.player.pos + Vec2::from_angle(a) * (60.0 + (n % 4) as f32 * 30.0));
+                }
+                w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+                w.enemies.hp.iter_mut().for_each(|h| *h = 1e9);
+                let ti = ALL_WEAPONS.iter().position(|x| *x == k).unwrap();
+                let (mut hits, mut signatures) = (0, 0);
+                for _ in 0..60 * 10 {
+                    if w.offer.is_some() {
+                        w.bot_pick();
+                    }
+                    let timer = w.sig_timers[ti];
+                    w.step(Input::default());
+                    if w.sig_timers[ti] > timer {
+                        signatures += 1;
+                    }
+                    for e in &w.events {
+                        if let Event::Hit { elem, .. } = e {
+                            assert_eq!(*elem, Some(k.element()), "{k:?} awakened={awakened}");
+                            hits += 1;
+                        }
+                    }
+                }
+                assert!(hits > 0, "{k:?} awakened={awakened} never hit");
+                if awakened && signature_every(k) > 0.0 {
+                    assert!(signatures >= 2, "{k:?} signature fired {signatures} times");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ultimate_hits_carry_hero_element() {
+        for h in ALL_HEROES.into_iter().filter(|h| hero_def(*h).finished) {
+            let mut w = World::new(WorldConfig { hero: h, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+            w.weapons.clear();
+            for k in 0..30 {
+                w.spawn_enemy(EnemyKind::Oni, w.player.pos + Vec2::from_angle(k as f32 * 0.21) * (45.0 + (k % 3) as f32 * 30.0));
+            }
+            w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+            w.enemies.hp.iter_mut().for_each(|hp| *hp = 1e9);
+            w.player.special = 1.0;
+            w.step(Input { special: true, ..Default::default() });
+            let mut hits = 0;
+            for _ in 0..60 * 9 {
+                for e in &w.events {
+                    if let Event::Hit { elem, .. } = e {
+                        assert_eq!(*elem, Some(hero_def(h).element), "{h:?}");
+                        hits += 1;
+                    }
+                }
+                if w.offer.is_some() {
+                    w.bot_pick();
+                }
+                w.step(Input::default());
+            }
+            assert!(hits > 0, "{h:?} special never hit");
+        }
+    }
+
+    fn quiet_world() -> World {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.weapons.clear();
+        w.bonus.crit_chance = 0.0;
+        w
+    }
+
+    fn add_enemy(w: &mut World, kind: EnemyKind, dx: f32) -> usize {
+        w.spawn_enemy(kind, w.player.pos + Vec2::new(dx, 0.0));
+        let j = w.enemies.len() - 1;
+        w.enemies.hp[j] = 1000.0;
+        w.enemies.speed[j] = 0.0;
+        j
+    }
+
+    fn hit_count(w: &World) -> usize {
+        w.events.iter().filter(|e| matches!(e, Event::Hit { .. })).count()
+    }
+
+    const RIGHT: Vec2 = Vec2::new(1.0, 0.0);
+
+    #[test]
+    fn burn_respects_reach() {
+        let mut w = quiet_world();
+        let near = add_enemy(&mut w, EnemyKind::Oni, 100.0);
+        let far = add_enemy(&mut w, EnemyKind::Oni, 120.0);
+        w.on_hit_effect(near, Element::Fire, 100.0, RIGHT);
+        w.on_hit_effect(far, Element::Fire, 100.0, RIGHT);
+        w.enemies.pos[far] = w.player.pos + Vec2::new(w.reach_half().x + 60.0, 0.0);
+        let (near_hp, far_hp) = (w.enemies.hp[near], w.enemies.hp[far]);
+        let mut hits = 0;
+        for _ in 0..((BURN_SECONDS + 0.5) / DT) as usize {
+            w.step(Input::default());
+            hits += hit_count(&w);
+        }
+        assert!((near_hp - w.enemies.hp[near] - 30.0).abs() < 0.5, "burned {}", near_hp - w.enemies.hp[near]);
+        assert!(hits <= 7, "{hits} burn ticks");
+        assert_eq!(w.enemies.hp[far], far_hp);
+    }
+
+    #[test]
+    fn soak_boosts_only_electric() {
+        let mut w = quiet_world();
+        let j = add_enemy(&mut w, EnemyKind::Kodama, 40.0);
+        w.on_hit_effect(j, Element::Water, 5.0, RIGHT);
+        let mut lost = |elem| {
+            let before = w.enemies.hp[j];
+            w.apply_hit(j, 5.0, RIGHT, Some(elem));
+            before - w.enemies.hp[j]
+        };
+        assert!((lost(Element::Electric) - 5.0 * element_mult(Element::Electric, Element::Earth) * SOAK_ELECTRIC).abs() < 1e-3);
+        assert!((lost(Element::Fire) - 5.0 * element_mult(Element::Fire, Element::Earth)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn chain_stays_in_reach_and_stops() {
+        let mut w = quiet_world();
+        let first = add_enemy(&mut w, EnemyKind::Oni, 170.0);
+        let outside = add_enemy(&mut w, EnemyKind::Oni, 225.0);
+        let second = add_enemy(&mut w, EnemyKind::Oni, 110.0);
+        assert!(!w.in_reach(w.enemies.pos[outside], w.enemies.radius[outside]));
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        let before: Vec<f32> = w.enemies.hp.clone();
+        w.on_hit_effect(first, Element::Electric, 100.0, RIGHT);
+        assert_eq!(w.enemies.hp[first], before[first]);
+        assert_eq!(w.enemies.hp[outside], before[outside]);
+        let expected = 100.0 * CHAIN_SHARE * element_mult(Element::Electric, Element::Fire);
+        assert!((before[second] - w.enemies.hp[second] - expected).abs() < 1e-3);
+        assert_eq!(hit_count(&w), 1);
+        assert!(w.events.iter().any(|e| matches!(e, Event::Bolt { from, to } if *from == w.enemies.pos[first] && *to == w.enemies.pos[second])));
+    }
+
+    #[test]
+    fn stagger_skips_bosses() {
+        let mut w = quiet_world();
+        let wisp = add_enemy(&mut w, EnemyKind::Wisp, 150.0);
+        let oni = add_enemy(&mut w, EnemyKind::GreatOni, -150.0);
+        w.enemies.speed[wisp] = 60.0;
+        w.enemies.speed[oni] = 60.0;
+        w.on_hit_effect(wisp, Element::Earth, 5.0, RIGHT);
+        w.on_hit_effect(oni, Element::Earth, 5.0, RIGHT);
+        let (wisp_at, oni_at) = (w.enemies.pos[wisp], w.enemies.pos[oni]);
+        w.step(Input::default());
+        assert!(w.enemies.pos[oni].x > oni_at.x);
+        for _ in 0..22 {
+            w.step(Input::default());
+            assert_eq!(w.enemies.vel[wisp], Vec2::ZERO);
+        }
+        assert_eq!(w.enemies.pos[wisp], wisp_at);
+        for _ in 0..6 {
+            w.step(Input::default());
+        }
+        assert!(w.enemies.pos[wisp].x < wisp_at.x - 1.0);
+    }
+
+    #[test]
+    fn slow_and_knockback() {
+        let mut w = quiet_world();
+        let j = add_enemy(&mut w, EnemyKind::Wisp, 150.0);
+        w.enemies.speed[j] = 60.0;
+        w.on_hit_effect(j, Element::Ice, 5.0, RIGHT);
+        let step_dx = |w: &mut World| {
+            let x = w.enemies.pos[j].x;
+            w.step(Input::default());
+            x - w.enemies.pos[j].x
+        };
+        let slowed = 60.0 * SLOW_FACTOR * DT;
+        assert!((step_dx(&mut w) - slowed).abs() < 1e-3);
+        for _ in 0..100 {
+            step_dx(&mut w);
+        }
+        assert!((step_dx(&mut w) - slowed).abs() < 1e-3);
+        for _ in 0..30 {
+            step_dx(&mut w);
+        }
+        assert!((step_dx(&mut w) - 60.0 * DT).abs() < 1e-3);
+        let k = add_enemy(&mut w, EnemyKind::Wisp, -80.0);
+        w.on_hit_effect(k, Element::Wind, 5.0, RIGHT * 3.0);
+        assert_eq!(w.enemies.push[k], RIGHT * (KNOCK_EXTRA * w.enemies.knock[k]));
+        assert!(w.enemies.push[k].x > 0.0);
+    }
+
+    #[test]
+    fn mark_makes_next_hit_crit() {
+        let mut w = quiet_world();
+        let j = add_enemy(&mut w, EnemyKind::Oni, 100.0);
+        w.on_hit_effect(j, Element::Light, 5.0, RIGHT);
+        let crit = |w: &mut World| {
+            w.events.clear();
+            w.hurt_enemy(j, 5.0, RIGHT, None);
+            w.events.iter().any(|e| matches!(e, Event::Hit { crit: true, .. }))
+        };
+        assert!(crit(&mut w));
+        assert!(!crit(&mut w));
+    }
+
+    #[test]
+    fn drain_caps_at_max_hp() {
+        let mut w = quiet_world();
+        let j = add_enemy(&mut w, EnemyKind::Oni, 100.0);
+        w.player.hp = w.player.max_hp - 1.0;
+        w.on_hit_effect(j, Element::Darkness, 5.0, RIGHT);
+        assert_eq!(w.player.hp, w.player.max_hp - 1.0 + DRAIN_HEAL);
+        w.player.hp = w.player.max_hp - 0.2;
+        w.on_hit_effect(j, Element::Darkness, 5.0, RIGHT);
+        assert_eq!(w.player.hp, w.player.max_hp);
+        w.cfg.gear.exotics.push(Exotic::ClosedHandVow);
+        w.player.hp = w.player.max_hp - 1.0;
+        w.on_hit_effect(j, Element::Darkness, 5.0, RIGHT);
+        assert_eq!(w.player.hp, w.player.max_hp - 1.0);
+    }
+
+    #[test]
+    fn statuses_follow_swap_remove() {
+        let mut w = quiet_world();
+        add_enemy(&mut w, EnemyKind::Oni, 100.0);
+        add_enemy(&mut w, EnemyKind::Oni, 130.0);
+        for elem in [Element::Fire, Element::Water, Element::Earth, Element::Ice, Element::Light] {
+            w.on_hit_effect(0, elem, 100.0, RIGHT);
+        }
+        w.enemies.hp[0] = 0.0;
+        w.step(Input::default());
+        let e = &w.enemies;
+        assert_eq!(e.len(), 1);
+        assert_eq!((e.burn[0], e.burn_dps[0], e.soak[0], e.stagger[0], e.slow[0], e.marked[0]), (0.0, 0.0, 0.0, 0.0, 0.0, false));
+    }
+
+    #[test]
+    fn proc_rate_is_about_fifteen_percent() {
+        let mut w = quiet_world();
+        let j = add_enemy(&mut w, EnemyKind::Oni, 100.0);
+        w.enemies.hp[j] = 1e9;
+        let mut procs = 0;
+        for _ in 0..4000 {
+            w.hurt_enemy(j, 1.0, RIGHT, Some(Element::Earth));
+            if w.enemies.stagger[j] > 0.0 {
+                procs += 1;
+                w.enemies.stagger[j] = 0.0;
+            }
+        }
+        let rate = procs as f32 / 4000.0;
+        assert!((0.12..=0.18).contains(&rate), "proc rate {rate}");
     }
 
     #[test]
@@ -4947,8 +5344,7 @@ mod tests {
 
     #[test]
     fn barrier_needs_full_meter_and_hits_nearby() {
-        let mut w = play(9, 60 * 20);
-        w.cfg.hero = HeroId::Kaede; // a hero whose special is the plain Barrier
+        let mut w = play_as(HeroId::Kaede, 9, 60 * 20);
         w.player.special = 0.5;
         w.use_special();
         assert!(w.player.iframes <= 1.0, "barrier must not fire on a half meter");
@@ -5008,6 +5404,7 @@ mod tests {
         }
         let n = w.enemies.len();
         w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        w.enemies.hp.iter_mut().for_each(|h| *h = 1e6);
         let mut dealt = 0.0;
         for _ in 0..60 * 4 {
             w.step(Input::default());
@@ -6272,8 +6669,7 @@ mod tests {
 
     #[test]
     fn auto_special_fires_only_when_unlocked_and_in_trouble() {
-        let mut w = play(9, 60 * 20);
-        w.cfg.hero = HeroId::Kaede; // plain Barrier special
+        let mut w = play_as(HeroId::Kaede, 9, 60 * 20);
         w.player.special = 1.0;
         w.player.hp = w.player.max_hp * 0.3;
         w.step(Input::default());

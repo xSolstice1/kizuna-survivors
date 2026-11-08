@@ -4,7 +4,7 @@ use macroquad::prelude::*;
 #[allow(unused_imports)]
 use crate::kit::{draw_circle, draw_circle_lines};
 use sim::content::{
-    awakened_name, complement, hero_def, passive_max, EnemyKind, ShrineEvent, SpecialKind, Tier, Upgrade, AWAKEN_FROM, MAX_LEVEL,
+    awakened_name, complement, hero_def, passive_max, Element, EnemyKind, ShrineEvent, SpecialKind, Tier, Upgrade, AWAKEN_FROM, MAX_LEVEL,
 };
 use sim::campaign::{Headline, StageDef, MID_BOSS_ROUND, ROUNDS, SUB_BOSS_ROUND};
 use sim::World;
@@ -22,6 +22,43 @@ pub fn tier_color(t: Tier) -> Color {
         Tier::Mythic => Rarity::Mythic,
         Tier::Unique => Rarity::Exotic,
     })
+}
+
+pub fn element_color(e: Element) -> Color {
+    match e {
+        Element::Fire => Color::new(1.0, 0.45, 0.2, 1.0),
+        Element::Water => Color::new(0.3, 0.6, 1.0, 1.0),
+        Element::Electric => Color::new(1.0, 0.9, 0.3, 1.0),
+        Element::Earth => Color::new(0.75, 0.55, 0.3, 1.0),
+        Element::Wind => Color::new(0.45, 0.9, 0.6, 1.0),
+        Element::Ice => Color::new(0.7, 0.95, 1.0, 1.0),
+        Element::Light => Color::new(1.0, 0.95, 0.75, 1.0),
+        Element::Darkness => Color::new(0.7, 0.4, 0.95, 1.0),
+    }
+}
+
+fn matchup_text(e: Element) -> String {
+    let strong = match e {
+        Element::Light => Some(Element::Darkness),
+        Element::Darkness => Some(Element::Light),
+        _ => e.beats(),
+    };
+    let weak = sim::content::ALL_ELEMENTS.into_iter().find(|w| w.beats() == Some(e));
+    match (strong, weak) {
+        (Some(s), Some(w)) => format!("Strong vs {} · Weak vs {}", s.name(), w.name()),
+        (Some(s), None) => format!("Strong vs {}", s.name()),
+        _ => String::new(),
+    }
+}
+
+/// Filled element chip with its name; returns the chip width.
+fn element_chip(e: Element, x: f32, y: f32, size: u16) -> f32 {
+    let c = element_color(e);
+    let name = e.name().to_uppercase();
+    let w = kit::measure(&name, size).width + 14.0;
+    kit::rounded(x, y, w, 20.0, 10.0, Color::new(c.r, c.g, c.b, 0.22));
+    kit::text(&name, x + 7.0, y + 15.0, size as f32, c);
+    w
 }
 
 pub fn special_color(kind: SpecialKind) -> Color {
@@ -444,8 +481,13 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
         let tw = (kit::measure(&tag, 13).width + 16.0).min(cw - 104.0);
         kit::rounded(x + 90.0, y + 60.0, tw, 20.0, 10.0, Color::new(frame.r, frame.g, frame.b, 0.22));
         kit::text_fit(&tag, x + 98.0, y + 75.0, tw - 16.0, 13.0, frame);
-        // Description.
         let mut ly = y + 116.0;
+        if let Upgrade::Weapon(k) = u {
+            let e = k.element();
+            element_chip(e, x + 16.0, y + 88.0, 12);
+            kit::text_fit(&matchup_text(e), x + 16.0, y + 126.0, cw - 32.0, 13.0, DIM);
+            ly = y + 148.0;
+        }
         for line in wrap(&world.describe_upgrade(u, lvl), cw - 32.0, 16) {
             kit::text(&line, x + 16.0, ly, 16.0, Color::new(0.9, 0.9, 0.96, 1.0));
             ly += 21.0;
@@ -503,11 +545,15 @@ pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: 
         kit::icon_slot(r.x + 8.0, r.y + dy + 5.0, 40.0, Some(assets.icon(u)), 0, 0, false);
         let chip = u.tier().name().to_uppercase();
         let cwid = kit::measure(&chip, 12).width + 14.0;
-        kit::text_fit(&format!("{}  Lv {lvl}", u.name()), r.x + 58.0, r.y + dy + 21.0, r.w - 58.0 - cwid - 52.0, 18.0, INK);
+        let elem_w = match u {
+            Upgrade::Weapon(k) => element_chip(k.element(), r.x + r.w - cwid - 18.0 - kit::measure(&k.element().name().to_uppercase(), 12).width - 14.0, r.y + dy + 15.0, 12) + 6.0,
+            _ => 0.0,
+        };
+        kit::text_fit(&format!("{}  Lv {lvl}", u.name()), r.x + 58.0, r.y + dy + 21.0, r.w - 58.0 - cwid - 52.0 - elem_w, 18.0, INK);
         kit::text(&format!("becomes Lv {}", sim::content::inherit_level(new, lvl)), r.x + 58.0, r.y + dy + 40.0, 14.0, DIM);
         kit::rounded(r.x + r.w - cwid - 12.0, r.y + dy + 15.0, cwid, 20.0, 10.0, Color::new(tc.r, tc.g, tc.b, 0.22));
         kit::text(&chip, r.x + r.w - cwid - 5.0, r.y + dy + 30.0, 12.0, tc);
-        kit::text(&format!("{}", i + 1), r.x + r.w - cwid - 34.0, r.y + dy + 31.0, 16.0, FAINT);
+        kit::text(&format!("{}", i + 1), r.x + r.w - cwid - 34.0 - elem_w, r.y + dy + 31.0, 16.0, FAINT);
     }
     let joins = match targets.get(*focus) {
         Some(&(_, lvl)) => format!("{} joins at Lv {}", new.name(), sim::content::inherit_level(new, lvl)),
@@ -1050,6 +1096,20 @@ fn rounded_hint(x: f32, y: f32, size: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sim::content::ALL_ELEMENTS;
+
+    #[test]
+    fn element_colors_are_distinct() {
+        for (i, a) in ALL_ELEMENTS.iter().enumerate() {
+            assert!(!a.name().is_empty());
+            let ca = element_color(*a);
+            for b in &ALL_ELEMENTS[i + 1..] {
+                let cb = element_color(*b);
+                let gap = (ca.r - cb.r).abs().max((ca.g - cb.g).abs()).max((ca.b - cb.b).abs());
+                assert!(gap > 0.15, "{} and {} too close", a.name(), b.name());
+            }
+        }
+    }
 
     #[test]
     fn alert_fires_once_per_ready_period() {

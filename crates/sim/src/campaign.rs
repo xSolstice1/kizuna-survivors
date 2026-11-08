@@ -2,6 +2,7 @@
 //! A stage is plain data; the director, bosses and hazards in `world` read it, so a new
 //! stage is a new `StageDef` plus its art.
 
+use crate::content::Element;
 use crate::enemies::EnemyKind::{self, *};
 use crate::meta::Bonus;
 
@@ -31,6 +32,16 @@ impl StageId {
             StageId::PaleCitadel => "pale_citadel",
             StageId::Rainward => "rainward",
             StageId::Shatterline => "shatterline",
+        }
+    }
+    pub fn element(self) -> Element {
+        match self {
+            StageId::Shotengai => Element::Fire,
+            StageId::ShrineValley => Element::Earth,
+            StageId::EmberLeaf => Element::Wind,
+            StageId::PaleCitadel => Element::Ice,
+            StageId::Rainward => Element::Water,
+            StageId::Shatterline => Element::Electric,
         }
     }
     pub fn from_key(k: &str) -> Option<StageId> {
@@ -464,6 +475,20 @@ pub fn home_stage(k: EnemyKind) -> StageId {
 mod tests {
     use super::*;
     use crate::enemies::{Rank, ALL_ENEMIES};
+
+    #[test]
+    fn worlds_are_mostly_their_element() {
+        for s in ALL_STAGES {
+            let d = s.def();
+            let mut roster = vec![d.fodder, d.fodder_b, d.ranged, d.blinker, d.elite, d.mini, d.final_boss];
+            roster.extend(d.boss);
+            let own = roster.iter().filter(|k| k.element() == s.element()).count();
+            assert!(own as f32 / roster.len() as f32 >= 0.55, "{s:?}");
+            for k in &roster {
+                assert!(!k.element().is_rare() || k.rank() >= Rank::Mini, "{k:?} is rare-element below Mini");
+            }
+        }
+    }
 
     #[test]
     fn every_enemy_has_a_home_and_rosters_match_ranks() {

@@ -755,6 +755,7 @@ pub struct HeroDef {
     pub finished: bool,
     pub special: SpecialKind,
     pub special_name: &'static str,
+    pub element: Element,
 }
 
 pub fn hero_def(id: HeroId) -> HeroDef {
@@ -787,7 +788,17 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Toya => (REACH_MELEE, MIGHT_TOYA),
         HeroId::Shun | HeroId::Haru => (REACH_MELEE, MIGHT_MELEE),
     };
-    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
+    let element = match id {
+        HeroId::Ren => Element::Light,
+        HeroId::Riku | HeroId::Nanami => Element::Fire,
+        HeroId::Shun => Element::Darkness,
+        HeroId::Toya => Element::Earth,
+        HeroId::Kuon => Element::Ice,
+        HeroId::Kaede | HeroId::Yuzu => Element::Electric,
+        HeroId::Mika => Element::Water,
+        HeroId::Haru => Element::Wind,
+    };
+    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name, element }
 }
 
 impl HeroDef {
@@ -1050,6 +1061,106 @@ pub fn passive_max(kind: PassiveKind) -> u8 {
         PassiveKind::Abundance => 3,
         PassiveKind::Guard => 5,
         _ => MAX_LEVEL,
+    }
+}
+
+// ───────────────────────── Elements ─────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Element {
+    Fire,
+    Water,
+    Electric,
+    Earth,
+    Wind,
+    Ice,
+    Light,
+    Darkness,
+}
+
+pub const ALL_ELEMENTS: [Element; 8] = [Element::Fire, Element::Water, Element::Electric, Element::Earth, Element::Wind, Element::Ice, Element::Light, Element::Darkness];
+
+pub const ELEM_STRONG: f32 = 1.5;
+pub const ELEM_WEAK: f32 = 0.75;
+pub const ELEM_INTO_RARE: f32 = 0.9;
+pub const ELEM_FROM_RARE: f32 = 1.15;
+pub const ELEM_RARE_CLASH: f32 = 1.5;
+/// Damage bonus for a hero's skills of their own element.
+pub const AFFINITY_DAMAGE: f32 = 1.1;
+
+pub const PROC_CHANCE: f32 = 0.15;
+/// Fire: the burn deals `BURN_SHARE` of the hit, spread over `BURN_SECONDS`, one tick every `BURN_TICK`.
+pub const BURN_SECONDS: f32 = 3.0;
+pub const BURN_SHARE: f32 = 0.3;
+pub const BURN_TICK: f32 = 0.5;
+pub const SOAK_SECONDS: f32 = 4.0;
+/// Electric damage multiplier on soaked enemies.
+pub const SOAK_ELECTRIC: f32 = 1.3;
+pub const CHAIN_RANGE: f32 = 90.0;
+pub const CHAIN_SHARE: f32 = 0.5;
+pub const STAGGER_SECONDS: f32 = 0.4;
+pub const KNOCK_EXTRA: f32 = 220.0;
+pub const SLOW_SECONDS: f32 = 2.0;
+pub const SLOW_FACTOR: f32 = 0.65;
+/// Darkness: player HP restored per proc.
+pub const DRAIN_HEAL: f32 = 0.5;
+
+impl Element {
+    pub fn name(self) -> &'static str {
+        match self {
+            Element::Fire => "Fire",
+            Element::Water => "Water",
+            Element::Electric => "Electric",
+            Element::Earth => "Earth",
+            Element::Wind => "Wind",
+            Element::Ice => "Ice",
+            Element::Light => "Light",
+            Element::Darkness => "Darkness",
+        }
+    }
+
+    pub fn is_rare(self) -> bool {
+        matches!(self, Element::Light | Element::Darkness)
+    }
+
+    /// The element this one is strong against; Light and Darkness sit outside the cycle.
+    pub fn beats(self) -> Option<Element> {
+        match self {
+            Element::Water => Some(Element::Fire),
+            Element::Fire => Some(Element::Ice),
+            Element::Ice => Some(Element::Wind),
+            Element::Wind => Some(Element::Earth),
+            Element::Earth => Some(Element::Electric),
+            Element::Electric => Some(Element::Water),
+            Element::Light | Element::Darkness => None,
+        }
+    }
+}
+
+pub fn element_mult(attacker: Element, target: Element) -> f32 {
+    match (attacker.is_rare(), target.is_rare()) {
+        (true, true) if attacker != target => ELEM_RARE_CLASH,
+        (true, false) => ELEM_FROM_RARE,
+        (false, true) => ELEM_INTO_RARE,
+        (false, false) if attacker.beats() == Some(target) => ELEM_STRONG,
+        (false, false) if target.beats() == Some(attacker) => ELEM_WEAK,
+        _ => 1.0,
+    }
+}
+
+impl WeaponKind {
+    pub fn element(self) -> Element {
+        use WeaponKind::*;
+        match self {
+            FlamePool | FoxfireOrb | Familiars | RepulsionStar => Element::Fire,
+            PurificationWave | Devour | VenomFang => Element::Water,
+            ThunderChain | IaiFlash | Taiko => Element::Electric,
+            StarFall | CrimsonTendrils | MukadeSpines => Element::Earth,
+            Ofuda | SakuraField | Crescent | GaleShuriken | FoxMirage => Element::Wind,
+            MoonOrbs | SoulTether | YinYangOrbs => Element::Ice,
+            SpiritSeal | LanternVigil => Element::Light,
+            GraveCleaver | GravityWell | VoidLance => Element::Darkness,
+        }
     }
 }
 
@@ -1499,6 +1610,35 @@ pub fn elite_interval(t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn element_cycle_matches_spec() {
+        use Element::*;
+        let cycle = [Water, Fire, Ice, Wind, Earth, Electric];
+        for (i, a) in cycle.iter().enumerate() {
+            let b = cycle[(i + 1) % 6];
+            assert_eq!(a.beats(), Some(b));
+            assert_eq!(element_mult(*a, b), 1.5);
+            assert_eq!(element_mult(b, *a), 0.75);
+            assert_eq!(element_mult(*a, Light), 0.9);
+            assert_eq!(element_mult(Darkness, *a), 1.15);
+        }
+        assert_eq!(element_mult(Fire, Wind), 1.0);
+        assert_eq!(element_mult(Light, Darkness), 1.5);
+        assert_eq!(element_mult(Darkness, Light), 1.5);
+        assert_eq!(element_mult(Light, Light), 1.0);
+    }
+
+    #[test]
+    fn weapon_elements_follow_the_rules() {
+        for e in ALL_ELEMENTS {
+            let n = ALL_WEAPONS.iter().filter(|k| k.element() == e).count();
+            if e.is_rare() { assert!(n <= 3, "{e:?} has {n}") } else { assert!(n >= 3, "{e:?} has {n}") }
+        }
+        for k in ALL_WEAPONS.iter().filter(|k| k.element().is_rare()) {
+            assert!(Upgrade::Weapon(*k).tier() >= Tier::Legendary, "{k:?} is rare-element below Legendary");
+        }
+    }
 
     #[test]
     fn hero_levers_are_per_hero() {

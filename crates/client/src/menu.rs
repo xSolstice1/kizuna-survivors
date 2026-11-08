@@ -637,6 +637,7 @@ fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry
                 lines: vec![
                     format!("{}. Starts with {}.", d.archetype, Upgrade::Weapon(d.signature).name()),
                     format!("Innate: {}", d.innate_text),
+                    format!("Affinity: {} — +10% {} damage", d.element.name(), d.element.name()),
                     format!("Unlock: {}", unlock_text(h)),
                 ],
             }
@@ -740,7 +741,12 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     let (px, py, pw, ph) = ((w - 760.0) / 2.0, y0 + rows * (cw + gap) + 14.0, 760.0, 170.0);
     kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
     if e.found {
-        kit::text_fit(&e.name, px + 20.0, py + 40.0, pw - 40.0, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
+        let tag = (st.tab == Tab::Otherworlders).then(|| ALL_ENEMIES[st.cursor].element());
+        let tag_w = tag.map_or(0.0, |el| kit::measure(el.name(), 20).width + 16.0);
+        kit::text_fit(&e.name, px + 20.0, py + 40.0, pw - 40.0 - tag_w, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
+        if let Some(el) = tag {
+            kit::text(el.name(), px + pw - 20.0 - tag_w + 16.0, py + 40.0, 20.0, crate::ui::element_color(el));
+        }
         let mut y = py + 72.0;
         for line in &e.lines {
             for l in wrap(line, pw - 40.0, 20) {
@@ -1098,6 +1104,8 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
                     kit::text(&fmt_time(best), dx + 16.0, r.y + 197.0, 12.0, kit::DIM);
                 }
             }
+            let el = sid.element();
+            kit::text_fit(&format!("Element: {} — most enemies here are {}", el.name(), el.name()), r.x + 14.0, r.y + 211.0, r.w - 28.0 - 36.0, 12.0, crate::ui::element_color(el));
             // Boss progress: mini / boss / final (bits ever defeated).
             let bits = profile.stage_bosses[si];
             let kinds: Vec<(EnemyKind, u8)> = [Some((def.mini, 1u8)), def.boss.map(|b| (b, 2u8)), Some((def.final_boss, 4u8))].into_iter().flatten().collect();

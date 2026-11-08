@@ -23,6 +23,12 @@ Every weapon and passive has a rarity tier, Common to Unique, shown on its level
 skills you don't own yet are offered less often. With all slots full, a card may offer to replace
 one of your skills; the newcomer starts at half the old skill's level (minimum 1).
 
+There are eight elements: Fire, Water, Electric, Earth, Wind, Ice, and the rare Light and Darkness.
+They form a cycle: Water douses Fire, Fire melts Ice, Ice stills Wind, Wind erodes Earth, Earth
+grounds Electric, Electric shocks Water. A hit on the element it beats deals x1.5; a hit on the one
+that beats it deals x0.75. Every weapon, enemy and world has one, and hits sometimes trigger an
+element effect: burn, soak, chain, stagger, knockback, slow, mark or drain.
+
 | | |
 |---|---|
 | ![Hidden Shrine Valley](docs/screenshots/run_shrine_valley.png) | ![Ember Leaf Frontier](docs/screenshots/run_ember_leaf.png) |
@@ -37,11 +43,13 @@ one of your skills; the newcomer starts at half the old skill's level (minimum 1
 Each hero is an original character with their own sprite, signature weapon, innate passive,
 weapon pool and a transforming **special move**:
 
-- **Ren Amane** — shrine maiden. Ofuda, yin-yang orbs, purification seals; *Divine Purification*.
-- **Riku Kazamine** — fox-masked shinobi. Foxfire orbs, familiars, shuriken, clones; *Ninefold Foxfire*.
-- **Shun Yamikiri** — spirit ferryman with a great cleaver; *Hannya Unbound*.
-- **Toya Hyakuashi** — cursed youth with crimson tendrils; *Hundred-Leg Rampage*.
-- **Kuon Hoshimi** — star-reading onmyōji who bends space; *Domain: Endless Firmament*.
+- **Ren Amane** — shrine maiden. Ofuda, yin-yang orbs, purification seals; *Divine Purification*. Affinity: Light.
+- **Riku Kazamine** — fox-masked shinobi. Foxfire orbs, familiars, shuriken, clones; *Ninefold Foxfire*. Affinity: Fire.
+- **Shun Yamikiri** — spirit ferryman with a great cleaver; *Hannya Unbound*. Affinity: Darkness.
+- **Toya Hyakuashi** — cursed youth with crimson tendrils; *Hundred-Leg Rampage*. Affinity: Earth.
+- **Kuon Hoshimi** — star-reading onmyōji who bends space; *Domain: Endless Firmament*. Affinity: Ice.
+
+A hero deals +10% with skills of their own element, and their special move deals it too.
 
 More heroes are on the way. Heroes unlock by clearing worlds with a specific hero.
 
@@ -53,6 +61,8 @@ More heroes are on the way. Heroes unlock by clearing worlds with a specific her
 - **20 rounds a night**: every 4th round is a headline — an uncommon wave, the first elites, a
   leader, the sub-boss, and the final boss in round 20 — while the bigger worlds add their own boss
   in round 18; the final boss must fall before dawn.
+- **A dominant element per world** that most of its enemies carry: Shotengai Fire, Shrine Valley
+  Earth, Ember Leaf Wind, Pale Citadel Ice, Rainward Water, Shatterline Electric.
 - **Normal / Hard / Nightmare**, then **Ascension** (Nightmare+1, +2, … with no cap).
   Clearing Normal opens the next world; Nightmare clears earn a permanent **relic**.
 - Bosses fight in phases; harder difficulties add phases.
