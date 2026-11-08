@@ -494,6 +494,7 @@ impl Fx {
     }
 
     pub fn absorb(&mut self, events: &[Event]) {
+        let mut round_banner = None;
         for ev in events {
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
@@ -549,6 +550,9 @@ impl Fx {
                     self.rings.push((vec2(pos.x, pos.y), 0.0));
                     self.shake = self.shake.max(0.25);
                     self.say(self.lines().special);
+                }
+                Event::RoundStarted { round, headline: Some(h) } => {
+                    round_banner = Some(format!("ROUND {round} — {}", crate::ui::headline_name(h)));
                 }
                 Event::BossSpawned(kind) => {
                     let name = if kind == EnemyKind::GreatOni { "A GREAT ONI".to_string() } else { kind.name().to_uppercase() };
@@ -714,6 +718,9 @@ impl Fx {
                 }
                 _ => {}
             }
+        }
+        if let Some(text) = round_banner {
+            self.banner = Some((text, 2.5));
         }
     }
 

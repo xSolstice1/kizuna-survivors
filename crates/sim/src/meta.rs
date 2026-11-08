@@ -1057,6 +1057,7 @@ mod exotic_tests {
             it.art = Some(art);
             let mut w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
             w.time = 300.0;
+            w.round_seen = w.round();
             for _ in 0..900 {
                 let i = w.bot_input();
                 w.step(i);

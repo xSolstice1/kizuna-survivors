@@ -80,7 +80,7 @@ impl DevMenu {
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.6));
         let items: &[(&str, DevAction)] = if in_run {
             &[
-                ("Skip to mini-boss", SkipMini),
+                ("Skip to sub-boss", SkipMini),
                 ("Skip to second boss", SkipBoss),
                 ("Skip to final boss", SkipFinal),
                 ("Max loadout", MaxLoadout),

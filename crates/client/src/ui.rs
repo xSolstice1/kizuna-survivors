@@ -6,6 +6,7 @@ use crate::kit::{draw_circle, draw_circle_lines};
 use sim::content::{
     awakened_name, complement, hero_def, passive_max, EnemyKind, ShrineEvent, SpecialKind, Upgrade, AWAKEN_FROM, MAX_LEVEL,
 };
+use sim::campaign::{Headline, StageDef, MID_BOSS_ROUND, ROUNDS, SUB_BOSS_ROUND};
 use sim::World;
 
 use crate::kit::{self, mouse_position, NavInput, screen_height, screen_width, Style, DIM, FAINT, GOLD, INK, JADE, SAKURA, SKY, VERMILION};
@@ -182,7 +183,7 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
             kit::text(&label, 94.0, 90.0, fit_size(&label, room, 14.0), if full { ready } else { FAINT });
             if full && !touch {
                 let prompt = format!("Press SPACE: {}", hero.special_name);
-                kit::text_fit_centered(&prompt, w / 2.0, screen_height() - 40.0, w - 40.0, 20.0, ready);
+                kit::text_fit_centered(&prompt, w / 2.0, screen_height() - kit::MARGIN - ROUND_STRIP_H - 34.0, w - 40.0, 20.0, ready);
             }
         }
     }
@@ -242,7 +243,7 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     centered(&fmt_time(world.time), 60.0, 36.0, if night { Color::new(1.0, 0.55, 0.45, 1.0) } else { INK });
     let sub = if !night { format!("{} in {}", st.final_boss.short_name(), fmt_time(st.final_at - world.time)) } else { format!("dawn in {}", fmt_time(st.limit - world.time)) };
     kit::text_fit_centered(&sub, w / 2.0, 77.0, tw - 16.0, 13.0, if night { Color::new(1.0, 0.6, 0.5, 0.8 + 0.2 * (t * 4.0).sin()) } else { DIM });
-    stage_progress(world, w / 2.0, screen_height() - 26.0);
+    stage_progress(world, w / 2.0);
 
     // Boss bar, below the timer.
     if let Some((_, frac, kind)) = world.boss() {
@@ -252,7 +253,7 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
             EnemyKind::NightLord => "NIGHT LORD  ·  CHOCHIN DAIMYO".to_string(),
             k => k.name().to_uppercase(),
         };
-        kit::panel_ex(bx - 10.0, 90.0 + by, bw + 20.0, 40.0, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
+        kit::panel_ex(bx - 10.0, 90.0 + by, bw + 20.0, BOSS_PANEL_BOTTOM - 90.0 - by, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
         kit::text_fit_centered(&name, w / 2.0, 106.0 + by, bw, 14.0, Color::new(1.0, 0.75, 0.75, 1.0));
         // Phase pips for bosses that fight in phases.
         let phases = sim::content::boss_phases(kind, world.cfg.difficulty.extra_phases());
@@ -287,34 +288,83 @@ fn keycap(right: f32, y: f32, ready: bool, glow: f32) -> f32 {
     kw
 }
 
-/// The night's timeline along the bottom edge: shrines (gold) and bosses (red) up to the final boss,
-/// then a countdown to dawn.
-fn stage_progress(world: &World, cx: f32, y: f32) {
+pub fn headline_color(h: Headline) -> Color {
+    match h {
+        Headline::Uncommon => JADE,
+        Headline::Elite => SKY,
+        Headline::Leader => Color::new(0.72, 0.5, 1.0, 1.0),
+        Headline::SubBoss => Color::new(1.0, 0.62, 0.25, 1.0),
+        Headline::Boss => Color::new(1.0, 0.35, 0.35, 1.0),
+    }
+}
+
+pub fn headline_name(h: Headline) -> &'static str {
+    match h {
+        Headline::Uncommon => "UNCOMMON WAVE",
+        Headline::Elite => "ELITE",
+        Headline::Leader => "LEADER",
+        Headline::SubBoss => "SUB-BOSS",
+        Headline::Boss => "BOSS",
+    }
+}
+
+const BOSS_PANEL_BOTTOM: f32 = 144.0;
+/// Height of the round strip, so the HUD above it can stay clear.
+const ROUND_STRIP_H: f32 = 30.0;
+
+/// The night as 20 round segments along the bottom edge, with the round count and the next headline above.
+fn stage_progress(world: &World, cx: f32) {
     let st = world.stage();
-    let (bw, h) = (360.0, 6.0);
+    let round = world.round();
+    let bw = 460.0_f32.min(screen_width() - 2.0 * kit::MARGIN);
     let x0 = cx - bw / 2.0;
-    let track = Color::new(0.06, 0.05, 0.11, 0.85);
-    if world.time >= st.final_at {
-        let left = ((st.limit - world.time) / (st.limit - st.final_at)).clamp(0.0, 1.0);
-        kit::bar(x0, y, bw, h, left, Color::new(1.0, 0.45, 0.4, 1.0), track);
-        return;
-    }
-    kit::bar(x0, y, bw, h, world.time / st.final_at, SKY, track);
-    let at = |t: f32| x0 + bw * (t / st.final_at).clamp(0.0, 1.0);
-    let mark = |t: f32, tall: f32, c: Color| {
-        let c = if world.time >= t { Color::new(c.r, c.g, c.b, 0.35) } else { c };
-        draw_rectangle(at(t) - 1.5, y - tall, 3.0, h + 2.0 * tall, c);
+    let y = screen_height() - kit::MARGIN - ROUND_STRIP_H;
+    kit::panel(x0, y, bw, ROUND_STRIP_H);
+
+    kit::text(&format!("Round {round} / {ROUNDS}"), x0 + 2.0, y - 7.0, 14.0, INK);
+    let next = (round..=ROUNDS).find_map(|r| StageDef::headline(r).map(|h| (r, h)));
+    let (note, note_color) = match next {
+        _ if round == ROUNDS => (format!("dawn in {}", fmt_time((st.limit - world.time).max(0.0))), Color::new(1.0, 0.6, 0.5, 1.0)),
+        Some((r, h)) if r == round => (format!("{} now", title_case(headline_name(h))), headline_color(h)),
+        Some((r, h)) => {
+            let n = r - round;
+            (format!("{} in {n} round{}", title_case(headline_name(h)), if n == 1 { "" } else { "s" }), headline_color(h))
+        }
+        None => (String::new(), DIM),
     };
-    for &t in st.shrine_times {
-        mark(t, 2.0, GOLD);
+    let nw = kit::measure(&note, 14).width;
+    kit::text(&note, x0 + bw - nw - 2.0, y - 7.0, 14.0, note_color);
+
+    let (pad, gap) = (8.0, 2.0);
+    let sw = (bw - 2.0 * pad - gap * (ROUNDS - 1) as f32) / ROUNDS as f32;
+    for r in 1..=ROUNDS {
+        let sx = x0 + pad + (r - 1) as f32 * (sw + gap);
+        let sy = y + 6.0;
+        let tint = StageDef::headline(r).map(headline_color);
+        let fill = if r < round {
+            1.0
+        } else if r > round {
+            0.0
+        } else if r == ROUNDS {
+            ((st.limit - world.time) / (st.limit - st.final_at)).clamp(0.0, 1.0)
+        } else {
+            ((world.time - st.round_start(r)) / st.round_len()).clamp(0.0, 1.0)
+        };
+        let back = tint.map_or(Color::new(0.2, 0.18, 0.3, 0.9), |c| Color::new(c.r, c.g, c.b, 0.22));
+        draw_rectangle(sx, sy, sw, 14.0, back);
+        draw_rectangle(sx, sy, sw * fill, 14.0, tint.unwrap_or(SKY));
+        if let Some(c) = tint {
+            draw_rectangle_lines(sx, sy, sw, 14.0, 2.0, c);
+        }
+        if st.shrine_rounds.contains(&r) {
+            draw_circle(sx + sw / 2.0, y + 25.0, 2.0, GOLD);
+        }
     }
-    let boss = Color::new(1.0, 0.35, 0.35, 1.0);
-    mark(st.mini_at, 4.0, boss);
-    if let Some((_, t)) = st.boss {
-        mark(t, 4.0, boss);
-    }
-    mark(st.final_at, 6.0, boss);
-    draw_circle(at(world.time), y + h / 2.0, 5.0, INK);
+}
+
+fn title_case(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map_or_else(String::new, |f| f.to_string() + &c.as_str().to_lowercase())
 }
 
 // ───────────────────────── Level-up ─────────────────────────
@@ -458,12 +508,13 @@ pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize) -> Opti
     picked
 }
 
-pub fn banner(text: &str, left: f32) {
+/// `below_boss_bar` drops the banner under the boss panel so both stay readable.
+pub fn banner(text: &str, left: f32, below_boss_bar: bool) {
     let a = (left / 0.5).min(1.0);
     let (w, h) = (screen_width(), screen_height());
     let d = kit::measure(text, 30);
     let bw = d.width + 80.0;
-    let y = h * 0.22;
+    let y = if below_boss_bar { BOSS_PANEL_BOTTOM + 6.0 + 36.0 } else { h * 0.22 };
     kit::panel_ex((w - bw) / 2.0, y - 36.0, bw, 52.0, Color::new(0.10, 0.05, 0.08, 0.85 * a), Color::new(1.0, 0.82, 0.42, 0.6 * a));
     centered(text, y, 30.0, Color::new(1.0, 0.86, 0.5, a));
 }
@@ -575,12 +626,12 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev
         let d = kit::measure(label, 12);
         kit::text(label, x - d.width / 2.0, if up { ty - 8.0 } else { ty + 30.0 }, 12.0, c);
     };
-    for s in st.shrine_times {
-        mark(at(*s), "shrine", Color::new(1.0, 0.85, 0.5, 0.6), true);
+    for &r in st.shrine_rounds {
+        mark(at(st.round_start(r)), "shrine", Color::new(1.0, 0.85, 0.5, 0.6), true);
     }
-    mark(at(st.mini_at), "mini-boss", Color::new(1.0, 0.5, 0.5, 0.9), false);
-    if let Some((_, b)) = st.boss {
-        mark(at(b), "boss", Color::new(1.0, 0.42, 0.42, 0.95), false);
+    mark(at(st.round_start(SUB_BOSS_ROUND)), "sub-boss", Color::new(1.0, 0.5, 0.5, 0.9), false);
+    if st.boss.is_some() {
+        mark(at(st.round_start(MID_BOSS_ROUND)), "boss", Color::new(1.0, 0.42, 0.42, 0.95), false);
     }
     mark(at(st.final_at), st.final_boss.short_name(), Color::new(1.0, 0.35, 0.35, 1.0), false);
     mark(at(st.limit), "dawn", Color::new(1.0, 0.9, 0.6, 1.0), false);
@@ -889,7 +940,7 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
             ("you", INK),
             ("Otherworlders", Color::new(1.0, 0.25, 0.3, 1.0)),
             ("elite", Color::new(1.0, 0.45, 0.35, 1.0)),
-            ("mini-boss", Color::new(0.8, 0.6, 1.0, 1.0)),
+            ("sub-boss", Color::new(0.8, 0.6, 1.0, 1.0)),
             ("boss", Color::new(1.0, 0.5, 0.2, 1.0)),
             ("chest", GOLD),
             ("pickup", JADE),

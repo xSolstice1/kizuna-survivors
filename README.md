@@ -44,10 +44,11 @@ More heroes are on the way. Heroes unlock by clearing worlds with a specific her
 ### Campaign
 
 - **Prologue + five worlds**, each with its own tiles, props, music, eight Otherworlders,
-  a mini-boss, a boss and a final boss, and a signature hazard (bullet curtains, explosive tags,
+  a sub-boss, a boss and a final boss, and a signature hazard (bullet curtains, explosive tags,
   spirit pressure, a blinding downpour, hostile domains).
-- **30-minute nights**: invasion → escalation → elite wave and mini-boss → boss → crisis →
-  final boss before dawn.
+- **20 rounds a night**: every 4th round is a headline — an uncommon wave, the first elites, a
+  leader, the sub-boss, and the final boss in round 20 — while the bigger worlds add their own boss
+  in round 18; the final boss must fall before dawn.
 - **Normal / Hard / Nightmare**, then **Ascension** (Nightmare+1, +2, … with no cap).
   Clearing Normal opens the next world; Nightmare clears earn a permanent **relic**.
 - Bosses fight in phases; harder difficulties add phases.

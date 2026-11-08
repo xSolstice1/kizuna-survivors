@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use sim::campaign::{MID_BOSS_ROUND, SUB_BOSS_ROUND};
 use sim::world::DT;
 use sim::meta::{Profile, RunReport};
 use sim::{Input, RunState, Stress, World, WorldConfig};
@@ -388,10 +389,10 @@ async fn main() {
             use devmenu::DevAction::*;
             let st = world.stage();
             match a {
-                SkipMini => world.time = world.time.max(st.mini_at - 3.0),
+                SkipMini => world.time = world.time.max(st.round_start(SUB_BOSS_ROUND) - 3.0),
                 SkipBoss => {
-                    if let Some((_, at)) = st.boss {
-                        world.time = world.time.max(at - 3.0);
+                    if st.boss.is_some() {
+                        world.time = world.time.max(st.round_start(MID_BOSS_ROUND) - 3.0);
                     }
                 }
                 SkipFinal => world.time = world.time.max(st.final_at - 3.0),
@@ -529,7 +530,7 @@ async fn main() {
         }
 
         if let (Some((text, left)), false) = (&fx.banner, world.paused()) {
-            ui::banner(text, *left);
+            ui::banner(text, *left, world.boss().is_some());
         }
         let mut overlay_picked = false;
         let focus_overlay_open = world.chest_result.is_none() && (world.shrine_offer.is_some() || world.offer.is_some());

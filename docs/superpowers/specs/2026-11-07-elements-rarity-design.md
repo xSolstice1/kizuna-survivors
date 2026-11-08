@@ -378,3 +378,9 @@ None.
   rebuilt per `might()` call; T1 doc comments that restate names; `mouse_moved()` placement in ui.rs;
   dev-only debug overlay sits 12 px from the edge.
 - Replace the reused `Sfx::Bell` with a dedicated rising chime for the ultimate alert.
+- Riku fell from 9 to 6 wins of 10 on Shrine Valley Normal after rounds (seeds 21–30): the round-16
+  sub-boss and round-18 mid boss are only 2 rounds apart (300 s before), so he often fights both; needs a
+  per-hero lever. Phase 2 final values: HEADLINE_BUMP 1.01 (compounding), world rings [3, 7, 11, 15, 19],
+  world crisis rounds 15–17.
+- On 25-minute worlds the first chest now comes at round 4 (~3:57, was 2:00) and the first elite at
+  round 8 (~9:12).

@@ -36,7 +36,7 @@ pub const NOPPERABO_FADE_IN: f32 = 0.6;
 pub const SHOT_RADIUS: f32 = 5.0;
 pub const SHOT_DAMAGE: f32 = 4.0;
 
-/// Share of new spawns that are Chochin (from 4:00) and Nopperabo (from 9:00, after the mid-boss).
+/// Share of new spawns that are Chochin (from 4:00) and Nopperabo (from 9:00).
 pub fn chochin_share(t: f32) -> f32 {
     if t < 240.0 { 0.0 } else { (0.01 + (t - 240.0) / 660.0 * 0.02).min(0.03) }
 }
@@ -44,7 +44,6 @@ pub fn chochin_share(t: f32) -> f32 {
 pub fn nopperabo_share(t: f32) -> f32 {
     if t < 540.0 { 0.0 } else { (0.02 + (t - 540.0) / 360.0 * 0.02).min(0.04) }
 }
-pub const MIDBOSS_AT: f32 = 480.0;
 
 // ───────────────────────── Ren's special ─────────────────────────
 
@@ -1255,9 +1254,6 @@ pub fn chest_rarity(count: usize) -> &'static str {
 
 // ───────────────────────── Shrine Events ─────────────────────────
 
-/// Times (seconds) a roadside shrine appears.
-pub const SHRINE_TIMES: [f32; 4] = [180.0, 360.0, 540.0, 720.0];
-
 /// A shrine offers a blessing that always comes with a price.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShrineEvent {
@@ -1409,6 +1405,9 @@ pub fn kasa_share(t: f32) -> f32 {
     }
 }
 
+/// Extra enemy HP and damage step for each headline round reached.
+pub const HEADLINE_BUMP: f32 = 1.01;
+
 /// Enemy HP multiplier over the run.
 pub fn hp_scale(t: f32) -> f32 {
     let m = t / 60.0;
@@ -1428,9 +1427,6 @@ pub fn elite_interval(t: f32) -> f32 {
         120.0
     }
 }
-
-pub const ELITE_EVERY: f32 = 120.0;
-pub const SWARM_RING_TIMES: [f32; 3] = [300.0, 600.0, 840.0];
 
 #[cfg(test)]
 mod tests {

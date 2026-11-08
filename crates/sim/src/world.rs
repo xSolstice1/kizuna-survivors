@@ -1,6 +1,6 @@
 //! The run simulation: player, weapons, spawn director, enemies, pickups.
 
-use crate::campaign::{Difficulty, Mechanic, StageDef, StageId};
+use crate::campaign::{Difficulty, Headline, Mechanic, StageDef, StageId, MID_BOSS_ROUND, SUB_BOSS_ROUND};
 use crate::content::*;
 use crate::gear::{self, ArsenalArt, Exotic, Item, Loadout, Rarity, Unique};
 use crate::grid::Grid;
@@ -89,6 +89,8 @@ pub enum Event {
     BossSpawned(EnemyKind),
     /// The elite wave began.
     EliteWave,
+    /// A new round began.
+    RoundStarted { round: u8, headline: Option<Headline> },
     /// The Great Oni is winding up a charge in `dir`.
     BossTelegraph,
     Awakened(WeaponKind),
@@ -696,10 +698,10 @@ pub struct World {
     /// True if the run ended because dawn arrived with the Night Lord alive.
     pub dawn_out: bool,
     night_lord_spawned: bool,
+    /// Highest round whose start has been handled.
+    pub(crate) round_seen: u8,
     /// Bosses defeated this run: bit 0 mini-boss, bit 1 boss, bit 2 final boss.
     pub bosses_down: u8,
-    second_boss_spawned: bool,
-    elite_wave_done: bool,
     /// World hazards and boss strikes on the field.
     pub hazards: Vec<Hazard>,
     /// Equipment found this run (banked when it ends).
@@ -724,14 +726,11 @@ pub struct World {
     pub shrine: Option<Vec2>,
     /// Two Blessing+Price pairs to choose from. The sim pauses until `choose_shrine`.
     pub shrine_offer: Option<Vec<ShrineEvent>>,
-    shrines_done: usize,
     xp_carry: f32,
-    boss_spawned: bool,
     pub events: Vec<Event>,
     pending_levels: u32,
     next_id: u32,
     next_elite: f32,
-    rings_done: usize,
     rng: Rng,
     grid: Grid,
     scratch: Vec<u32>,
@@ -740,6 +739,7 @@ pub struct World {
 
 impl World {
     pub fn new(cfg: WorldConfig) -> Self {
+        let first_elite = cfg.stage.def().round_start(8);
         let rng = Rng::new(cfg.seed);
         let hero = hero_def(cfg.hero);
         let signature = hero.signature;
@@ -842,9 +842,8 @@ impl World {
             specials_used: 0,
             dawn_out: false,
             night_lord_spawned: false,
+            round_seen: 0,
             bosses_down: 0,
-            second_boss_spawned: false,
-            elite_wave_done: false,
             hazards: Vec::new(),
             loot: Vec::new(),
             gear_timers: [4.0, 6.0, 6.0, 3.0, 0.0, 0.0],
@@ -860,14 +859,11 @@ impl World {
             pending_spawns: Vec::new(),
             shrine: None,
             shrine_offer: None,
-            shrines_done: 0,
             xp_carry: 0.0,
-            boss_spawned: false,
             events: Vec::new(),
             pending_levels: 0,
             next_id: 0,
-            next_elite: ELITE_EVERY,
-            rings_done: 0,
+            next_elite: first_elite,
             rng,
             grid: Grid::new(cell, dim),
             scratch: Vec::new(),
@@ -1152,6 +1148,22 @@ impl World {
         self.player.pos + Vec2::from_angle(a) * radius
     }
 
+    pub fn round(&self) -> u8 {
+        self.stage().round_at(self.time)
+    }
+
+    /// Difficulty pace held at the current round's start, so it steps once per round.
+    pub fn round_pace(&self) -> f32 {
+        let st = self.stage();
+        st.pace(st.round_start(self.round()))
+    }
+
+    /// Compounds once per headline round reached, so difficulty never dips after one.
+    fn headline_bump(&self) -> f32 {
+        let reached = (1..=self.round()).filter(|&r| StageDef::headline(r).is_some()).count();
+        HEADLINE_BUMP.powi(reached as i32)
+    }
+
     pub fn stage(&self) -> &'static StageDef {
         self.cfg.stage.def()
     }
@@ -1160,7 +1172,7 @@ impl World {
     fn enemy_hp_scale(&self) -> f32 {
         let st = self.stage();
         let late = 1.0 + st.late_hp * (self.time / st.final_at).min(1.2).powi(2);
-        hp_scale(st.pace(self.time)) * late * st.tier * self.cfg.difficulty.hp() * self.ascension_hp()
+        hp_scale(self.round_pace()) * self.headline_bump() * late * st.tier * self.cfg.difficulty.hp() * self.ascension_hp()
     }
 
     fn ascension_hp(&self) -> f32 {
@@ -1189,7 +1201,7 @@ impl World {
 
     /// Enemy damage multiplier now (contact, bullets, hazards).
     pub fn enemy_damage_scale(&self) -> f32 {
-        damage_scale(self.stage().pace(self.time)) * self.cfg.difficulty.damage() * (1.0 + 0.12 * self.cfg.ascension as f32)
+        damage_scale(self.round_pace()) * self.headline_bump() * self.cfg.difficulty.damage() * (1.0 + 0.12 * self.cfg.ascension as f32)
     }
 
     fn spawn_enemy(&mut self, kind: EnemyKind, pos: Vec2) {
@@ -1243,9 +1255,57 @@ impl World {
         self.events.push(if kind.rank() == Rank::Final { Event::NightLordSpawned(kind) } else { Event::BossSpawned(kind) });
     }
 
+    fn start_round(&mut self, round: u8, basic: EnemyKind, rung: usize) {
+        let st = self.stage();
+        let density = self.cfg.difficulty.density();
+        self.events.push(Event::RoundStarted { round, headline: StageDef::headline(round) });
+        match round {
+            4 => {
+                let n = (24.0 * density) as usize;
+                self.spawn_ring(st.fodder_b, n, 270.0);
+                self.chests.push((self.player.pos + Vec2::new(0.0, -60.0), chest_tier(st.elite)));
+            }
+            8 if st.elite_wave => {
+                let n = 4 + self.cfg.difficulty.index() * 2;
+                self.spawn_ring(st.elite, n, self.cfg.spawn_radius);
+                self.events.push(Event::EliteWave);
+            }
+            12 => {
+                for _ in 0..3 {
+                    let p = self.ring_point(self.cfg.spawn_radius);
+                    self.spawn_enemy(st.elite, p);
+                }
+            }
+            SUB_BOSS_ROUND => self.spawn_boss(st.mini),
+            MID_BOSS_ROUND => {
+                if let Some(b) = st.boss {
+                    self.spawn_boss(b);
+                }
+            }
+            _ => {}
+        }
+        if st.shrine_rounds.contains(&round) {
+            let a = self.rng.range(0.0, std::f32::consts::TAU);
+            self.shrine = Some(stage::resolve(self.cfg.stage, self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
+            self.events.push(Event::ShrineAppeared);
+        }
+        if st.ring_rounds.contains(&round) {
+            let n = (120.0 * density * LADDER_COUNT[rung]) as usize;
+            self.spawn_ring(basic, n, 270.0);
+        }
+    }
+
+    fn spawn_ring(&mut self, kind: EnemyKind, n: usize, radius: f32) {
+        for k in 0..n {
+            let a = k as f32 / n as f32 * std::f32::consts::TAU;
+            let p = self.player.pos + Vec2::from_angle(a) * radius;
+            self.spawn_enemy(kind, p);
+        }
+    }
+
     fn director(&mut self) {
         let st = self.stage();
-        let pace = st.pace(self.time);
+        let pace = self.round_pace();
         let rung = ladder_rung(pace);
         let basic = if rung > 0 { st.fodder_b } else { st.fodder };
         let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * if st.in_crisis(self.time) { 1.35 } else { 1.0 } * LADDER_COUNT[rung];
@@ -1284,48 +1344,24 @@ impl World {
             for (k, p) in std::mem::take(&mut self.pending_spawns) {
                 self.spawn_enemy(k, p);
             }
-            if !self.boss_spawned && self.time >= st.mini_at {
-                self.boss_spawned = true;
-                self.spawn_boss(st.mini);
-            }
-            if let Some((b, at)) = st.boss {
-                if !self.second_boss_spawned && self.time >= at {
-                    self.second_boss_spawned = true;
+            let current = self.round();
+            if current > self.round_seen + 1 {
+                if current > SUB_BOSS_ROUND && self.round_seen < SUB_BOSS_ROUND {
+                    self.spawn_boss(st.mini);
+                }
+                if let (true, Some(b)) = (current > MID_BOSS_ROUND && self.round_seen < MID_BOSS_ROUND, st.boss) {
                     self.spawn_boss(b);
                 }
+                self.round_seen = current - 1;
             }
-            if self.shrines_done < st.shrine_times.len() && self.time >= st.shrine_times[self.shrines_done] {
-                self.shrines_done += 1;
-                let a = self.rng.range(0.0, std::f32::consts::TAU);
-                self.shrine = Some(stage::resolve(self.cfg.stage, self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
-                self.events.push(Event::ShrineAppeared);
+            while self.round_seen < current {
+                self.round_seen += 1;
+                self.start_round(self.round_seen, basic, rung);
             }
             if self.time >= self.next_elite {
                 self.next_elite += elite_interval(pace) * self.cfg.difficulty.elite_gap();
                 let p = self.ring_point(self.cfg.spawn_radius);
                 self.spawn_enemy(st.elite, p);
-            }
-            if let Some(at) = st.elite_wave_at {
-                if !self.elite_wave_done && self.time >= at {
-                    // The elite wave: a ring of elites closing in at once.
-                    self.elite_wave_done = true;
-                    let n = 4 + self.cfg.difficulty.index() * 2;
-                    for k in 0..n {
-                        let a = k as f32 / n as f32 * std::f32::consts::TAU;
-                        let p = self.player.pos + Vec2::from_angle(a) * self.cfg.spawn_radius;
-                        self.spawn_enemy(st.elite, p);
-                    }
-                    self.events.push(Event::EliteWave);
-                }
-            }
-            if self.rings_done < st.ring_times.len() && self.time >= st.ring_times[self.rings_done] {
-                self.rings_done += 1;
-                let n = (120.0 * self.cfg.difficulty.density() * LADDER_COUNT[rung]) as usize;
-                for k in 0..n {
-                    let a = k as f32 / n as f32 * std::f32::consts::TAU;
-                    let p = self.player.pos + Vec2::from_angle(a) * 270.0;
-                    self.spawn_enemy(basic, p);
-                }
             }
         }
 
@@ -4134,7 +4170,7 @@ impl World {
     pub fn open_chest(&mut self, min_rewards: u8) {
         self.chests_opened += 1;
         // Luck and time push the roll toward the rarer reward counts.
-        let roll = 1.0 - (1.0 - self.rng.f32()) / (1.0 + self.bonus.luck + chest_time_luck(self.stage().pace(self.time)));
+        let roll = 1.0 - (1.0 - self.rng.f32()) / (1.0 + self.bonus.luck + chest_time_luck(self.round_pace()));
         let extra = self.cfg.gear.unique(Unique::TreasureSense) as u8;
         let tier = chest_roll(roll).max(min_rewards) + extra;
         if self.cfg.stress.is_none() && self.rng.f32() < 0.05 * (1.0 + self.bonus.gear_find) {
@@ -4372,7 +4408,7 @@ impl World {
     pub fn fallback_amount(&self, u: Upgrade) -> f32 {
         match u {
             Upgrade::Heal => self.player.max_hp * ONIGIRI_HEAL,
-            Upgrade::Sen => SEN_POUCH * self.cfg.difficulty.greed() * (1.0 + self.stage().pace(self.time) / SEN_POUCH_RAMP),
+            Upgrade::Sen => SEN_POUCH * self.cfg.difficulty.greed() * (1.0 + self.round_pace() / SEN_POUCH_RAMP),
             Upgrade::Blessing => BLESSING_DAMAGE - 1.0,
             _ => 0.0,
         }
@@ -4740,9 +4776,9 @@ mod tests {
     }
 
     #[test]
-    fn great_oni_spawns_at_eight_minutes_and_drops_a_big_chest() {
+    fn great_oni_spawns_at_round_16_and_drops_a_big_chest() {
         let mut w = World::new(WorldConfig::default());
-        w.time = MIDBOSS_AT - 0.5;
+        w.time = w.stage().round_start(16) - 0.5;
         w.player.iframes = 1e9;
         for _ in 0..60 {
             w.step(Input::default());
@@ -4873,10 +4909,10 @@ mod tests {
     #[test]
     fn shrine_appears_offers_two_choices_and_applies_blessing_and_price() {
         let mut w = World::new(WorldConfig::default());
-        w.time = SHRINE_TIMES[0] - 0.01;
+        w.time = w.stage().round_start(w.stage().shrine_rounds[0]) - 0.01;
         w.player.iframes = 1e9;
         w.step(Input::default());
-        let s = w.shrine.expect("shrine should appear at 3:00");
+        let s = w.shrine.expect("shrine should appear at its round");
         w.player.pos = s;
         w.step(Input::default());
         let offer = w.shrine_offer.clone().expect("touching the shrine opens the offer");
@@ -4961,6 +4997,147 @@ mod tests {
         assert!(blinked);
         let i = w.enemies.kind.iter().position(|k| *k == EnemyKind::Nopperabo).unwrap();
         assert!((w.enemies.pos[i] - w.player.pos).length() < 160.0);
+    }
+
+    fn step_to(w: &mut World, t: f32) {
+        w.player.iframes = 1e9;
+        while w.time < t {
+            w.step(Input::default());
+        }
+    }
+
+    fn count_of(w: &World, k: EnemyKind) -> usize {
+        w.enemies.kind.iter().filter(|e| **e == k).count()
+    }
+
+    #[test]
+    fn mini_spawns_at_round_16_once() {
+        let mut w = World::new(WorldConfig::default());
+        let st = w.stage();
+        let at = st.round_start(16);
+        w.time = at - 1.0;
+        w.round_seen = 15;
+        step_to(&mut w, at - DT);
+        assert_eq!(count_of(&w, st.mini), 0);
+        step_to(&mut w, at + 3.0);
+        assert_eq!(count_of(&w, st.mini), 1);
+        let spawns = |w: &World| w.events.iter().filter(|e| matches!(e, Event::BossSpawned(k) if *k == st.mini)).count();
+        let mut seen = 1;
+        for _ in 0..240 {
+            w.events.clear();
+            w.step(Input::default());
+            seen += spawns(&w);
+        }
+        assert_eq!(seen, 1);
+    }
+
+    #[test]
+    fn mid_boss_at_round_18_only_on_worlds() {
+        for (id, expect) in [(StageId::ShrineValley, 1), (StageId::Shotengai, 0)] {
+            let mut w = World::new(WorldConfig { stage: id, ..Default::default() });
+            let st = w.stage();
+            let at = st.round_start(18);
+            w.time = at - 1.0;
+            w.round_seen = 17;
+            step_to(&mut w, at + 1.0);
+            let bosses = w.enemies.kind.iter().filter(|k| k.rank() == Rank::Boss).count();
+            assert_eq!(bosses, expect, "{id:?}");
+            if let Some(b) = st.boss {
+                assert_eq!(count_of(&w, b), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn elites_start_at_round_8() {
+        let mut w = World::new(WorldConfig::default());
+        let st = w.stage();
+        let at = st.round_start(8);
+        w.time = at - 2.0;
+        w.round_seen = 7;
+        step_to(&mut w, at - DT);
+        assert_eq!(count_of(&w, st.elite), 0);
+        step_to(&mut w, at + 0.1);
+        assert_eq!(count_of(&w, st.elite), 1);
+    }
+
+    #[test]
+    fn round_4_drops_a_chest() {
+        let mut w = World::new(WorldConfig::default());
+        let st = w.stage();
+        let at = st.round_start(4);
+        w.time = at - 1.0;
+        w.round_seen = 3;
+        step_to(&mut w, at - DT);
+        let (chests, kasa) = (w.chests.len(), count_of(&w, st.fodder_b));
+        step_to(&mut w, at + 0.1);
+        assert_eq!(w.chests.len(), chests + 1);
+        assert!(count_of(&w, st.fodder_b) >= kasa + 20);
+    }
+
+    #[test]
+    fn round_events_fire_once_each() {
+        let mut w = World::new(WorldConfig::default());
+        let end = w.stage().final_at + 1.0;
+        let mut started = Vec::new();
+        while w.time < end {
+            w.player.iframes = 1e9;
+            w.enemies.hp.iter_mut().for_each(|h| *h = 1e9);
+            if w.paused() {
+                w.time += 0.5;
+                continue;
+            }
+            w.events.clear();
+            w.step(Input::default());
+            for e in &w.events {
+                if let Event::RoundStarted { round, headline } = e {
+                    assert_eq!(*headline, StageDef::headline(*round));
+                    started.push(*round);
+                }
+            }
+        }
+        assert_eq!(started, (1..=20).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn time_jump_fires_only_current_round() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        let st = w.stage();
+        w.player.iframes = 1e9;
+        w.time = st.round_start(16) + 0.1;
+        w.events.clear();
+        w.step(Input::default());
+        let rounds: Vec<u8> = w.events.iter().filter_map(|e| if let Event::RoundStarted { round, .. } = e { Some(*round) } else { None }).collect();
+        assert_eq!(rounds, vec![16]);
+        assert_eq!(count_of(&w, st.mini), 1);
+        assert!(w.chests.is_empty());
+        assert!(!w.events.iter().any(|e| matches!(e, Event::EliteWave)));
+    }
+
+    #[test]
+    fn late_time_jump_keeps_one_boss_each() {
+        let jump = |w: &mut World, t: f32| {
+            w.time = t;
+            w.step(Input::default());
+        };
+        let totals = |w: &World| {
+            let st = w.stage();
+            (count_of(w, st.mini), count_of(w, st.boss.unwrap()), count_of(w, st.final_boss))
+        };
+        for (hops, want) in [
+            (vec![16.1_f32, 19.1], (1, 1, 0)),
+            (vec![16.1, 18.1, 20.0], (1, 1, 1)),
+            (vec![19.1], (1, 1, 0)),
+        ] {
+            let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+            w.player.iframes = 1e9;
+            let st = w.stage();
+            for r in hops {
+                let t = if r == 20.0 { st.final_at + 0.1 } else { st.round_start(r as u8) + (r - r.floor()) };
+                jump(&mut w, t);
+            }
+            assert_eq!(totals(&w), want);
+        }
     }
 
     #[test]
@@ -5239,13 +5416,56 @@ mod tests {
     }
 
     #[test]
+    fn difficulty_steps_per_round() {
+        let mut w = World::new(WorldConfig::default());
+        let mut hp_at = |t: f32| {
+            w.time = t;
+            w.enemy_hp_scale()
+        };
+        let st = StageId::Shotengai.def();
+        let (early, late, next) = (hp_at(st.round_start(5) + 1.0), hp_at(st.round_start(6) - 1.0), hp_at(st.round_start(6) + 1.0));
+        assert_eq!(early, late, "HP scale should hold flat within a round");
+        assert!(next > late, "HP scale should step up at the next round");
+    }
+
+    #[test]
+    fn headline_rounds_step_harder() {
+        let mut w = World::new(WorldConfig::default());
+        let mut scales_in = |r: u8| {
+            w.time = w.stage().round_start(r) + 1.0;
+            (w.enemy_hp_scale(), w.enemy_damage_scale())
+        };
+        let ((h6, d6), (h7, d7), (h8, d8)) = (scales_in(6), scales_in(7), scales_in(8));
+        assert!(h8 / h7 > h7 / h6, "HP step into headline round 8 ({}) should beat the step before ({})", h8 / h7, h7 / h6);
+        assert!(d8 / d7 > d7 / d6, "damage step into headline round 8 ({}) should beat the step before ({})", d8 / d7, d7 / d6);
+    }
+
+    #[test]
+    fn difficulty_never_drops() {
+        for stage in crate::campaign::ALL_STAGES {
+            let mut w = World::new(WorldConfig { stage, ..Default::default() });
+            let mut scales_in = |r: u8| {
+                let st = w.stage();
+                w.time = st.round_start(r) + st.round_len() / 2.0;
+                (w.enemy_hp_scale(), w.enemy_damage_scale())
+            };
+            for r in 1..=19 {
+                let ((h, d), (h2, d2)) = (scales_in(r), scales_in(r + 1));
+                assert!(h2 >= h, "{stage:?}: HP scale drops from round {r} ({h}) to {} ({h2})", r + 1);
+                assert!(d2 >= d, "{stage:?}: damage scale drops from round {r} ({d}) to {} ({d2})", r + 1);
+            }
+        }
+    }
+
+    #[test]
     fn late_rings_are_thinned_like_the_ladder() {
         let mut w = World::new(WorldConfig::default());
-        let at = w.stage().ring_times[0];
+        let at = w.stage().round_start(*w.stage().ring_rounds.last().unwrap());
         assert!(ladder_rung(w.stage().pace(at)) > 0, "first ring should land on a later rung");
         w.step(Input::default());
         w.enemies = Enemies::default();
         w.time = at;
+        w.round_seen = w.round() - 1;
         w.step(Input::default());
         let p = w.player.pos;
         let ring = w.enemies.pos.iter().filter(|e| ((**e - p).length() - 270.0).abs() < 20.0).count();
@@ -5517,7 +5737,7 @@ mod tests {
     fn basic_fodder_stops_spawning_after_five_minutes() {
         let mut w = World::new(WorldConfig::default());
         w.time = 400.0;
-        w.boss_spawned = true;
+        w.round_seen = w.round();
         for _ in 0..120 {
             w.director();
         }

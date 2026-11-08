@@ -162,6 +162,7 @@ impl Audio {
 
     /// Plays the sounds for one sim step's events.
     pub fn absorb(&mut self, events: &[Event]) {
+        let mut gonged = false;
         for ev in events {
             let s = match *ev {
                 Event::Hit { .. } => Sfx::Hit,
@@ -181,7 +182,7 @@ impl Audio {
                 Event::PlayerHurt => Sfx::Hurt,
                 Event::LevelUp => Sfx::LevelUp,
                 Event::SpecialUsed { .. } => Sfx::Special,
-                Event::BossSpawned(_) | Event::EliteWave => Sfx::Gong,
+                Event::BossSpawned(_) | Event::EliteWave | Event::RoundStarted { headline: Some(_), .. } => Sfx::Gong,
                 Event::BossTelegraph => Sfx::Rumble,
                 Event::Awakened(_) => Sfx::Awaken,
                 Event::Bolt { .. } => Sfx::Zap,
@@ -209,7 +210,7 @@ impl Audio {
                 Event::Fired(WeaponKind::VoidLance) => Sfx::BeamSfx,
                 Event::Fired(WeaponKind::SoulTether) => Sfx::Chain,
                 Event::Fired(WeaponKind::IaiFlash) => Sfx::IaiSfx,
-                Event::Fired(_) => continue,
+                Event::Fired(_) | Event::RoundStarted { .. } => continue,
                 Event::Burst { style, .. } => match style {
                     sim::world::style::METEOR => Sfx::Meteor,
                     sim::world::style::SKYBOLT => Sfx::Thunder,
@@ -263,6 +264,12 @@ impl Audio {
                 Event::Devour { .. } => Sfx::Chomp,
                 Event::MukadeAwakened { .. } => Sfx::Roar,
             };
+            if matches!(s, Sfx::Gong) {
+                if gonged {
+                    continue;
+                }
+                gonged = true;
+            }
             self.play(s);
         }
     }

@@ -226,6 +226,20 @@ impl Relic {
     }
 }
 
+pub const ROUNDS: u8 = 20;
+pub const SUB_BOSS_ROUND: u8 = 16;
+pub const MID_BOSS_ROUND: u8 = 18;
+
+/// The set piece that opens every fourth round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Headline {
+    Uncommon,
+    Elite,
+    Leader,
+    SubBoss,
+    Boss,
+}
+
 /// One stage: who spawns, when the bosses come, and the world's twist.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StageDef {
@@ -241,19 +255,18 @@ pub struct StageDef {
     pub blinker: EnemyKind,
     pub elite: EnemyKind,
     pub mini: EnemyKind,
-    pub mini_at: f32,
-    /// Optional second boss mid-run.
-    pub boss: Option<(EnemyKind, f32)>,
+    /// Optional second boss, spawned at round 18.
+    pub boss: Option<EnemyKind>,
     pub final_boss: EnemyKind,
     pub final_at: f32,
     /// Dawn: the run ends (lost) if the final boss still lives.
     pub limit: f32,
-    /// A burst of elites (with a swarm ring) at this time.
-    pub elite_wave_at: Option<f32>,
-    /// Density spikes and the mechanic intensifies between these times.
-    pub crisis: Option<(f32, f32)>,
-    pub shrine_times: &'static [f32],
-    pub ring_times: &'static [f32],
+    /// A burst of elites at round 8.
+    pub elite_wave: bool,
+    /// Density spikes and the mechanic intensifies in these rounds (inclusive).
+    pub crisis: Option<(u8, u8)>,
+    pub shrine_rounds: &'static [u8],
+    pub ring_rounds: &'static [u8],
     pub mechanic: Mechanic,
     /// Multiplier on the share of ranged spawns.
     pub ranged_mult: f32,
@@ -271,15 +284,49 @@ impl StageDef {
         t * 900.0 / self.final_at
     }
     pub fn in_crisis(&self, t: f32) -> bool {
-        self.crisis.is_some_and(|(a, b)| t >= a && t < b)
+        let r = self.round_at(t);
+        self.crisis.is_some_and(|(a, b)| r >= a && r <= b)
+    }
+    pub fn round_len(&self) -> f32 {
+        self.final_at / (ROUNDS - 1) as f32
+    }
+    /// Round 1..=20; the last starts exactly at the final boss.
+    pub fn round_at(&self, t: f32) -> u8 {
+        if t >= self.final_at {
+            return ROUNDS;
+        }
+        let mut r = ((t.max(0.0) / self.round_len()) as u8 + 1).min(ROUNDS - 1);
+        while r < ROUNDS - 1 && t >= self.round_start(r + 1) {
+            r += 1;
+        }
+        while r > 1 && t < self.round_start(r) {
+            r -= 1;
+        }
+        r
+    }
+    pub fn round_start(&self, r: u8) -> f32 {
+        if r >= ROUNDS {
+            return self.final_at;
+        }
+        (r.max(1) - 1) as f32 * self.round_len()
+    }
+    pub fn headline(r: u8) -> Option<Headline> {
+        match r {
+            4 => Some(Headline::Uncommon),
+            8 => Some(Headline::Elite),
+            12 => Some(Headline::Leader),
+            16 => Some(Headline::SubBoss),
+            20 => Some(Headline::Boss),
+            _ => None,
+        }
     }
     pub fn long(&self) -> bool {
         self.final_at > 900.0
     }
 }
 
-const WORLD_SHRINES: [f32; 5] = [180.0, 420.0, 660.0, 960.0, 1260.0];
-const WORLD_RINGS: [f32; 5] = [300.0, 600.0, 900.0, 1200.0, 1380.0];
+const WORLD_SHRINES: [u8; 5] = [3, 6, 9, 13, 16];
+const WORLD_RINGS: [u8; 5] = [3, 7, 11, 15, 19];
 
 const fn world(
     id: StageId,
@@ -303,15 +350,14 @@ const fn world(
         blinker: roster[3],
         elite: roster[4],
         mini: roster[5],
-        mini_at: 720.0,
-        boss: Some((roster[6], 1020.0)),
+        boss: Some(roster[6]),
         final_boss: roster[7],
         final_at: 1500.0,
         limit: 1800.0,
-        elite_wave_at: Some(600.0),
-        crisis: Some((1200.0, 1500.0)),
-        shrine_times: &WORLD_SHRINES,
-        ring_times: &WORLD_RINGS,
+        elite_wave: true,
+        crisis: Some((15, 17)),
+        shrine_rounds: &WORLD_SHRINES,
+        ring_rounds: &WORLD_RINGS,
         mechanic,
         ranged_mult,
         tier,
@@ -332,15 +378,14 @@ pub static STAGES: [StageDef; 6] = [
         blinker: Nopperabo,
         elite: Oni,
         mini: GreatOni,
-        mini_at: 480.0,
         boss: None,
         final_boss: NightLord,
         final_at: 900.0,
         limit: 1020.0,
-        elite_wave_at: None,
+        elite_wave: false,
         crisis: None,
-        shrine_times: &[180.0, 360.0, 540.0, 720.0],
-        ring_times: &[300.0, 600.0, 840.0],
+        shrine_rounds: &[5, 9, 13, 17],
+        ring_rounds: &[7, 13, 18],
         mechanic: Mechanic::None,
         ranged_mult: 1.0,
         tier: 1.0,
@@ -408,7 +453,7 @@ pub static STAGES: [StageDef; 6] = [
 pub fn home_stage(k: EnemyKind) -> StageId {
     for s in &STAGES {
         let roster = [s.fodder, s.fodder_b, s.ranged, s.blinker, s.elite, s.mini, s.final_boss];
-        if roster.contains(&k) || s.boss.is_some_and(|(b, _)| b == k) {
+        if roster.contains(&k) || s.boss == Some(k) {
             return s.id;
         }
     }
@@ -424,19 +469,45 @@ mod tests {
     fn every_enemy_has_a_home_and_rosters_match_ranks() {
         for k in ALL_ENEMIES {
             let s = home_stage(k).def();
-            let listed = [s.fodder, s.fodder_b, s.ranged, s.blinker, s.elite, s.mini, s.final_boss].contains(&k) || s.boss.is_some_and(|(b, _)| b == k);
+            let listed = [s.fodder, s.fodder_b, s.ranged, s.blinker, s.elite, s.mini, s.final_boss].contains(&k) || s.boss == Some(k);
             assert!(listed, "{k:?} is in no roster");
         }
         for s in &STAGES {
             assert_eq!(s.elite.rank(), Rank::Elite, "{:?}", s.id);
             assert_eq!(s.mini.rank(), Rank::Mini, "{:?}", s.id);
             assert_eq!(s.final_boss.rank(), Rank::Final, "{:?}", s.id);
-            if let Some((b, at)) = s.boss {
+            if let Some(b) = s.boss {
                 assert_eq!(b.rank(), Rank::Boss);
-                assert!(at > s.mini_at && at < s.final_at);
             }
             assert!(s.final_at < s.limit);
             assert_eq!(s.id.def().id, s.id);
+        }
+    }
+
+    #[test]
+    fn rounds_split_the_night() {
+        let s = StageId::Shotengai.def();
+        assert_eq!(s.round_at(0.0), 1);
+        assert_eq!(s.round_at(s.final_at - 0.01), 19);
+        assert_eq!(s.round_at(s.final_at), 20);
+        assert_eq!(s.round_at(s.limit), 20);
+        assert!((s.round_start(16) - 15.0 * s.final_at / 19.0).abs() < 1e-3);
+        assert_eq!(s.round_start(20), s.final_at);
+    }
+
+    #[test]
+    fn headlines_every_four_rounds() {
+        use Headline::*;
+        let got: Vec<_> = (1..=20).filter_map(|r| StageDef::headline(r).map(|h| (r, h))).collect();
+        assert_eq!(got, vec![(4, Uncommon), (8, Elite), (12, Leader), (16, SubBoss), (20, Boss)]);
+    }
+
+    #[test]
+    fn round_starts_round_trip() {
+        for s in &STAGES {
+            for r in 1..=ROUNDS {
+                assert_eq!(s.round_at(s.round_start(r)), r, "{:?} round {r}", s.id);
+            }
         }
     }
 }

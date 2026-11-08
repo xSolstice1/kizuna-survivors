@@ -1100,7 +1100,7 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
             }
             // Boss progress: mini / boss / final (bits ever defeated).
             let bits = profile.stage_bosses[si];
-            let kinds: Vec<(EnemyKind, u8)> = [Some((def.mini, 1u8)), def.boss.map(|(b, _)| (b, 2u8)), Some((def.final_boss, 4u8))].into_iter().flatten().collect();
+            let kinds: Vec<(EnemyKind, u8)> = [Some((def.mini, 1u8)), def.boss.map(|b| (b, 2u8)), Some((def.final_boss, 4u8))].into_iter().flatten().collect();
             let mut bx = r.x + r.w - 14.0 - kinds.len() as f32 * 24.0;
             for (k, bit) in kinds {
                 let tex = assets.enemy_tex(k);
