@@ -222,8 +222,8 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     let mouse: Vec2 = mouse_position().into();
     crate::menu::centered("ARMORY", 52.0, 40.0, crate::menu::ACCENT);
     let sen = format!("{}", profile.sen);
-    kit::chip(w - 20.0 - kit::measure(&sen, 20).width - kit::measure("SEN", 14).width - 28.0, 18.0, "SEN", &sen, GOLD);
-    dust_badge(assets, profile.dust, w - 330.0, 18.0);
+    kit::chip(w - kit::MARGIN - kit::measure(&sen, 20).width - kit::measure("SEN", 14).width - 28.0, kit::MARGIN, "SEN", &sen, GOLD);
+    dust_badge(assets, profile.dust, w - 330.0, kit::MARGIN);
     let mut changed = false;
 
     // Heroes: pick one to view, equip it to make it the active hero.
@@ -325,7 +325,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
 
     // Loadout totals.
     let l = profile.loadout(hero);
-    let (tx, ty, tw, th) = (lx, dy + dh + 10.0, dw, 720.0 - dy - dh - 22.0);
+    let (tx, ty, tw, th) = (lx, dy + dh + 10.0, dw, kit::screen_height() - kit::MARGIN - (dy + dh + 10.0));
     kit::panel(tx, ty, tw, th);
     let mut lines: Vec<String> = Vec::new();
     let b = l.bonus;
@@ -438,7 +438,9 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     }
 
     // Details.
-    let (ix, iy, iw, ih) = (bx + bw + 14.0, 74.0, w - (bx + bw + 14.0) - 20.0, 590.0);
+    let back_y = kit::screen_height() - kit::MARGIN - 40.0;
+    let (ix, iy, iw) = (bx + bw + 14.0, 74.0, w - (bx + bw + 14.0) - kit::MARGIN);
+    let ih = back_y - 8.0 - iy;
     match st.selected.and_then(|id| profile.item(id)).cloned() {
         Some(it) => {
             if let Some(a) = item_detail(profile, assets, &it, hero, ix, iy, iw, ih, true) {
@@ -490,7 +492,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
             }
         }
     }
-    if kit::button(Rect::new(ix + iw - 160.0, 720.0 - 52.0, 160.0, 40.0), "Back", true, Style::Secondary) || is_key_pressed(KeyCode::Escape) {
+    if kit::button(Rect::new(ix + iw - 160.0, back_y, 160.0, 40.0), "Back", true, Style::Secondary) || is_key_pressed(KeyCode::Escape) {
         return Some(ArmoryAction::Back);
     }
     changed.then_some(ArmoryAction::Changed)
@@ -519,7 +521,7 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
     let mouse: Vec2 = mouse_position().into();
     crate::menu::centered("SHRINE DRAW", 52.0, 40.0, crate::menu::ACCENT);
     let sen = format!("{}", profile.sen);
-    kit::chip(w - 20.0 - kit::measure(&sen, 20).width - kit::measure("SEN", 14).width - 28.0, 18.0, "SEN", &sen, GOLD);
+    kit::chip(w - kit::MARGIN - kit::measure(&sen, 20).width - kit::measure("SEN", 14).width - 28.0, kit::MARGIN, "SEN", &sen, GOLD);
     let mut action = None;
 
     // Odds and pity.
@@ -599,14 +601,14 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
             st.selected = Some(*id);
         }
     }
-    let (ix, iw) = (rx + rw + 14.0, w - (rx + rw + 14.0) - 20.0);
+    let (ix, iw) = (rx + rw + 14.0, w - (rx + rw + 14.0) - kit::MARGIN);
     if let Some(it) = st.selected.and_then(|id| profile.item(id)).cloned() {
         let hero = profile.selected;
         if let Some(DetailAction::Lock) = item_detail(profile, assets, &it, hero, ix, 80.0, iw, 520.0, false) {
             action = Some(DrawAction::Changed);
         }
     }
-    if kit::button(Rect::new(w - 180.0, 720.0 - 56.0, 160.0, 42.0), "Back", true, Style::Secondary) || is_key_pressed(KeyCode::Escape) {
+    if kit::button(Rect::new(w - kit::MARGIN - 160.0, kit::screen_height() - kit::MARGIN - 42.0, 160.0, 42.0), "Back", true, Style::Secondary) || is_key_pressed(KeyCode::Escape) {
         action = Some(DrawAction::Back);
     }
     action

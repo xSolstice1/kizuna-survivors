@@ -45,9 +45,9 @@ pub fn fullscreen_button(r: Rect) {
 fn sen_badge(assets: &Assets, sen: u32) {
     let v = format!("{sen}");
     let w = kit::measure(&v, 20).width + kit::measure("SEN", 14).width + 28.0;
-    let x = screen_width() - w - 20.0;
-    kit::chip(x, 18.0, "SEN", &v, GOLD);
-    draw_texture_ex(&assets.coin, x - 26.0, 22.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
+    let x = screen_width() - w - kit::MARGIN;
+    kit::chip(x, kit::MARGIN, "SEN", &v, GOLD);
+    draw_texture_ex(&assets.coin, x - 26.0, kit::MARGIN + 4.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
 }
 
 pub fn backdrop(time: f64) {
@@ -378,18 +378,18 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Start);
     }
 
-    if dev && kit::button(Rect::new(20.0, h - 52.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
+    if dev && kit::button(Rect::new(kit::MARGIN, h - kit::MARGIN - 36.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
         action = Some(MenuAction::Dev);
     }
     // Copyright (the font has no © glyph, so the circle is drawn).
     let owner = "2026 xSolstice1";
     let ow = kit::measure(owner, 13).width;
-    let (cx2, cy2) = (w - 24.0 - ow - 14.0, h - 18.0);
+    let (cx2, cy2) = (w - kit::MARGIN - ow - 14.0, h - kit::MARGIN - 4.0);
     draw_circle_lines(cx2, cy2, 6.5, 1.2, Color::new(1.0, 1.0, 1.0, 0.45));
     kit::text("c", cx2 - 3.2, cy2 + 3.6, 11.0, Color::new(1.0, 1.0, 1.0, 0.45));
-    kit::text(owner, w - 24.0 - ow, h - 13.5, 13.0, Color::new(1.0, 1.0, 1.0, 0.45));
+    kit::text(owner, w - kit::MARGIN - ow, h - kit::MARGIN, 13.0, Color::new(1.0, 1.0, 1.0, 0.45));
     let hint = "WASD / arrows to move   ·   Space: special   ·   Esc to pause";
-    kit::text_fit_centered(hint, w / 2.0, h - 14.0, w - 300.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
+    kit::text_fit_centered(hint, w / 2.0, h - kit::MARGIN, w - 300.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
     action
 }
 
@@ -1131,7 +1131,7 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
     let py = y0 + 2.0 * (ch + gap) + 4.0;
     let pw = (w - 60.0).min(1180.0);
     let px = (w - pw) / 2.0;
-    kit::panel_ex(px, py, pw, 720.0 - py - 12.0, PANEL, Color::new(1.0, 1.0, 1.0, 0.18));
+    kit::panel_ex(px, py, pw, screen_height() - kit::MARGIN - py, PANEL, Color::new(1.0, 1.0, 1.0, 0.18));
     let bw = 150.0;
     for d in ALL_DIFFICULTIES {
         let rr = Rect::new(px + 16.0 + d.index() as f32 * (bw + 10.0), py + 14.0, bw, 40.0);

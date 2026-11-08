@@ -810,6 +810,13 @@ impl<'a> Sprites<'a> {
     }
 }
 
+/// Darker and greyer: marks an enemy the player's attacks cannot reach.
+fn dimmed(c: Color) -> Color {
+    let grey = 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+    let k = 0.55;
+    Color::new((grey + (c.r - grey) * 0.5) * k, (grey + (c.g - grey) * 0.5) * k, (grey + (c.b - grey) * 0.5) * k, c.a)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, flip: bool, accent: Color, time: f64, sprites: &mut Sprites<'a>, shadows: &mut Sprites<'a>, shadow: &'a Texture2D) {
     use sim::content::{enemy_def, Ai, Rank};
@@ -861,6 +868,9 @@ fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, 
     }
     let (sw, sh) = (w * 0.7, (w * 0.2).max(5.0));
     shadows.push(shadow, pos.x - sw / 2.0, pos.y + h * 0.25 - 1.0 - sh / 2.0, Color::new(0.0, 0.0, 0.0, 0.4), DrawTextureParams { dest_size: Some(vec2(sw, sh)), ..Default::default() });
+    if !world.in_reach(pos, e.radius[i]) {
+        tint = dimmed(tint);
+    }
     sprites.push(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
 }
 
@@ -1087,6 +1097,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             WHITE
         };
         let flip = e.kind[i] != EnemyKind::Wisp && pos.x > p.x;
+        let out_of_reach = !world.in_reach(pos, e.radius[i]);
         if e.kind[i] == EnemyKind::GreatOni {
             // Double-size oni; flashes and shows its line while winding up a charge.
             let winding = e.ai_state[i] == 1;
@@ -1101,6 +1112,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             } else {
                 Color::new(0.85, 0.7, 1.0, 1.0)
             };
+            let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
             draw_texture_ex(
                 &a.oni,
@@ -1115,6 +1127,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             // Big, bobbing lantern with a warm glow; drawn at 2x (96px).
             let bob = ((time * 2.0).sin() * 3.0) as f32;
             let glow = 0.18 + 0.06 * (time * 5.0).sin() as f32;
+            let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
             draw_ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
             draw_texture_ex(
@@ -1145,6 +1158,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             // Fading out before a blink (state 1), fading back in after it (state 2).
             let t = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
             tint.a = t.clamp(0.1, 1.0) * 0.85;
+        }
+        if out_of_reach {
+            tint = dimmed(tint);
         }
         sprites.push(tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
     }

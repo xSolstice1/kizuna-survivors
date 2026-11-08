@@ -11,12 +11,23 @@ pub use crate::enemies::*;
 
 pub const MAX_ENEMY_RADIUS: f32 = 36.0;
 
+use crate::Vec2;
+
+/// Attacks only land inside this box around the player (shrunk on small screens).
+pub const REACH_HALF: Vec2 = Vec2::new(192.0, 108.0);
+pub const REACH_RANGED: f32 = 1.0;
+pub const REACH_HYBRID: f32 = 0.9;
+pub const REACH_MELEE: f32 = 0.8;
+/// Reach stays at least this far inside the visible edge.
+pub const REACH_EDGE: f32 = 24.0;
+pub const DEFAULT_VIEW_HALF: Vec2 = Vec2::new(320.0, 180.0);
+/// Melee reach covers far fewer enemies, so melee heroes hit harder; hybrids keep pace without help.
+pub const MIGHT_MELEE: f32 = 2.3;
+/// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
+pub const BOSS_HP: f32 = 0.5;
+
 /// The Night Lord arrives at RUN_SECONDS; if still alive at this time, dawn takes the player.
 pub const DAWN_LIMIT: f32 = 17.0 * 60.0;
-
-pub fn night_lord_hp() -> f32 {
-    50_000.0
-}
 
 /// Seconds a Nopperabo takes to fade back in after a blink (harmless meanwhile).
 pub const NOPPERABO_FADE_IN: f32 = 0.6;
@@ -725,6 +736,10 @@ pub struct HeroDef {
     pub signature: WeaponKind,
     /// Weapons with any of these tags (plus `Shared`) can be offered.
     pub pool_tags: &'static [Tag],
+    /// Scales `REACH_HALF`.
+    pub reach: f32,
+    /// Damage multiplier that offsets a shorter reach.
+    pub reach_might: f32,
     pub weapon_slots: usize,
     pub passive_slots: usize,
     /// False while the hero's own sprite and special move are still placeholders.
@@ -756,7 +771,12 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Kuon => (SpecialKind::Firmament, "Domain: Endless Firmament"),
         _ => (SpecialKind::Barrier, "Barrier"),
     };
-    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
+    let (reach, reach_might) = match id {
+        HeroId::Ren | HeroId::Kuon | HeroId::Mika | HeroId::Nanami => (REACH_RANGED, 1.0),
+        HeroId::Riku | HeroId::Kaede | HeroId::Yuzu => (REACH_HYBRID, 1.0),
+        HeroId::Shun | HeroId::Toya | HeroId::Haru => (REACH_MELEE, MIGHT_MELEE),
+    };
+    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
 }
 
 impl HeroDef {
@@ -805,10 +825,10 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
 pub fn awakened_text(kind: WeaponKind) -> &'static str {
     match kind {
         WeaponKind::Ofuda => "Seal Storm: an endless stream of homing seals that explode on contact, on top of twice the talismans.",
-        WeaponKind::MoonOrbs => "Lunar Eclipse: a second ring of moons, and moonbeams sweep the whole screen every few seconds.",
+        WeaponKind::MoonOrbs => "Lunar Eclipse: a second ring of moons, and moonbeams sweep your reach every few seconds.",
         WeaponKind::SakuraField => "Hanafubuki: a ceaseless spiral storm of cutting petals pours out of a wider field that heals you.",
         WeaponKind::ThunderChain => "Heavenfall: lightning keeps crashing down from the sky on nearby enemies, plus twice the chains.",
-        WeaponKind::Taiko => "Festival Quake: colossal shockwaves roll out across the screen between the beats.",
+        WeaponKind::Taiko => "Festival Quake: colossal shockwaves roll out across your reach between the beats.",
         WeaponKind::StarFall => "Meteor: giant meteors crash down and leave burning craters, on top of twice the stars.",
         WeaponKind::Crescent => "Moonlit Waves: cuts a full circle and every swing fires eight crescent waves.",
         WeaponKind::FlamePool => "Foxfire Trail: you leave a trail of burning ground wherever you walk; pools burn longer and wider.",
@@ -1333,6 +1353,9 @@ impl Default for Modifiers {
 }
 
 // ───────────────────────── Progression & pacing ─────────────────────────
+
+/// Attacks only land inside the reach box, so kills are rarer; each gem is worth more to keep levelling on pace.
+pub const XP_GAIN: f32 = 2.0;
 
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;

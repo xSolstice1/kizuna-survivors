@@ -280,6 +280,56 @@ pub fn button(r: Rect, label: &str, enabled: bool, style: Style) -> bool {
     hover && is_mouse_button_pressed(MouseButton::Left)
 }
 
+/// Gap between UI and the screen edge, in virtual pixels.
+pub const MARGIN: f32 = 24.0;
+
+/// Keyboard intent for menu focus, read once per frame.
+pub struct NavInput {
+    pub prev: bool,
+    pub next: bool,
+    pub confirm: bool,
+    pub digit: Option<usize>,
+}
+
+impl NavInput {
+    pub fn read() -> NavInput {
+        let any = |keys: &[KeyCode]| keys.iter().any(|&k| is_key_pressed(k));
+        const DIGITS: [KeyCode; 9] = [
+            KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5,
+            KeyCode::Key6, KeyCode::Key7, KeyCode::Key8, KeyCode::Key9,
+        ];
+        NavInput {
+            prev: any(&[KeyCode::Left, KeyCode::A, KeyCode::Up, KeyCode::W]),
+            next: any(&[KeyCode::Right, KeyCode::D, KeyCode::Down, KeyCode::S]),
+            confirm: any(&[KeyCode::Enter, KeyCode::KpEnter, KeyCode::Space]),
+            digit: DIGITS.iter().position(|&k| is_key_pressed(k)),
+        }
+    }
+}
+
+/// Moves focus among `n` items (wrapping) and reports the item picked this frame, if any.
+pub fn nav(focus: usize, n: usize, input: &NavInput) -> (usize, Option<usize>) {
+    if n == 0 {
+        return (0, None);
+    }
+    let mut focus = focus.min(n - 1);
+    if let Some(d) = input.digit.filter(|&d| d < n) {
+        return (d, Some(d));
+    }
+    if input.next {
+        focus = (focus + 1) % n;
+    } else if input.prev {
+        focus = (focus + n - 1) % n;
+    }
+    (focus, input.confirm.then_some(focus))
+}
+
+/// Pulsing outline marking the keyboard-focused item.
+pub fn focus_ring(x: f32, y: f32, w: f32, h: f32, accent: Color) {
+    let pulse = 0.65 + 0.35 * (get_time() as f32 * 6.0).sin();
+    rounded_outline(x, y, w, h, 16.0, 3.0, Color::new(accent.r, accent.g, accent.b, pulse));
+}
+
 /// A square icon slot with optional level pips underneath (VS-style inventory).
 pub fn icon_slot(x: f32, y: f32, s: f32, icon: Option<&Texture2D>, level: u8, max: u8, gold: bool) {
     let edge = if gold { GOLD } else { Color::new(1.0, 1.0, 1.0, 0.18) };
@@ -316,4 +366,29 @@ pub fn chip(x: f32, y: f32, label: &str, value: &str, accent: Color) -> f32 {
     text(label, x + 12.0, y + 20.0, 14.0, DIM);
     text(value, x + 18.0 + lw, y + 21.0, 20.0, accent);
     w
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn i(prev: bool, next: bool, confirm: bool, digit: Option<usize>) -> NavInput {
+        NavInput { prev, next, confirm, digit }
+    }
+
+    #[test]
+    fn nav_wraps_and_confirms() {
+        assert_eq!(nav(0, 3, &i(false, true, false, None)), (1, None));
+        assert_eq!(nav(2, 3, &i(false, true, false, None)), (0, None));
+        assert_eq!(nav(0, 3, &i(true, false, false, None)), (2, None));
+        assert_eq!(nav(1, 3, &i(false, false, true, None)), (1, Some(1)));
+    }
+
+    #[test]
+    fn nav_digits_and_bounds() {
+        assert_eq!(nav(0, 2, &i(false, false, false, Some(1))), (1, Some(1)));
+        assert_eq!(nav(0, 2, &i(false, false, false, Some(2))), (0, None));
+        assert_eq!(nav(5, 2, &i(false, false, false, None)), (1, None));
+        assert_eq!(nav(0, 0, &i(false, true, true, None)), (0, None));
+    }
 }

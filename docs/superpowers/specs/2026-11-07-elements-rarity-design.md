@@ -1,0 +1,380 @@
+# Elements, Rarity, Sets and New Enemies — Design
+
+Date: 2026-11-07. Status: approved 2026-11-07.
+
+## Intent
+
+Kizuna Survivors has gear rarity but nothing that makes rarity *mean* something in a run, and the
+in-run layer (skills, passives, pickups, enemies) has no rarity at all. This change adds one shared
+language across the game:
+
+- **Rarity** on skills, passives, in-run items, gear and enemies, so players can read power at a glance.
+- **Elements** on skills, gear, enemies, heroes and worlds, with a strength/weakness cycle, so build
+  choices and world choice interact and rare gear is worth chasing.
+- **Set gear** as the top gear rarity, with 2/4/5/6-piece bonuses, farmed per world.
+- **18 new enemies** that fill new enemy rarity tiers, with lore drawn from shonen anime archetypes.
+- A batch of **UI fixes** (keyboard level-up, ultimate-ready alert, XP bar, screen spacing).
+
+Success: a player can tell from colour alone how strong a card, item or enemy is; picks an element
+build for a world on purpose; and has a long-term goal (complete a world set).
+
+## Goals
+
+1. Full keyboard control of level-up (and every choice overlay).
+2. Skills can be replaced at any time; the new skill inherits half the old skill's level.
+3. A whole-screen "ultimate ready" signal.
+4. Stages split into 20 rounds that introduce enemy tiers evenly, shown on a restyled progress bar.
+5. Six enemy rarity tiers and 18 new enemies.
+6. Rarity on skills, passives, items, gear (gear adds a Set tier).
+7. Set gear bonuses at 2, 4, 5 and 6 pieces, with ring-pair rules.
+8. No screen element crowds a screen edge, on any supported aspect ratio.
+9. Elements with a damage cycle, inherited by skills, gear, enemies, heroes and worlds.
+
+## Non-goals
+
+- No renames. Existing enemies keep their names and their internal `Rank`
+  (Fodder/Elite/Mini/Boss/Final). Gear keeps Common…Mythic and Exotic. Rarity and element are
+  **additional** attributes.
+- No per-skill rarity rolls: each skill has **one fixed** rarity based on its strength.
+- No new heroes, worlds or game modes.
+- No lifted anime characters: new enemies are original names and designs built from archetypes.
+
+## Anti-goals (failure even if it works)
+
+- Light/Darkness becoming the only sensible build.
+- Element multipliers making a world unbeatable without the "right" element.
+- Existing players losing items or progress on update.
+- Colour as the *only* carrier of rarity/element (each also gets a label or icon shape).
+
+## Constraints
+
+- Rust/macroquad, sim in `crates/sim` (deterministic, headless-testable), client in `crates/client`.
+- Saves are text (`Item::serialize`/`parse`, `Profile` save). Old saves must load.
+- New art is drawn with the `tools/hd` Python scripts (hdkit, Pillow), same style as the current HD art.
+- Must keep running on phones in the browser (WASM build); no frame-time regressions.
+
+---
+
+## 1. Level-up keyboard control
+
+Today level-up accepts only `1`/`2`/`3`. Add:
+
+- `←/→` and `A/D` (and `↑/↓`, `W/S` where the cards stack) move a visible focus ring between cards.
+- `Enter` or `Space` takes the focused card. `1`–`n` still take a card directly.
+- Focus starts on the first card. Mouse hover moves focus too, so mouse and keys never disagree.
+- The same focus model applies to the replace-a-skill picker (section 2), the chest overlay and the
+  shrine-event choice.
+- Space must not also fire the ultimate on the frame a card is taken.
+
+## 2. Replacing skills
+
+- Weapon slots (4) and passive slots (6) stay as they are.
+- When slots of a kind are full, level-up offers may still include **unowned** skills of that kind.
+- Taking one opens a picker: "Replace which skill?" listing owned skills of that kind with their
+  levels, plus "Cancel" (back to the cards). Keyboard-navigable.
+- The new skill's level = `max(1, floor(old_level / 2))`. Example: replace a Lv 7 → new skill at Lv 3.
+- The replaced skill is gone completely: its passive bonuses, awakening and any evolution progress
+  are removed. The new skill is never awakened on arrival.
+- The hero's signature weapon can be replaced too (my call). Its Tier-1 ultimate does not depend on it.
+- Offer weighting: rarity weights apply only to skills you don't own yet; levelling an owned skill
+  stays uniform as today. At most **one** replacement card per offer as the starting rule.
+- Balance (user request): the rarity weights, the replacement-card cap and the inherit-half rule are
+  tuned together with the bot against the new mechanics (elements, rounds, Leaders). Targets: a typical
+  run still fills all 4 weapon slots by about round 8 and maxes at least 2 weapons; Unique skills appear
+  in roughly 1 run in 3; replacement is a real choice, not an every-level-up card.
+- Awakening (my call): an awakened weapon stays awakened if its complement passive is later replaced.
+  Replacement only touches the skill being replaced.
+
+## 3. Ultimate-ready alert
+
+When the special meter becomes ready:
+
+- A full-screen pulse: the screen edges glow in the hero's element colour (section 9), 3 pulses
+  over ~1.5 s, then a faint steady edge glow until the ultimate is used.
+- A centred banner for ~2 s: **"ALERT! — ULTIMATE READY"**, subtitle "Press SPACE" on keyboard,
+  "Tap ⚡" on touch.
+- A short rising chime (synth, `crates/client/src/synth.rs`).
+- Not repeated while it stays ready. Suppressed while a level-up or other overlay is open; it plays
+  when the overlay closes if the ultimate is still ready.
+- Auto-special (the `U` power-up) still works; if auto-special fires immediately, skip the banner.
+
+## 4. Stage rounds and the progress bar
+
+Today a stage is one continuous night with timed events (Mini at 8:00 or 12:00, an optional mid
+Boss, the Final boss at 15:00 or 25:00), shown as a thin 6 px bar with tick marks
+(`stage_progress` in `crates/client/src/ui.rs`). Players can't tell where they are or what's next.
+
+### 20 rounds per stage
+
+- Every stage is split into **20 rounds**. Rounds 1–19 split `[0, final_at]` equally (~47 s on
+  Shotengai, ~79 s on the 25-minute worlds); **round 20 starts when the Final boss appears and lasts
+  until it dies or dawn** (my call). Rounds are **time-based**: enemies keep flowing as today.
+- The enemy tiers are spread evenly: **5 blocks of 4 rounds**. The last round of each block is a
+  headline round for that block's tier, and from then on the tier joins the regular spawn mix:
+
+| Rounds | Headline round | Introduces |
+|---|---|---|
+| 1–4 | Round 4 | Uncommon wave |
+| 5–8 | Round 8 | Elite |
+| 9–12 | Round 12 | Leader |
+| 13–16 | Round 16 | Sub-boss (existing Mini) |
+| 17–20 | Round 20 | Boss (existing Final; worlds with a mid Boss get it at round 18) |
+
+- Difficulty steps up every round (enemy HP, damage and crowd size), with a bigger step on headline
+  rounds. This replaces the continuous time curves; the bot re-tunes so total run difficulty stays
+  roughly where it is today.
+- Existing events (shrines, swarm rings, crisis, elite waves) are re-anchored to round boundaries.
+- Existing encounters move to their rounds: e.g. Shotengai Mini 8:00 → round 16 (~11:45), first
+  elite 2:00 → round 8; 25-minute worlds Mini 12:00 → round 16, mid Boss → round 18. A headline lands
+  every 4 rounds, so the gaps are filled by the Uncommon and Leader rounds.
+- The round-4 Uncommon headline drops a treasure chest, replacing the early elite chest players get
+  today at 2:00, so early build pace is unchanged.
+- Dawn limit unchanged: the Final boss must die before dawn.
+
+### Progress bar
+
+- Restyled to the house UI kit (`crates/client/src/kit.rs`): panel, radius, outline and gradient
+  like the other bars, thick enough to read on a phone.
+- Label **"Round 12 / 20"** plus the next headline ("Leader in 1 round").
+- 20 segments; headline rounds marked with their tier's rarity colour and an icon.
+- A banner at the start of each headline round ("ROUND 12 — LEADER").
+- After the Final boss appears, the bar turns into the dawn countdown, as it does today.
+
+## 5. Enemy rarity and new enemies
+
+### Enemy rarity tiers (new attribute, `Rank` unchanged)
+
+| Enemy rarity | Who | Colour cue |
+|---|---|---|
+| Common | existing Fodder | none |
+| Uncommon | **new** (2 per world) | green nameplate/outline |
+| Elite | existing Elite | blue |
+| Leader | **new** (1 per world) | purple + banner |
+| Sub-boss | existing Mini | orange |
+| Boss | existing Boss and Final | red |
+
+Effects of rarity: label + outline colour; XP and drops scale by tier (Uncommon ≈ 2× Common XP and a
+small gear chance; Leader drops like an Elite and can drop a pickup). Exact numbers to the builder,
+tuned with the bot.
+
+### Leaders
+
+A crew captain (One Piece archetype). First appears in the round-12 headline round (section 4), then
+returns every 3 rounds; the round system schedules it (my call). While alive, enemies within its banner radius gain speed and damage; killing it
+breaks the buff and briefly scatters (frightens) its crew. It has its own movement pattern and one
+signature attack.
+
+### The 18 new enemies
+
+Original names and designs. Each world: 2 Uncommon + 1 Leader. Lore leans on that world's existing
+inspiration; Leaders lean on One Piece. Draft roster (names, element and archetype; final lore and
+behaviour to the builder, following the house lore voice of one or two short sentences):
+
+| World | Uncommon | Uncommon | Leader |
+|---|---|---|---|
+| Shotengai (yokai: Kitaro/Natsume) | Rokurokubi Clerk (Earth): neck-stretching shopkeeper | Tsurube Drop (Wind): drops from awnings | Captain Kitsunebi (Fire): lantern-ship captain with a paper crew |
+| Shrine Valley (Inuyasha/Touhou) | Shard Moth (Wind): a demon drawn to jewel shards | Bone-Eater Crow (Wind): carrion familiar | Admiral Tengu (Wind): a fallen mountain-tengu fleet captain |
+| Ember Leaf (Naruto) | Rogue Puppeteer (Earth): strings a dummy ahead of it | Exploding Clay Bird (Fire): sculpted bomb that dives | Mist Swordsman Captain (Water): leads a squad from fog |
+| Pale Citadel (Bleach) | Masked Fracción (Ice): sword released mid-fight | Hollow Husk (Ice): a towering, mindless hollow | Espada Quartermaster (Ice): numbered, commands the gate guards |
+| Rainward (Tokyo Ghoul) | Kagune Runner (Water): sprints with a blade-tail | Mask Collector (Electric): wears its victims' masks | Drowned Pirate Captain (Water): flood-born crew |
+| Shatterline (Jujutsu Kaisen) | Grade-Three Swarm Mother (Earth): sheds small curses | Cursed Tool Thief (Electric): blinks and steals pickups | Curse User Captain (Earth): a sorcerer gang boss |
+
+Light and Darkness are reserved for Legendary-and-above things, so the new enemies use common
+elements. Names in this table are working names; the builder may refine for tone but keep the
+archetype and element.
+
+Art: one HD sprite set per new enemy via `tools/hd` (new script(s) in the style of `enemies_w*.py`),
+plus `.px` sources if the client requires them.
+
+## 6. Rarity everywhere
+
+### Skills and passives (fixed tier by strength)
+
+Tiers: **Common, Uncommon, Rare, Legendary, Mythic, Unique**.
+
+- Each of the 26 weapons and 10 passives gets exactly one tier.
+- Tier is assigned by measured strength: the builder benchmarks each skill at max level with the
+  headless bot (`crates/sim/src/bot.rs`, `crates/bench`) and buckets them, roughly
+  Common 30%, Uncommon 25%, Rare 20%, Legendary 13%, Mythic 8%, Unique 4% of skills.
+- Effects: card frame colour and tier label; offer weight
+  (Common 1.0, Uncommon 0.8, Rare 0.6, Legendary 0.4, Mythic 0.25, Unique 0.15 — my call, tunable).
+  Signature weapons are always given at start regardless of tier.
+
+### In-run items
+
+Pickups (`PickupKind`) and the maxed-out fallbacks (Heal, Sen, Blessing) each get a fixed tier on the
+same scale, shown on their card/label. Their existing spawn weights stay the source of truth; the tier
+is chosen to match those weights.
+
+### Gear
+
+Existing tiers stay: Common, Uncommon, Rare, Epic, Legendary, Mythic, Exotic. Add **Set** above Exotic.
+
+| | Set |
+|---|---|
+| Rank | highest gear rarity (Common < … < Exotic < Set) |
+| Slots | only the 6 slots of its world's set (section 7) |
+| Bonuses | 6 rolled bonuses at high quality (Exotic-level rolls), stat multiplier above Exotic |
+| Unique effect | yes: one random unique from `ALL_UNIQUES`, like Legendary/Mythic |
+| Element | always its set's element |
+| Salvage / upgrade / reroll | priced above Exotic |
+
+Set membership becomes the Set rarity itself: newly rolled non-Set items no longer carry a set tag.
+
+## 7. Set bonuses (2/4/5/6)
+
+Each world set is exactly 6 pieces. Rings always come as a pair: a set either uses both ring slots or
+none. **A set's rings only count when both are worn (the pair counts as 2 pieces).** So no tier ever
+needs an odd number of rings. Arsenal is never a set piece.
+
+| Set (world) | Element | Pieces |
+|---|---|---|
+| Lantern Street (Shotengai) | Fire | Hat, Top, Bottom, Gloves, Shoes, Charm |
+| Moonveil (Shrine Valley) | Earth | Hat, Top, Necklace, Earring, Ring, Ring |
+| Ember Leaf (Ember Leaf) | Wind | Top, Bottom, Gloves, Shoes, Ring, Ring |
+| Pale Gate (Pale Citadel) | Ice | Hat, Top, Bottom, Necklace, Earring, Omamori |
+| Rainward (Rainward) | Water | Gloves, Shoes, Necklace, Omamori, Ring, Ring |
+| Shatterline (Shatterline) | Electric | Hat, Gloves, Earring, Charm, Ring, Ring |
+
+A set's element is always its world's dominant element, so a world's set helps you *in* that world
+(its resistance covers that world's hits). One set per common element (my call).
+
+Bonus tiers:
+
+- **2-piece:** the existing 2-piece stat bonus.
+- **4-piece:** the existing 4-piece effect.
+- **5-piece:** +25% damage of the set's element and +25% resistance to it.
+- **6-piece:** a new signature effect per set that turns the set's element into a build (e.g. Rainward:
+  every hit soaks; soaked enemies take +30% Electric; Pale Gate: slowed enemies shatter on death for
+  area Ice damage). Exact six effects to the builder, one per set, each themed on its element.
+
+### Set drop rates
+
+- Only Mini, Boss and Final kills in a world can drop that world's Set pieces (3 chances per run).
+- Chance per eligible kill: `SET_CHANCE × exotic_mult(difficulty, ascension) × (1 + gear_find)`.
+- Target: collecting all 6 distinct pieces on Normal takes about **40 runs** (my call). Collecting 6
+  distinct pieces takes ~14.7 drops on average (6 × H₆), so Normal needs ~0.37 pieces per run, i.e.
+  `SET_CHANCE ≈ 0.12`. Higher difficulty and Ascension shorten it through `exotic_mult`.
+- The builder verifies the target with a headless simulation and adjusts `SET_CHANCE`.
+- Duplicate pieces still drop (salvage them for more Dust than Exotics).
+
+## 8. Screen spacing
+
+- Audit every screen (menu, armory, shrine draw, shop, collections, stats, settings, pause, level-up,
+  chest, results) at 16:9, 4:3, 21:9 and phone landscape (e.g. 844×390 and 932×430).
+- Rule: no button or text sits closer than a fixed safe margin (scaled by `ui_scale`) to any edge, and
+  never inside the device's safe area insets.
+- Known case: the Armory "Back" button is too close to the bottom edge.
+- Deliver before/after screenshots for each screen and ratio.
+
+## 9. Elements
+
+Eight elements: **Fire, Water, Electric, Earth, Wind, Ice** (common) and **Light, Darkness** (rare).
+
+### The cycle
+
+```
+Water ─douses─▶ Fire ─melts─▶ Ice ─stills─▶ Wind ─erodes─▶ Earth ─grounds─▶ Electric ─shocks─▶ Water
+```
+
+| Attacker → target | Damage |
+|---|---|
+| Common → the element it beats | ×1.5 |
+| Common → the element that beats it | ×0.75 |
+| Common → other common | ×1.0 |
+| Common → Light or Darkness | ×0.9 |
+| Light or Darkness → common | ×1.15 |
+| Light ↔ Darkness | ×1.5 both ways |
+| Same element | ×1.0 |
+
+Light and Darkness are rare: only skills, gear and enemies of Legendary rarity or above (or Sub-boss /
+Boss enemies) can carry them.
+
+### What inherits an element
+
+| Component | Rule |
+|---|---|
+| Skills (weapons) | One fixed element each. Damage uses the table against the target's element. |
+| Passives | No element (they are stat boosts). |
+| Heroes | An affinity element: +10% damage for skills of that element; the ultimate deals that element. Offence only: the hero has no defensive element, so enemy hits are never multiplied by the cycle; gear resistance is the only elemental defence (my call). |
+| Enemies | One element each. Decides what hurts them most and the element of their hits on the player. |
+| Worlds | A dominant element: most of that world's enemies carry it; the world's set uses it. |
+| Gear | Each item has one element: a "+X% <element> damage" bonus and "<element> resistance" (reduces damage from enemies of that element, capped at 60% total). C–Mythic roll a common element; Legendary+ may roll Light/Darkness (10%); Arsenal takes its weapon's element; Set takes its set's; Exotics get a fixed one. |
+| On-hit effects | Small chance per hit (≈15%, builder-tuned): Fire burns, Water soaks (soaked targets take +30% Electric), Electric chains to one more target, Earth staggers, Wind knocks back, Ice slows, Light marks (next hit crits), Darkness drains a little life. |
+| Pickups, coins, chests | No element. |
+
+### Draft assignments (builder may rebalance with the bot)
+
+Worlds (dominant element = set element, my call): Shotengai Fire (lanterns), Shrine Valley Earth
+(kodama, stone komainu), Ember Leaf Wind (leaf shinobi), Pale Citadel Ice, Rainward Water,
+Shatterline Electric. About 60% of a world's enemies carry its element; the rest are mixed. World
+bosses may differ and may carry Light/Darkness (e.g. Mitsuhime and Pale Seraph Light; Hollow Monarch
+and Shatter Sovereign Darkness; Burning Shogun Fire).
+
+Heroes: Ren Light, Riku Fire, Shun Darkness, Toya Earth, Kuon Ice, Kaede Electric, Mika Water,
+Haru Wind, Nanami Fire, Yuzu Electric.
+
+Weapons: rules for the builder rather than a fixed table —
+- each common element has at least 3 weapons; Light ≤ 3 and Darkness ≤ 3, all of Legendary tier or above;
+- element follows the weapon's name and look (ThunderChain Electric, FlamePool Fire, GaleShuriken Wind,
+  VoidLance Darkness, PurificationWave Light, …);
+- the result is shown to the user for sign-off before balancing.
+
+## Attack reach (added 2026-11-08)
+
+Attacks only damage or target enemies inside a reach zone around the player: never off screen, never
+edge to edge, same size on every device. Base zone 192 × 108 world units each side (60% of a 16:9
+desktop view), shrunk on small screens to the visible area minus 24 units. Each hero scales it by
+class: ranged/mage ×1.0 (Ren, Kuon, Mika, Nanami), hybrid ×0.9 (Riku, Kaede, Yuzu), melee ×0.8
+(Shun, Toya, Haru). Phase 3 balancing compensates melee heroes so they are not simply weaker.
+Phase 1 already set XP_GAIN 2.0, MIGHT_MELEE 2.3 (melee) and BOSS_HP 0.5 (shortcut). Screen-clearing effects
+(Exorcism Seal, ThousandCounter) hit the whole visible screen; enemies outside reach are drawn dimmed.
+
+## Save compatibility
+
+- Old saves must load with every item intact.
+- Items get an element on load if they have none (deterministic from the item id, so it never changes).
+- Old set-tagged items (user decision): **kept as legacy**. They keep their rarity and keep counting
+  toward the old 2-piece and 4-piece bonuses only; they never count toward 5/6-piece bonuses. New Set
+  pieces drop separately. No loss, no free upgrade.
+- `Rarity` gains a variant: serialization must keep old rarity strings/indices valid.
+
+## Delivery phases
+
+1. UI pass: sections 1, 3, 8.
+2. Stage rounds and progress bar: section 4 (Leader and Uncommon headline rounds use existing
+   enemies as stand-ins until phase 6 lands).
+3. Skill rarity and replacement: sections 2, 6 (skills, passives, items).
+4. Elements core: section 9 (table, weapons, enemies, heroes, worlds, on-hit effects).
+5. Gear: Set rarity, set tiers, drop rates, save migration (sections 6 gear, 7).
+6. Enemies: rarity tiers, Leaders, 18 new enemies with art and lore (section 5).
+
+Each phase ships playable on its own, and updates the `README.md` sections it changes (Controls,
+the night structure under Campaign, the Gear list, enemy counts, `web/` in Layout, browser/PWA line).
+
+Set gear never comes from the Shrine Draw: Draw odds and pity stay as published (my call).
+
+## Left to the builder
+
+- Exact multipliers, XP/drop numbers, timers and on-hit chances (bot-tuned, within the stated targets).
+- Final weapon element table (to the rules above, shown before balancing).
+- Final names/lore for the 18 enemies within the archetypes and elements given.
+- The six 6-piece effects, one per set, themed on the set's element.
+- Code structure.
+
+## Open questions
+
+None.
+
+## Carried into phase 3 (from phase 1, 2026-11-08)
+
+- Toya is overtuned under the reach rebalance (shrine_valley Normal: 5→10 of 10 wins vs pre-reach) and
+  Shun swings by seed block (20→14 of 20 on seeds 41–60). One melee multiplier (`MIGHT_MELEE` 2.3)
+  cannot fit both: add a per-hero lever.
+- `BOSS_HP` 0.5 is a `shortcut:` tuned against the bot's ~140 px kiting; revisit with human playtests.
+- Kaede, Yuzu, Toya, Haru and every stage other than Shrine Valley / Shotengai are unmeasured at Hard+.
+- Untested selector filters: RaijinDrums, YataMirror, EmberLeaf/Rainward set hazards (Thunderclap is tested).
+- Minor tidy-ups: fallback target points pile on the reach-box edge (`random_targets`); `hero_def()`
+  rebuilt per `might()` call; T1 doc comments that restate names; `mouse_moved()` placement in ui.rs;
+  dev-only debug overlay sits 12 px from the edge.
+- Replace the reused `Sfx::Bell` with a dedicated rising chime for the ultimate alert.

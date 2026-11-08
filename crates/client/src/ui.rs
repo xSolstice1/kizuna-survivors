@@ -8,8 +8,76 @@ use sim::content::{
 };
 use sim::World;
 
-use crate::kit::{self, mouse_position, screen_height, screen_width, Style, DIM, FAINT, GOLD, INK, JADE, SAKURA, SKY, VERMILION};
+use crate::kit::{self, mouse_position, NavInput, screen_height, screen_width, Style, DIM, FAINT, GOLD, INK, JADE, SAKURA, SKY, VERMILION};
 use crate::render::Assets;
+
+pub fn special_color(kind: SpecialKind) -> Color {
+    match kind {
+        SpecialKind::Hannya | SpecialKind::Mukade => Color::new(0.9, 0.1, 0.15, 1.0),
+        SpecialKind::Firmament => Color::new(0.45, 0.8, 1.0, 1.0),
+        SpecialKind::Divine => Color::new(1.0, 0.75, 0.45, 1.0),
+        _ => Color::new(1.0, 0.6, 0.15, 1.0),
+    }
+}
+
+#[derive(Default)]
+pub struct UltAlert {
+    fired: bool,
+    pub t: f32,
+}
+
+impl UltAlert {
+    /// True on the frame the alert fires: once per ready period, never behind an overlay.
+    pub fn update(&mut self, ready: bool, overlay_open: bool, dt: f32) -> bool {
+        if !ready {
+            *self = Self::default();
+            return false;
+        }
+        if overlay_open {
+            return false;
+        }
+        if self.fired {
+            self.t += dt;
+            return false;
+        }
+        self.fired = true;
+        self.t = 0.0;
+        true
+    }
+}
+
+fn edge_glow(color: Color, strength: f32) {
+    let (w, h) = (screen_width(), screen_height());
+    for i in 0..4 {
+        let depth = 10.0 + 22.0 * i as f32;
+        let c = Color::new(color.r, color.g, color.b, strength * 0.22 * (1.0 - i as f32 / 4.0));
+        draw_rectangle(0.0, 0.0, w, depth, c);
+        draw_rectangle(0.0, h - depth, w, depth, c);
+        draw_rectangle(0.0, 0.0, depth, h, c);
+        draw_rectangle(w - depth, 0.0, depth, h, c);
+    }
+}
+
+pub fn ult_alert(alert: &UltAlert, color: Color, touch: bool, ready: bool) {
+    if !ready || !alert.fired {
+        return;
+    }
+    let t = alert.t;
+    if t < 1.5 {
+        let pulse = (t / 0.5 * std::f32::consts::PI).sin().abs();
+        edge_glow(color, pulse);
+    } else {
+        edge_glow(color, 0.35 * ((t - 1.5) / 0.3).min(1.0));
+    }
+    if t < 2.0 {
+        let fade = if t > 1.6 { (2.0 - t) / 0.4 } else { 1.0 };
+        let (w, y) = (screen_width(), screen_height() * 0.30);
+        let c = Color::new(color.r, color.g, color.b, fade);
+        kit::text_fit_centered("ALERT! — ULTIMATE READY", w / 2.0, y, w - 40.0, 34.0, c);
+        let sub = if touch { "Tap SPECIAL" } else { "Press SPACE" };
+        kit::text_fit_centered(sub, w / 2.0, y + 32.0, w - 40.0, 22.0, Color::new(INK.r, INK.g, INK.b, fade));
+    }
+}
 
 fn fmt_time(t: f32) -> String {
     let s = t.max(0.0) as u32;
@@ -95,11 +163,10 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
         Some(kind) => {
             let f = p.form / kind.duration();
             let flick = 0.8 + 0.2 * (t * 14.0).sin();
+            let base = special_color(kind);
             let c = match kind {
-                SpecialKind::Hannya | SpecialKind::Mukade => Color::new(0.9 * flick, 0.1, 0.15, 1.0),
-                SpecialKind::Firmament => Color::new(0.45, 0.8 * flick, 1.0, 1.0),
-                SpecialKind::Divine => Color::new(1.0, 0.75 * flick, 0.45, 1.0),
-                _ => Color::new(1.0, 0.6 * flick, 0.15, 1.0),
+                SpecialKind::Hannya | SpecialKind::Mukade => Color::new(base.r * flick, base.g, base.b, 1.0),
+                _ => Color::new(base.r, base.g * flick, base.b, 1.0),
             };
             kit::bar(92.0, 62.0, 206.0, 10.0, f, c, Color::new(0.1, 0.08, 0.16, 0.95));
             let label = format!("{}  {:.0}s", hero.special_name.to_uppercase(), p.form.ceil());
@@ -252,27 +319,33 @@ fn stage_progress(world: &World, cx: f32, y: f32) {
 
 // ───────────────────────── Level-up ─────────────────────────
 
-/// Draws the level-up cards; returns the index of a card that was clicked or picked with 1/2/3.
-pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usize> {
+/// Draws the level-up cards; returns the card taken by click, digit, or focus plus Enter/Space.
+pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut usize, touch: bool) -> Option<usize> {
     dim_screen(0.62);
     let (w, h) = (screen_width(), screen_height());
     let t = get_time() as f32;
     // Header ribbon.
     kit::panel_ex(w / 2.0 - 220.0, h * 0.13, 440.0, 74.0, Color::new(0.22, 0.07, 0.12, 0.95), GOLD);
     centered("LEVEL UP!", h * 0.13 + 44.0, 40.0, GOLD);
-    centered(&format!("Level {}  ·  choose one", world.player.level), h * 0.13 + 66.0, 15.0, DIM);
+    let hint = if touch { "choose one" } else { "Arrows choose  ·  Enter take" };
+    centered(&format!("Level {}  ·  {hint}", world.player.level), h * 0.13 + 66.0, 15.0, DIM);
 
     let (cw, ch, gap) = (290.0, 250.0, 26.0);
     let total = offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap;
     let x0 = (w - total) / 2.0;
     let y0 = h * 0.30;
     let mouse: Vec2 = mouse_position().into();
-    let mut picked = None;
+    let hovered = (0..offer.len()).find(|&i| Rect::new(x0 + i as f32 * (cw + gap), y0, cw, ch).contains(mouse));
+    if let Some(i) = hovered.filter(|_| mouse_moved() || is_mouse_button_pressed(MouseButton::Left)) {
+        *focus = i;
+    }
+    let (f, key_pick) = kit::nav(*focus, offer.len(), &NavInput::read());
+    *focus = f;
+    let mut picked = key_pick;
     for (i, &u) in offer.iter().enumerate() {
         let x = x0 + i as f32 * (cw + gap);
-        let r = Rect::new(x, y0, cw, ch);
-        let hover = r.contains(mouse);
-        let y = y0 + if hover { -6.0 } else { 0.0 };
+        let focused = i == *focus;
+        let y = y0 + if focused { -6.0 } else { 0.0 };
         let lvl = world.next_level(u);
         let (accent, tag) = match u {
             Upgrade::Weapon(_) if lvl == 1 => (SAKURA, "NEW WEAPON".to_string()),
@@ -283,10 +356,13 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usi
             Upgrade::Sen => (JADE, "SEN".to_string()),
             Upgrade::Blessing => (JADE, "BLESSING".to_string()),
         };
-        if hover {
+        if focused {
             kit::rounded(x - 6.0, y - 6.0, cw + 12.0, ch + 12.0, 16.0, Color::new(accent.r, accent.g, accent.b, 0.15 + 0.05 * (t * 6.0).sin()));
         }
-        kit::panel_ex(x, y, cw, ch, if hover { kit::PANEL_HI } else { kit::PANEL }, if hover { accent } else { Color::new(accent.r, accent.g, accent.b, 0.45) });
+        kit::panel_ex(x, y, cw, ch, if focused { kit::PANEL_HI } else { kit::PANEL }, if focused { accent } else { Color::new(accent.r, accent.g, accent.b, 0.45) });
+        if focused {
+            kit::focus_ring(x - 3.0, y - 3.0, cw + 6.0, ch + 6.0, accent);
+        }
         // Accent stripe along the top.
         kit::rounded(x + 14.0, y + 10.0, cw - 28.0, 4.0, 2.0, Color::new(accent.r, accent.g, accent.b, 0.8));
         // Key badge.
@@ -315,22 +391,21 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets) -> Option<usi
             let txt = format!("Awakens with {}{}", Upgrade::Passive(pk).name(), if owned { "  (owned)" } else { "" });
             kit::text(&txt, x + 46.0, y + ch - 19.0, 14.0, if owned { JADE } else { FAINT });
         }
-        if hover && is_mouse_button_pressed(MouseButton::Left) {
-            picked = Some(i);
-        }
     }
-    for (i, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3].iter().enumerate() {
-        if i < offer.len() && is_key_pressed(*key) {
-            picked = Some(i);
-        }
+    if let Some(i) = hovered.filter(|_| is_mouse_button_pressed(MouseButton::Left)) {
+        picked = Some(i);
     }
     picked
+}
+
+fn mouse_moved() -> bool {
+    mouse_delta_position() != Vec2::ZERO
 }
 
 // ───────────────────────── Shrine ─────────────────────────
 
 /// Shrine choice. Returns Some(Some(i)) for a pick, Some(None) to walk away, None while undecided.
-pub fn shrine(offer: &[ShrineEvent], assets: &Assets) -> Option<Option<usize>> {
+pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize) -> Option<Option<usize>> {
     let (w, h) = (screen_width(), screen_height());
     dim_screen(0.72);
     kit::panel_ex(w / 2.0 - 250.0, h * 0.12, 500.0, 84.0, Color::new(0.18, 0.10, 0.04, 0.95), GOLD);
@@ -341,12 +416,26 @@ pub fn shrine(offer: &[ShrineEvent], assets: &Assets) -> Option<Option<usize>> {
     let x0 = (w - (offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap)) / 2.0;
     let y0 = h * 0.32;
     let mouse: Vec2 = mouse_position().into();
-    let mut picked = None;
+    let away = Rect::new((w - 220.0) / 2.0, y0 + ch + 30.0, 220.0, 46.0);
+    let hovered = (0..offer.len())
+        .find(|&i| Rect::new(x0 + i as f32 * (cw + gap), y0, cw, ch).contains(mouse))
+        .or_else(|| away.contains(mouse).then_some(offer.len()));
+    if let Some(i) = hovered.filter(|_| mouse_moved() || is_mouse_button_pressed(MouseButton::Left)) {
+        *focus = i;
+    }
+    let mut input = NavInput::read();
+    input.digit = input.digit.filter(|&d| d < offer.len());
+    let (f, key_pick) = kit::nav(*focus, offer.len() + 1, &input);
+    *focus = f;
+    let mut picked = key_pick.map(|i| (i < offer.len()).then_some(i));
     for (i, ev) in offer.iter().enumerate() {
         let x = x0 + i as f32 * (cw + gap);
-        let hover = Rect::new(x, y0, cw, ch).contains(mouse);
-        let y = y0 + if hover { -6.0 } else { 0.0 };
-        kit::panel_ex(x, y, cw, ch, if hover { Color::new(0.20, 0.13, 0.08, 0.97) } else { kit::PANEL }, if hover { GOLD } else { kit::EDGE });
+        let focused = i == *focus;
+        let y = y0 + if focused { -6.0 } else { 0.0 };
+        kit::panel_ex(x, y, cw, ch, if focused { Color::new(0.20, 0.13, 0.08, 0.97) } else { kit::PANEL }, if focused { GOLD } else { kit::EDGE });
+        if focused {
+            kit::focus_ring(x - 3.0, y - 3.0, cw + 6.0, ch + 6.0, GOLD);
+        }
         kit::text(&format!("{}", i + 1), x + cw - 28.0, y + 34.0, 18.0, FAINT);
         kit::text_fit(ev.name(), x + 20.0, y + 44.0, cw - 60.0, 28.0, INK);
         let (bless, price) = ev.text();
@@ -356,17 +445,15 @@ pub fn shrine(offer: &[ShrineEvent], assets: &Assets) -> Option<Option<usize>> {
         kit::rounded(x + 16.0, y + 130.0, cw - 32.0, 58.0, 8.0, Color::new(0.35, 0.08, 0.1, 0.5));
         kit::text("PRICE", x + 28.0, y + 150.0, 13.0, VERMILION);
         kit::text_fit(price, x + 28.0, y + 174.0, cw - 56.0, 17.0, Color::new(1.0, 0.7, 0.7, 1.0));
-        if hover && is_mouse_button_pressed(MouseButton::Left) {
-            picked = Some(Some(i));
-        }
     }
-    if kit::button(Rect::new((w - 220.0) / 2.0, y0 + ch + 30.0, 220.0, 46.0), "Walk away", true, Style::Secondary) || is_key_pressed(KeyCode::Escape) {
+    if let Some(i) = hovered.filter(|&i| i < offer.len() && is_mouse_button_pressed(MouseButton::Left)) {
+        picked = Some(Some(i));
+    }
+    if *focus == offer.len() {
+        kit::focus_ring(away.x - 3.0, away.y - 3.0, away.w + 6.0, away.h + 6.0, GOLD);
+    }
+    if kit::button(away, "Walk away", true, Style::Secondary) || is_key_pressed(KeyCode::Escape) {
         picked = Some(None);
-    }
-    for (i, key) in [KeyCode::Key1, KeyCode::Key2].iter().enumerate() {
-        if i < offer.len() && is_key_pressed(*key) {
-            picked = Some(Some(i));
-        }
     }
     picked
 }
@@ -832,4 +919,47 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
 fn rounded_hint(x: f32, y: f32, size: f32) {
     kit::rounded_outline(x, y, size, size, 12.0, 2.0, GOLD);
     kit::text("click to expand", x + size - 92.0, y + size - 8.0, 12.0, DIM);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alert_fires_once_per_ready_period() {
+        let mut a = UltAlert::default();
+        assert!(!a.update(false, false, 0.1));
+        assert!(a.update(true, false, 0.1));
+        assert!(!a.update(true, false, 0.1));
+        assert!(!a.update(false, false, 0.1));
+        assert!(a.update(true, false, 0.1));
+    }
+
+    #[test]
+    fn alert_waits_for_overlay_to_close() {
+        let mut a = UltAlert::default();
+        assert!(!a.update(true, true, 0.1));
+        assert!(!a.update(true, true, 0.1));
+        assert!(a.update(true, false, 0.1));
+    }
+
+    #[test]
+    fn alert_pauses_under_overlay() {
+        let mut a = UltAlert::default();
+        assert!(a.update(true, false, 0.1));
+        a.update(true, false, 0.5);
+        a.update(true, true, 1.0);
+        a.update(true, true, 1.0);
+        assert!((a.t - 0.5).abs() < 1e-4);
+        assert!(!a.update(true, false, 0.1));
+        assert!((a.t - 0.6).abs() < 1e-4);
+    }
+
+    #[test]
+    fn alert_survives_pause() {
+        let mut a = UltAlert::default();
+        assert!(a.update(true, false, 0.1));
+        assert!(!a.update(true, true, 0.1));
+        assert!(!a.update(true, false, 0.1));
+    }
 }

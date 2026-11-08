@@ -117,6 +117,8 @@ async fn main() {
     let mut chest_anim: Option<chest_ui::ChestAnim> = None;
     // Space is latched until the sim next steps; at high refresh rates many frames take no step.
     let mut special_queued = false;
+    let mut overlay_focus = 0usize;
+    let mut overlay_was_open = false;
 
     let mut collection = menu::CollectionState::default();
     let mut armory_state = armory::ArmoryState::default();
@@ -128,6 +130,7 @@ async fn main() {
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
     let mut map_opened_now = false;
+    let mut ult_alert = ui::UltAlert::default();
     let mut touch = touch::TouchControls::default();
 
     kit::init();
@@ -441,6 +444,8 @@ async fn main() {
             input.move_dir = input.move_dir + touch.dir();
             special_queued |= is_key_pressed(KeyCode::Space) || touch.special;
             input.special = special_queued;
+            let scale = render::world_scale();
+            world.view_half = sim::Vec2::new(screen_width() / scale / 2.0, screen_height() / scale / 2.0);
             let t0 = get_time();
             let mut steps = 0;
             while acc >= DT && steps < 4 && !world.paused() {
@@ -508,6 +513,13 @@ async fn main() {
                 map_opened_now = true;
             }
         }
+        let alert_blocked = world.paused() || screen == Screen::Paused || map_open;
+        let ult_ready = matches!(screen, Screen::Playing | Screen::Paused) && !matches!(world.state, RunState::Dead | RunState::Won) && world.player.special >= 1.0 && world.form_kind().is_none();
+        if ult_alert.update(ult_ready, alert_blocked, dt) {
+            // shortcut: reuses Sfx::Bell; a dedicated rising chime can be added to synth.rs later
+            audio.play(synth::Sfx::Bell);
+        }
+        ui::ult_alert(&ult_alert, ui::special_color(sim::content::hero_def(world.cfg.hero).special), touch.active, ult_ready && !alert_blocked);
         if dev.show_fps || stress.is_some() {
             ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
         }
@@ -519,6 +531,8 @@ async fn main() {
         if let (Some((text, left)), false) = (&fx.banner, world.paused()) {
             ui::banner(text, *left);
         }
+        let mut overlay_picked = false;
+        let focus_overlay_open = world.chest_result.is_none() && (world.shrine_offer.is_some() || world.offer.is_some());
         if let Some(items) = world.chest_result.clone() {
             let anim = chest_anim.get_or_insert_with(|| chest_ui::ChestAnim::new(items));
             let done = anim.update_and_draw(&assets, dt);
@@ -531,14 +545,26 @@ async fn main() {
                 chest_anim = None;
             }
         } else if let Some(offer) = world.shrine_offer.clone() {
-            if let Some(choice) = ui::shrine(&offer, &assets) {
+            let fresh = !overlay_was_open;
+            if fresh {
+                overlay_focus = 0;
+            }
+            let choice = ui::shrine(&offer, &assets, &mut overlay_focus);
+            if let Some(choice) = choice.filter(|_| !fresh) {
                 audio.play(if choice.is_some() { synth::Sfx::Chime } else { synth::Sfx::Click });
                 world.choose_shrine(choice);
+                overlay_picked = true;
             }
         } else if let Some(offer) = world.offer.clone() {
-            if let Some(i) = ui::level_up(&world, &offer, &assets) {
+            let fresh = !overlay_was_open;
+            if fresh {
+                overlay_focus = 0;
+            }
+            let picked = ui::level_up(&world, &offer, &assets, &mut overlay_focus, touch.active);
+            if let Some(i) = picked.filter(|_| !fresh) {
                 audio.play(synth::Sfx::Click);
                 world.choose(i);
+                overlay_picked = true;
             }
         } else if over {
             match ui::results(&world, world.state == RunState::Won, report.as_ref(), &fx.lines(), &assets) {
@@ -598,6 +624,8 @@ async fn main() {
                 None => {}
             }
         }
+
+        overlay_was_open = focus_overlay_open && !overlay_picked;
 
         if perf_frames > 60 {
             perf_cpu += (get_time() - frame_start) * 1000.0;

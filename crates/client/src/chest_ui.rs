@@ -91,7 +91,7 @@ impl ChestAnim {
 
     /// Draws one frame. Returns true when the player dismisses the screen.
     pub fn update_and_draw(&mut self, assets: &Assets, dt: f32) -> bool {
-        let clicked = is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space);
+        let clicked = is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::KpEnter);
         if clicked {
             if self.finished() {
                 return true;
@@ -243,7 +243,7 @@ impl ChestAnim {
 
         if self.finished() {
             let a = 0.55 + 0.45 * (self.t * 4.0).sin();
-            centered("Click or press Enter to continue", w / 2.0, h * 0.96, 22.0, Color::new(1.0, 1.0, 1.0, a));
+            centered("Click, Enter or Space to continue", w / 2.0, h * 0.96, 22.0, Color::new(1.0, 1.0, 1.0, a));
         }
         false
     }
