@@ -601,7 +601,7 @@ impl Profile {
         self.sen_earned += w.sen as u64;
         self.chests_opened += w.chests_opened;
         self.shrines_taken += w.shrines_taken.len() as u32;
-        self.awakenings += w.weapons.iter().filter(|x| x.awakened).count() as u32;
+        self.awakenings += w.weapons.iter().chain(&w.retired_weapons).filter(|x| x.awakened).count() as u32;
         self.specials_used += w.specials_used;
         let hi = w.cfg.hero.index();
         self.hero_runs[hi] += 1;
@@ -617,13 +617,13 @@ impl Profile {
                 *n += 1;
             }
         }
-        for wpn in &w.weapons {
+        for wpn in w.weapons.iter().chain(&w.retired_weapons) {
             add(&mut self.weapons_found, wpn.kind, &mut report.discovered);
             if wpn.awakened {
                 add(&mut self.awakenings_found, wpn.kind, &mut report.discovered);
             }
         }
-        for (k, _) in &w.passives {
+        for (k, _) in w.passives.iter().chain(&w.retired_passives) {
             add(&mut self.passives_found, *k, &mut report.discovered);
         }
         for ev in &w.shrines_taken {
@@ -632,7 +632,7 @@ impl Profile {
         // Each hero is unlocked by a distinct feat performed as a specific hero, so the
         // roster opens up as a chain. (Future stages can add stage-specific feats here.)
         let as_hero = w.cfg.hero;
-        let awakened = w.weapons.iter().any(|x| x.awakened);
+        let awakened = w.weapons.iter().chain(&w.retired_weapons).any(|x| x.awakened);
         for h in ALL_HEROES {
             let earned = match h {
                 HeroId::Ren => true,
@@ -1000,6 +1000,28 @@ mod gear_tests {
         // The hero's gear reaches the run.
         let w = World::new(WorldConfig { gear: p.loadout(HeroId::Ren), ..Default::default() });
         assert!(w.bonus.crit_chance > 0.0);
+    }
+
+    #[test]
+    fn replaced_skills_still_bank() {
+        use crate::content::{PassiveKind, Upgrade};
+        let mut w = World::new(WorldConfig::default());
+        let fresh = *crate::content::hero_def(HeroId::Ren).weapon_pool().iter().find(|k| w.weapon_level(**k) == 0).unwrap();
+        w.weapons.truncate(1);
+        let old = w.weapons[0].kind;
+        w.weapons[0].awakened = true;
+        w.passives = vec![(PassiveKind::Might, 2)];
+        w.replacing = Some(Upgrade::Weapon(fresh));
+        w.replace_with(Some(0));
+        w.replacing = Some(Upgrade::Passive(PassiveKind::Haste));
+        w.replace_with(Some(0));
+        w.state = RunState::Dead;
+        let mut p = Profile::default();
+        p.record_run(&w);
+        assert!(p.weapons_found.contains(&old) && p.awakenings_found.contains(&old));
+        assert!(p.passives_found.contains(&PassiveKind::Might));
+        assert_eq!(p.awakenings, 1);
+        assert!(p.is_unlocked(HeroId::Kaede) || !crate::content::hero_def(HeroId::Kaede).finished);
     }
 
     #[test]

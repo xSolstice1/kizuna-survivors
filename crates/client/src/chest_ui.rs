@@ -198,7 +198,7 @@ impl ChestAnim {
         }
 
         // Reward cards.
-        let (card_w, card_h, gap) = (150.0, 196.0, 18.0);
+        let (card_w, card_h, gap) = (150.0, 222.0, 18.0);
         let total = n as f32 * card_w + (n as f32 - 1.0) * gap;
         let x0 = (w - total) / 2.0;
         let y0 = h * 0.62;
@@ -239,6 +239,11 @@ impl ChestAnim {
                 kit::text_fit_centered(&title, cx, y + 132.0, card_w - 16.0, size, WHITE);
             }
             kit::text_fit_centered(&sub, cx, y + 176.0, card_w - 14.0, 20.0, if awaken { border } else { Color::new(0.8, 0.85, 1.0, 1.0) });
+            let tc = crate::ui::tier_color(upgrade.tier());
+            let chip = upgrade.tier().name().to_uppercase();
+            let chip_w = kit::measure(&chip, 12).width + 16.0;
+            kit::rounded(cx - chip_w / 2.0, y + 190.0, chip_w, 20.0, 10.0, Color::new(tc.r, tc.g, tc.b, 0.22));
+            kit::text(&chip, cx - chip_w / 2.0 + 8.0, y + 205.0, 12.0, tc);
         }
 
         if self.finished() {

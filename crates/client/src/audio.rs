@@ -66,6 +66,7 @@ fn tuning(s: Sfx) -> (f32, f64) {
         Sfx::LashSfx => (0.3, 0.06),
         Sfx::Chomp => (0.4, 0.2),
         Sfx::Crunch => (0.4, 0.07),
+        Sfx::Rise => (0.5, 0.2),
         Sfx::Thunder => (0.55, 0.12),
         Sfx::Meteor => (0.8, 0.2),
         Sfx::BeamSfx => (0.4, 0.12),

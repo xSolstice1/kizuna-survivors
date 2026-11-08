@@ -19,6 +19,10 @@ You move; your weapons fire on their own. Collect spirit gems to level up, choos
 and passives, open chests, accept a roadside shrine's blessing (it always comes with a price),
 fill your special meter — and survive until the final boss rises.
 
+Every weapon and passive has a rarity tier, Common to Unique, shown on its level-up card. Rarer
+skills you don't own yet are offered less often. With all slots full, a card may offer to replace
+one of your skills; the newcomer starts at half the old skill's level (minimum 1).
+
 | | |
 |---|---|
 | ![Hidden Shrine Valley](docs/screenshots/run_shrine_valley.png) | ![Ember Leaf Frontier](docs/screenshots/run_ember_leaf.png) |
@@ -78,7 +82,7 @@ floor power-ups, a data-driven minimap, and a fully synthesised soundtrack.
 |---|---|---|
 | Move | WASD / arrow keys | Floating joystick (left side) |
 | Special | Space | **SPECIAL** button |
-| Choose a card / continue (level-up, shrine, chest) | ←/→ or A/D, Enter/Space (or 1–3); Esc walks away from a shrine | Tap a card |
+| Choose a card / continue (level-up, shrine, chest) | ←/→ or A/D, Enter/Space (or 1–3); Esc walks away from a shrine or cancels a skill replacement | Tap a card |
 | Pause | Esc | Pause button |
 | Map | M / Tab | Tap the minimap |
 | Damage numbers | N | — |

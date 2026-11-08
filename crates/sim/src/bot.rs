@@ -1,8 +1,42 @@
 //! A simple kiting AI used by tests, the benchmark and (later) balance runs.
 
+use crate::content::Upgrade;
 use crate::{Input, Vec2, World};
 
 impl World {
+    /// Takes the first card that is not a pointless replacement. A replacement card is taken only to overwrite
+    /// the lowest-level skill of a lower tier; with none, the bot cancels and takes the first plain card.
+    pub fn bot_pick(&mut self) {
+        if self.replacing.is_some() {
+            if self.bot_replace() {
+                return;
+            }
+            self.replace_with(None);
+        }
+        let offer = self.offer.clone().unwrap_or_default();
+        let worthwhile = |w: &World, u: Upgrade| !w.is_replacement(u) || w.replace_target_below(u).is_some();
+        let pick = offer.iter().position(|u| worthwhile(self, *u)).unwrap_or(0);
+        self.choose(pick);
+        if self.replacing.is_some() && !self.bot_replace() {
+            self.replace_with(None);
+            let plain = self.offer.as_ref().and_then(|o| o.iter().position(|u| !self.is_replacement(*u))).unwrap_or(0);
+            self.choose(plain);
+        }
+    }
+
+    fn bot_replace(&mut self) -> bool {
+        let Some(new) = self.replacing else { return false };
+        let Some(j) = self.replace_target_below(new) else { return false };
+        self.replace_with(Some(j));
+        true
+    }
+
+    /// Index into the `replace_targets` that `new` would overwrite: lowest level among strictly lower tiers.
+    fn replace_target_below(&self, new: Upgrade) -> Option<usize> {
+        let targets = self.replace_targets_for(Some(new));
+        targets.iter().enumerate().filter(|(_, (u, _))| u.tier() < new.tier()).min_by_key(|(_, (u, level))| (*level, u.tier())).map(|(j, _)| j)
+    }
+
     /// Flee nearby enemies (closer ones push harder) while drifting toward the
     /// nearest gem; flee purely when something is about to touch the player.
     pub fn bot_input(&self) -> Input {

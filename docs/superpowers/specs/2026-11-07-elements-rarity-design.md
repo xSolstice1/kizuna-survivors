@@ -384,3 +384,26 @@ None.
   world crisis rounds 15–17.
 - On 25-minute worlds the first chest now comes at round 4 (~3:57, was 2:00) and the first elite at
   round 8 (~9:12).
+
+## Carried into phase 4
+
+- Phase 3 skill rarity final values (fix round 2): tier weights stay at the spec values 1.0 / 0.8 / 0.6 / 0.4 /
+  0.25 / 0.15; `REPLACE_CHANCE` 0.15; inherit rule unchanged (`max(1, old / 2)`).
+- Weapon tiers: Unique = SpiritSeal + VenomFang (never a signature; each exists in one hero's pool, Ren's and
+  Toya's), Mythic = GravityWell + LanternVigil, Legendary = GraveCleaver + FoxfireOrb + VoidLance; weapon buckets
+  are [7, 7, 5, 3, 2, 2]. The Unique target is per Unique-capable hero (Ren, Toya), not a five-hero average.
+- Bot policy: `bot_pick` replaces only the lowest-level skill of a strictly lower tier than the newcomer, else it
+  takes the first plain card.
+- Measured, seeds 21-30 / 41-50: Unique offered Ren 4 / 4 of 10, Toya 8 / 5 of 10; replacements 1.7 / 1.5 per
+  run; weapon slots full by round 2; median 4 maxed; wins within 1 of baseline per hero except Shun +2 (tuning)
+  and Kuon +2 (confirm).
+- Phase 3 Task 5 per-hero damage levers (`reach_might`): `MIGHT_MELEE` 2.3 (Shun, Haru), `MIGHT_TOYA` 2.3 (unchanged),
+  `MIGHT_RIKU` 2.0 (was 1.0). Riku shrine_valley Normal wins: 21-30 6 / 8 / 8 / 8 / 9 / 9 at 1.0 / 1.2 / 1.4 / 1.6 /
+  2.0 / 2.5; fresh seeds 61-70 at 1.4 / 1.6 / 2.0 = 5 / 7 / 8, so 2.0 kept (only value reaching >= 8).
+- Phase 4 recheck: Kuon scored 10/10 on seeds 41-50 (likely noise); Haru 1/10 and Kaede 4/10 at Normal are
+  unfinished heroes, melee lever unverified. `BOSS_HP` stays a `shortcut:` until human playtests.
+- Phase 3 Task 6 debts paid: reach tests for Raijin Drums, Yata Mirror and the Ember Leaf / Rainward sets (all already
+  filtered, kept as regressions); `random_targets` fallback now samples inside the reach box instead of piling on its
+  edge; ultimate alert plays a dedicated `Sfx::Rise`; `mouse_moved` moved up with the helpers; debug overlay at
+  `kit::MARGIN`. Still open: no T1 doc comments restated a name (none deleted); `BOSS_HP` shortcut and the Haru / Kaede
+  melee lever above.

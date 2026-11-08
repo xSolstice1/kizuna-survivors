@@ -4,13 +4,25 @@ use macroquad::prelude::*;
 #[allow(unused_imports)]
 use crate::kit::{draw_circle, draw_circle_lines};
 use sim::content::{
-    awakened_name, complement, hero_def, passive_max, EnemyKind, ShrineEvent, SpecialKind, Upgrade, AWAKEN_FROM, MAX_LEVEL,
+    awakened_name, complement, hero_def, passive_max, EnemyKind, ShrineEvent, SpecialKind, Tier, Upgrade, AWAKEN_FROM, MAX_LEVEL,
 };
 use sim::campaign::{Headline, StageDef, MID_BOSS_ROUND, ROUNDS, SUB_BOSS_ROUND};
 use sim::World;
 
 use crate::kit::{self, mouse_position, NavInput, screen_height, screen_width, Style, DIM, FAINT, GOLD, INK, JADE, SAKURA, SKY, VERMILION};
 use crate::render::Assets;
+
+pub fn tier_color(t: Tier) -> Color {
+    use sim::gear::Rarity;
+    crate::armory::rarity_color(match t {
+        Tier::Common => Rarity::Common,
+        Tier::Uncommon => Rarity::Uncommon,
+        Tier::Rare => Rarity::Rare,
+        Tier::Legendary => Rarity::Legendary,
+        Tier::Mythic => Rarity::Mythic,
+        Tier::Unique => Rarity::Exotic,
+    })
+}
 
 pub fn special_color(kind: SpecialKind) -> Color {
     match kind {
@@ -78,6 +90,10 @@ pub fn ult_alert(alert: &UltAlert, color: Color, touch: bool, ready: bool) {
         let sub = if touch { "Tap SPECIAL" } else { "Press SPACE" };
         kit::text_fit_centered(sub, w / 2.0, y + 32.0, w - 40.0, 22.0, Color::new(INK.r, INK.g, INK.b, fade));
     }
+}
+
+fn mouse_moved() -> bool {
+    mouse_delta_position() != Vec2::ZERO
 }
 
 fn fmt_time(t: f32) -> String {
@@ -397,7 +413,7 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
         let focused = i == *focus;
         let y = y0 + if focused { -6.0 } else { 0.0 };
         let lvl = world.next_level(u);
-        let (accent, tag) = match u {
+        let (accent, kind_tag) = match u {
             Upgrade::Weapon(_) if lvl == 1 => (SAKURA, "NEW WEAPON".to_string()),
             Upgrade::Passive(_) if lvl == 1 => (SKY, "NEW PASSIVE".to_string()),
             Upgrade::Weapon(_) => (SAKURA, format!("LEVEL {lvl}")),
@@ -406,15 +422,17 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
             Upgrade::Sen => (JADE, "SEN".to_string()),
             Upgrade::Blessing => (JADE, "BLESSING".to_string()),
         };
+        let tier_name = u.tier().name().to_uppercase();
+        let frame = tier_color(u.tier());
+        let tag = if world.is_replacement(u) { format!("REPLACE · {tier_name}") } else { format!("{tier_name} · {kind_tag}") };
         if focused {
             kit::rounded(x - 6.0, y - 6.0, cw + 12.0, ch + 12.0, 16.0, Color::new(accent.r, accent.g, accent.b, 0.15 + 0.05 * (t * 6.0).sin()));
         }
-        kit::panel_ex(x, y, cw, ch, if focused { kit::PANEL_HI } else { kit::PANEL }, if focused { accent } else { Color::new(accent.r, accent.g, accent.b, 0.45) });
+        kit::panel_ex(x, y, cw, ch, if focused { kit::PANEL_HI } else { kit::PANEL }, if focused { frame } else { Color::new(frame.r, frame.g, frame.b, 0.6) });
         if focused {
             kit::focus_ring(x - 3.0, y - 3.0, cw + 6.0, ch + 6.0, accent);
         }
-        // Accent stripe along the top.
-        kit::rounded(x + 14.0, y + 10.0, cw - 28.0, 4.0, 2.0, Color::new(accent.r, accent.g, accent.b, 0.8));
+        kit::rounded(x + 14.0, y + 10.0, cw - 28.0, 4.0, 2.0, Color::new(frame.r, frame.g, frame.b, 0.8));
         // Key badge.
         draw_circle(x + cw - 22.0, y + 32.0, 13.0, Color::new(0.05, 0.04, 0.1, 1.0));
         draw_circle_lines(x + cw - 22.0, y + 32.0, 13.0, 1.5, FAINT);
@@ -423,9 +441,9 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
         let max = u.max_level();
         kit::icon_slot(x + 16.0, y + 24.0, 60.0, Some(assets.icon(u)), lvl.saturating_sub(1), if sim::content::MAXED_FALLBACKS.contains(&u) { 0 } else { max }, false);
         kit::text_fit(u.name(), x + 90.0, y + 50.0, cw - 140.0, 22.0, INK);
-        let tw = kit::measure(&tag, 13).width + 16.0;
-        kit::rounded(x + 90.0, y + 60.0, tw, 20.0, 10.0, Color::new(accent.r, accent.g, accent.b, 0.22));
-        kit::text(&tag, x + 98.0, y + 75.0, 13.0, accent);
+        let tw = (kit::measure(&tag, 13).width + 16.0).min(cw - 104.0);
+        kit::rounded(x + 90.0, y + 60.0, tw, 20.0, 10.0, Color::new(frame.r, frame.g, frame.b, 0.22));
+        kit::text_fit(&tag, x + 98.0, y + 75.0, tw - 16.0, 13.0, frame);
         // Description.
         let mut ly = y + 116.0;
         for line in wrap(&world.describe_upgrade(u, lvl), cw - 32.0, 16) {
@@ -448,8 +466,65 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
     picked
 }
 
-fn mouse_moved() -> bool {
-    mouse_delta_position() != Vec2::ZERO
+/// Replace-skill picker. Returns Some(Some(j)) to overwrite `replace_targets()[j]`, Some(None) to cancel, None while undecided.
+pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: bool) -> Option<Option<usize>> {
+    let Some(new) = world.replacing else { return Some(None) };
+    let targets = world.replace_targets();
+    let n = targets.len();
+    dim_screen(0.72);
+    let (w, h) = (screen_width(), screen_height());
+    let (pw, row_h, gap) = if touch { (520.0, 70.0, 10.0) } else { (520.0, 50.0, 6.0) };
+    let head_h = 92.0;
+    let ph = head_h + (n + 1) as f32 * (row_h + gap) + 8.0;
+    let (px, py) = ((w - pw) / 2.0, ((h - ph) / 2.0).max(kit::MARGIN));
+    kit::panel_ex(px, py, pw, ph, Color::new(0.14, 0.07, 0.1, 0.96), tier_color(new.tier()));
+    centered("Replace which skill?", py + 38.0, 30.0, GOLD);
+
+    let row = |i: usize| Rect::new(px + 16.0, py + head_h + i as f32 * (row_h + gap), pw - 32.0, row_h);
+    let mouse: Vec2 = mouse_position().into();
+    let hovered = (0..=n).find(|&i| row(i).contains(mouse));
+    if let Some(i) = hovered.filter(|_| mouse_moved() || is_mouse_button_pressed(MouseButton::Left)) {
+        *focus = i;
+    }
+    let mut input = NavInput::read();
+    input.digit = input.digit.filter(|&d| d < n);
+    let (f, key_pick) = kit::nav(*focus, n + 1, &input);
+    *focus = f;
+    let mut picked = key_pick.map(|i| (i < n).then_some(i));
+    for (i, &(u, lvl)) in targets.iter().enumerate() {
+        let r = row(i);
+        let dy = (r.h - 50.0) / 2.0;
+        let focused = i == *focus;
+        let tc = tier_color(u.tier());
+        kit::panel_ex(r.x, r.y, r.w, r.h, if focused { kit::PANEL_HI } else { kit::PANEL }, if focused { tc } else { Color::new(tc.r, tc.g, tc.b, 0.45) });
+        if focused {
+            kit::focus_ring(r.x - 3.0, r.y - 3.0, r.w + 6.0, r.h + 6.0, GOLD);
+        }
+        kit::icon_slot(r.x + 8.0, r.y + dy + 5.0, 40.0, Some(assets.icon(u)), 0, 0, false);
+        let chip = u.tier().name().to_uppercase();
+        let cwid = kit::measure(&chip, 12).width + 14.0;
+        kit::text_fit(&format!("{}  Lv {lvl}", u.name()), r.x + 58.0, r.y + dy + 21.0, r.w - 58.0 - cwid - 52.0, 18.0, INK);
+        kit::text(&format!("becomes Lv {}", sim::content::inherit_level(new, lvl)), r.x + 58.0, r.y + dy + 40.0, 14.0, DIM);
+        kit::rounded(r.x + r.w - cwid - 12.0, r.y + dy + 15.0, cwid, 20.0, 10.0, Color::new(tc.r, tc.g, tc.b, 0.22));
+        kit::text(&chip, r.x + r.w - cwid - 5.0, r.y + dy + 30.0, 12.0, tc);
+        kit::text(&format!("{}", i + 1), r.x + r.w - cwid - 34.0, r.y + dy + 31.0, 16.0, FAINT);
+    }
+    let joins = match targets.get(*focus) {
+        Some(&(_, lvl)) => format!("{} joins at Lv {}", new.name(), sim::content::inherit_level(new, lvl)),
+        None => format!("{} stays in the offer", new.name()),
+    };
+    kit::text_fit_centered(&joins, w / 2.0, py + 66.0, pw - 40.0, 16.0, DIM);
+    let cancel = row(n);
+    if *focus == n {
+        kit::focus_ring(cancel.x - 3.0, cancel.y - 3.0, cancel.w + 6.0, cancel.h + 6.0, GOLD);
+    }
+    if kit::button(cancel, "Cancel", true, Style::Secondary) || is_key_pressed(KeyCode::Escape) {
+        picked = Some(None);
+    }
+    if let Some(i) = hovered.filter(|&i| i < n && is_mouse_button_pressed(MouseButton::Left)) {
+        picked = Some(Some(i));
+    }
+    picked
 }
 
 // ───────────────────────── Shrine ─────────────────────────
@@ -805,7 +880,7 @@ pub fn debug_overlay(fps: i32, sim_ms: f32, world: &World, stress: bool) {
         world.projectiles.len(),
         if stress { " · STRESS  [ ] enemies  - = projectiles" } else { "" }
     );
-    kit::text(&txt, 16.0, screen_height() - 12.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
+    kit::text(&txt, kit::MARGIN, screen_height() - kit::MARGIN, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
 }
 
 // ───────────────────────── Minimap ─────────────────────────

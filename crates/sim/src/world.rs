@@ -729,6 +729,15 @@ pub struct World {
     xp_carry: f32,
     pub events: Vec<Event>,
     pending_levels: u32,
+    /// Replacement card taken, waiting for the skill it will overwrite.
+    pub replacing: Option<Upgrade>,
+    /// Balance counters; never read by the simulation.
+    pub replacements: u32,
+    /// Skills overwritten by a replacement; the profile still credits them.
+    pub retired_weapons: Vec<OwnedWeapon>,
+    pub retired_passives: Vec<(PassiveKind, u8)>,
+    pub unique_offered: bool,
+    pub slots_full_round: Option<u8>,
     next_id: u32,
     next_elite: f32,
     rng: Rng,
@@ -862,6 +871,12 @@ impl World {
             xp_carry: 0.0,
             events: Vec::new(),
             pending_levels: 0,
+            replacing: None,
+            replacements: 0,
+            retired_weapons: Vec::new(),
+            retired_passives: Vec::new(),
+            unique_offered: false,
+            slots_full_round: None,
             next_id: 0,
             next_elite: first_elite,
             rng,
@@ -3539,10 +3554,8 @@ impl World {
         let mut out = Vec::with_capacity(n as usize);
         for _ in 0..n {
             if self.scratch.is_empty() {
-                let a = self.rng.range(0.0, std::f32::consts::TAU);
-                let r = self.rng.range(40.0, radius * 0.7);
-                let (off, h) = (Vec2::from_angle(a) * r, self.reach_half());
-                out.push(self.player.pos + Vec2::new(off.x.clamp(-h.x, h.x), off.y.clamp(-h.y, h.y)));
+                let h = self.reach_half();
+                out.push(self.player.pos + Vec2::new(self.rng.range(-h.x, h.x), self.rng.range(-h.y, h.y)));
             } else {
                 let k = (self.rng.next_u32() as usize) % self.scratch.len();
                 out.push(self.enemies.pos[self.scratch.swap_remove(k) as usize]);
@@ -4367,17 +4380,85 @@ impl World {
         pool
     }
 
+    fn weighted_index(&mut self, weights: &[f32]) -> usize {
+        let mut roll = self.rng.f32() * weights.iter().sum::<f32>();
+        for (i, w) in weights.iter().enumerate() {
+            roll -= w;
+            if roll < 0.0 {
+                return i;
+            }
+        }
+        weights.len() - 1
+    }
+
+    fn offer_weight(&self, u: Upgrade) -> f32 {
+        let owned = match u {
+            Upgrade::Weapon(k) => self.weapon_level(k) > 0,
+            Upgrade::Passive(k) => self.passive_level(k) > 0,
+            _ => true,
+        };
+        if owned { 1.0 } else { u.tier().weight() }
+    }
+
+    fn weapon_slots_full(&self) -> bool {
+        self.weapons.iter().filter(|w| !w.extra).count() >= hero_def(self.cfg.hero).weapon_slots
+    }
+
+    fn passive_slots_full(&self) -> bool {
+        self.passives.len() >= hero_def(self.cfg.hero).passive_slots
+    }
+
+    /// An unowned skill that can only be taken by overwriting an owned one.
+    pub fn is_replacement(&self, u: Upgrade) -> bool {
+        match u {
+            Upgrade::Weapon(k) => self.weapon_level(k) == 0 && self.weapon_slots_full(),
+            Upgrade::Passive(k) => self.passive_level(k) == 0 && self.passive_slots_full(),
+            _ => false,
+        }
+    }
+
+    fn replacement_candidates(&self) -> Vec<Upgrade> {
+        let mut out = Vec::new();
+        if self.weapon_slots_full() {
+            out.extend(hero_def(self.cfg.hero).weapon_pool().into_iter().filter(|k| self.weapon_level(*k) == 0).map(Upgrade::Weapon));
+        }
+        if self.passive_slots_full() {
+            out.extend(ALL_PASSIVES.iter().filter(|k| self.passive_level(**k) == 0).map(|k| Upgrade::Passive(*k)));
+        }
+        out
+    }
+
     fn make_offer(&mut self) {
         let mut pool = self.upgrade_pool(true);
+        if pool.is_empty() {
+            self.offer = Some(MAXED_FALLBACKS.to_vec());
+            return;
+        }
+        let candidates = self.replacement_candidates();
         let mut offer = Vec::new();
-        while offer.len() < 3 && !pool.is_empty() {
-            let i = (self.rng.next_u32() as usize) % pool.len();
+        let mut replacement = None;
+        if !candidates.is_empty() && self.rng.f32() < REPLACE_CHANCE {
+            let weights: Vec<f32> = candidates.iter().map(|u| u.tier().weight()).collect();
+            replacement = Some(candidates[self.weighted_index(&weights)]);
+        }
+        let regular = if replacement.is_some() { 2 } else { 3 };
+        while offer.len() < regular && !pool.is_empty() {
+            let weights: Vec<f32> = pool.iter().map(|u| self.offer_weight(*u)).collect();
+            let i = self.weighted_index(&weights);
             offer.push(pool.swap_remove(i));
         }
-        if offer.is_empty() {
-            offer = MAXED_FALLBACKS.to_vec();
+        if let Some(r) = replacement {
+            let at = (self.rng.next_u32() as usize) % (offer.len() + 1);
+            offer.insert(at, r);
         }
+        self.unique_offered |= offer.iter().any(|u| u.tier() == Tier::Unique);
         self.offer = Some(offer);
+    }
+
+    fn note_slots(&mut self) {
+        if self.slots_full_round.is_none() && self.weapon_slots_full() {
+            self.slots_full_round = Some(self.round());
+        }
     }
 
     /// Level the upgrade would reach if picked (for UI).
@@ -4389,18 +4470,76 @@ impl World {
         }
     }
 
-    /// Apply choice `i` of the current offer.
+    /// Apply choice `i` of the current offer. A replacement card waits for `replace_with`.
     pub fn choose(&mut self, i: usize) {
-        let Some(offer) = self.offer.take() else { return };
-        let Some(&u) = offer.get(i) else {
-            self.offer = Some(offer);
+        if self.replacing.is_some() {
             return;
-        };
+        }
+        let Some(&u) = self.offer.as_ref().and_then(|o| o.get(i)) else { return };
+        if self.is_replacement(u) {
+            self.replacing = Some(u);
+            return;
+        }
+        self.offer = None;
         self.apply_upgrade(u);
+        self.finish_pick();
+    }
+
+    fn finish_pick(&mut self) {
         self.pending_levels = self.pending_levels.saturating_sub(1);
         if self.pending_levels > 0 {
             self.make_offer();
         }
+    }
+
+    /// Owned skills the pending replacement card could overwrite, with their levels, in slot order.
+    pub fn replace_targets(&self) -> Vec<(Upgrade, u8)> {
+        self.replace_targets_for(self.replacing)
+    }
+
+    pub(crate) fn replace_targets_for(&self, new: Option<Upgrade>) -> Vec<(Upgrade, u8)> {
+        match new {
+            Some(Upgrade::Weapon(_)) => self.weapons.iter().filter(|w| !w.extra).map(|w| (Upgrade::Weapon(w.kind), w.level)).collect(),
+            Some(Upgrade::Passive(_)) => self.passives.iter().map(|(k, l)| (Upgrade::Passive(*k), *l)).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `None` cancels back to the same offer; `Some(j)` overwrites `replace_targets()[j]` at half its level.
+    pub fn replace_with(&mut self, target: Option<usize>) {
+        let Some(new) = self.replacing else { return };
+        let Some(j) = target else {
+            self.replacing = None;
+            return;
+        };
+        let Some(&(old, old_level)) = self.replace_targets().get(j) else { return };
+        self.replacing = None;
+        let level = inherit_level(new, old_level);
+        match (old, new) {
+            (Upgrade::Weapon(_), Upgrade::Weapon(k)) => {
+                let slot = self.weapons.iter().enumerate().filter(|(_, w)| !w.extra).nth(j).map(|(i, _)| i).expect("replace target index checked above");
+                self.retired_weapons.push(self.weapons[slot]);
+                self.weapons[slot] = OwnedWeapon { kind: k, level, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 };
+            }
+            (Upgrade::Passive(_), Upgrade::Passive(k)) => {
+                self.retired_passives.push(self.passives[j]);
+                if let Upgrade::Passive(PassiveKind::Vitality) = old {
+                    // shortcut: flat subtraction ignores Glass Blade's ×0.7, track granted HP if players notice
+                    self.player.max_hp = (self.player.max_hp - VITALITY_HP * old_level as f32).max(10.0);
+                }
+                self.passives[j] = (k, level);
+                if k == PassiveKind::Vitality {
+                    self.player.max_hp += VITALITY_HP * level as f32;
+                    self.heal(VITALITY_HP * level as f32);
+                }
+                self.player.hp = self.player.hp.min(self.player.max_hp);
+            }
+            _ => {}
+        }
+        self.replacements += 1;
+        self.note_slots();
+        self.offer = None;
+        self.finish_pick();
     }
 
     /// What a maxed-out fallback gives right now: HP healed, Sen, or damage fraction gained.
@@ -4431,14 +4570,15 @@ impl World {
                     None => self.passives.push((k, 1)),
                 }
                 if k == PassiveKind::Vitality {
-                    self.player.max_hp += 20.0;
-                    self.heal(20.0);
+                    self.player.max_hp += VITALITY_HP;
+                    self.heal(VITALITY_HP);
                 }
             }
             Upgrade::Heal => self.heal(self.fallback_amount(u)),
             Upgrade::Sen => self.gain_sen(self.fallback_amount(u).round() as u32),
             Upgrade::Blessing => self.mods.damage *= 1.0 + self.fallback_amount(u),
         }
+        self.note_slots();
     }
 
     /// Dev shortcut: fill the hero's weapon slots at max level with their complements, ready to Awaken.
@@ -4513,7 +4653,7 @@ mod tests {
         let mut w = World::new(WorldConfig { seed, ..Default::default() });
         for t in 0..ticks {
             if w.offer.is_some() {
-                w.choose(0);
+                w.bot_pick();
             }
             w.close_chest();
             w.choose_shrine(None);
@@ -4625,6 +4765,71 @@ mod tests {
         assert!(w.enemies.hp[1] < inside);
     }
 
+    fn reach_pair() -> World {
+        let mut w = World::new(WorldConfig::default());
+        let p = w.player.pos;
+        w.spawn_enemy(EnemyKind::Wisp, p + Vec2::new(0.0, 150.0));
+        w.spawn_enemy(EnemyKind::Wisp, p + Vec2::new(180.0, 0.0));
+        w
+    }
+
+    fn assert_only_second_hurt(w: &World, hp: (f32, f32)) {
+        assert_eq!(w.enemies.hp[0], hp.0, "out-of-reach enemy untouched");
+        assert!(w.enemies.hp[1] < hp.1, "in-reach enemy hurt");
+    }
+
+    #[test]
+    fn raijin_drums_strike_only_in_reach() {
+        let mut w = reach_pair();
+        w.art = Some(ArtState { art: ArsenalArt::RaijinDrums, power: 1.0, mythic: false, timer: 0.0, phase: 0.0, orbs: Vec::new(), foxes: Vec::new() });
+        let hp = (w.enemies.hp[0], w.enemies.hp[1]);
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        w.update_art();
+        assert_only_second_hurt(&w, hp);
+    }
+
+    #[test]
+    fn yata_mirror_reflects_only_in_reach() {
+        let mut w = reach_pair();
+        w.cfg.gear.exotics.push(Exotic::YataMirror);
+        let hp = (w.enemies.hp[0], w.enemies.hp[1]);
+        w.reflect_shot();
+        assert_only_second_hurt(&w, hp);
+    }
+
+    #[test]
+    fn ember_leaf_set_blasts_only_in_reach() {
+        let mut w = reach_pair();
+        w.cfg.gear.sets4.push(StageId::EmberLeaf);
+        w.gear_timers[2] = 0.0;
+        w.update_gear();
+        assert_eq!(w.hazards.len(), 1);
+        assert_eq!(w.hazards[0].pos, w.enemies.pos[1]);
+    }
+
+    #[test]
+    fn rainward_set_lightning_only_in_reach() {
+        let mut w = reach_pair();
+        w.cfg.gear.sets4.push(StageId::Rainward);
+        w.gear_timers[3] = 0.0;
+        w.update_gear();
+        assert_eq!(w.hazards.len(), 1);
+        assert_eq!(w.hazards[0].pos, w.enemies.pos[1]);
+    }
+
+    #[test]
+    fn fallback_targets_spread_inside_reach() {
+        let mut w = World::new(WorldConfig::default());
+        let h = w.reach_half();
+        let targets = w.random_targets(340.0, 200);
+        let near_edge = targets.iter().filter(|t| {
+            let d = **t - w.player.pos;
+            assert!(d.x.abs() <= h.x && d.y.abs() <= h.y);
+            d.x.abs() > h.x - 4.0 || d.y.abs() > h.y - 4.0
+        }).count();
+        assert!(near_edge < 20, "{near_edge} of 200 piled on the reach edge");
+    }
+
     fn fly_projectiles(w: &mut World, frames: usize) {
         for _ in 0..frames {
             w.grid.rebuild(w.player.pos, &w.enemies.pos);
@@ -4683,7 +4888,7 @@ mod tests {
         let mut w = World::new(WorldConfig { seed: 1, ..Default::default() });
         for _ in 0..60 * 90 {
             if w.offer.is_some() {
-                w.choose(0);
+                w.bot_pick();
             }
             w.close_chest();
             w.choose_shrine(None);
@@ -4702,7 +4907,7 @@ mod tests {
         let mut w = World::new(WorldConfig::default());
         for _ in 0..60 * 600 {
             if w.offer.is_some() {
-                w.choose(0);
+                w.bot_pick();
             }
             w.close_chest();
             w.choose_shrine(None);
@@ -4861,16 +5066,262 @@ mod tests {
                 }
             }
         }
-        // With every slot filled, no new weapon may be offered.
+        // With every slot filled, a new weapon may only come as a replacement card.
         w.weapons = pool.iter().take(ren.weapon_slots).map(|&k| OwnedWeapon { kind: k, level: 2, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }).collect();
         for _ in 0..300 {
             w.make_offer();
             for u in w.offer.take().unwrap() {
                 if let Upgrade::Weapon(k) = u {
-                    assert!(w.weapon_level(k) > 0, "offered a 5th weapon {k:?}");
+                    assert!(w.weapon_level(k) > 0 || w.is_replacement(u), "offered a 5th weapon {k:?}");
                 }
             }
         }
+    }
+
+    fn weapon(kind: WeaponKind, level: u8) -> OwnedWeapon {
+        OwnedWeapon { kind, level, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }
+    }
+
+    fn full_loadout(w: &mut World, level: u8) {
+        let ren = hero_def(HeroId::Ren);
+        w.weapons = ren.weapon_pool().into_iter().take(ren.weapon_slots).map(|k| weapon(k, level)).collect();
+        w.passives = ALL_PASSIVES.iter().take(ren.passive_slots).map(|k| (*k, level)).collect();
+    }
+
+    fn with_replacement(w: &mut World, u: Upgrade) {
+        w.offer = Some(vec![u, Upgrade::Heal]);
+        w.pending_levels = 1;
+        w.choose(0);
+    }
+
+    fn unowned_weapon(w: &World) -> WeaponKind {
+        hero_def(w.cfg.hero).weapon_pool().into_iter().find(|k| w.weapon_level(*k) == 0).unwrap()
+    }
+
+    #[test]
+    fn rare_skills_are_offered_less() {
+        let mut w = World::new(WorldConfig::default());
+        w.weapons.truncate(1);
+        let mut counts: Vec<(WeaponKind, u32)> = Vec::new();
+        for _ in 0..4000 {
+            w.make_offer();
+            for u in w.offer.take().unwrap() {
+                if let Upgrade::Weapon(k) = u {
+                    if w.weapon_level(k) == 0 {
+                        match counts.iter_mut().find(|(c, _)| *c == k) {
+                            Some((_, n)) => *n += 1,
+                            None => counts.push((k, 1)),
+                        }
+                    }
+                }
+            }
+        }
+        let mean = |keep: fn(Tier) -> bool| {
+            let v: Vec<u32> = counts.iter().filter(|(k, _)| keep(Upgrade::Weapon(*k).tier())).map(|(_, n)| *n).collect();
+            assert!(!v.is_empty(), "no weapons in that tier band");
+            v.iter().sum::<u32>() as f32 / v.len() as f32
+        };
+        let (common, high) = (mean(|t| t == Tier::Common), mean(|t| t >= Tier::Legendary));
+        assert!(common > high * 1.8, "common {common} vs high {high}");
+    }
+
+    #[test]
+    fn owned_levels_ignore_tier() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        for p in &mut w.passives {
+            p.1 = passive_max(p.0);
+        }
+        let mut counts = vec![0u32; w.weapons.len()];
+        for _ in 0..3000 {
+            w.make_offer();
+            for u in w.offer.take().unwrap() {
+                if let Some(i) = w.weapons.iter().position(|o| u == Upgrade::Weapon(o.kind)) {
+                    counts[i] += 1;
+                }
+            }
+        }
+        let mean = counts.iter().sum::<u32>() as f32 / counts.len() as f32;
+        assert!(counts.iter().all(|c| (*c as f32 - mean).abs() <= mean * 0.15), "{counts:?}");
+    }
+
+    #[test]
+    fn at_most_one_replacement_card() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        let mut with = 0;
+        for _ in 0..2000 {
+            w.make_offer();
+            let n = w.offer.take().unwrap().iter().filter(|u| w.is_replacement(**u)).count();
+            assert!(n <= 1);
+            with += n;
+        }
+        assert!(with as f32 > 2000.0 * REPLACE_CHANCE * 0.7, "{with}");
+    }
+
+    #[test]
+    fn maxed_and_full_gets_fallbacks() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, MAX_LEVEL);
+        for p in &mut w.passives {
+            p.1 = passive_max(p.0);
+        }
+        for _ in 0..500 {
+            w.make_offer();
+            assert_eq!(w.offer.take().unwrap(), MAXED_FALLBACKS.to_vec());
+        }
+    }
+
+    #[test]
+    fn replacement_inherits_half() {
+        for (old, expect) in [(7, 3), (1, 1)] {
+            let mut w = World::new(WorldConfig::default());
+            full_loadout(&mut w, 2);
+            w.weapons[2].level = old;
+            w.weapons[2].awakened = true;
+            let (gone, new) = (w.weapons[2].kind, unowned_weapon(&w));
+            with_replacement(&mut w, Upgrade::Weapon(new));
+            assert!(w.replacing.is_some() && w.offer.is_some() && w.pending_levels == 1);
+            w.replace_with(Some(2));
+            assert_eq!((w.weapons[2].kind, w.weapons[2].level, w.weapons[2].awakened), (new, expect, false));
+            assert_eq!(w.weapon_level(gone), 0);
+            assert_eq!(w.pending_levels, 0);
+        }
+    }
+
+    #[test]
+    fn bot_only_replaces_with_a_higher_tier() {
+        use WeaponKind::*;
+        let mut w = World::new(WorldConfig::default());
+        w.weapons = [FoxMirage, MukadeSpines, Ofuda, FlamePool].map(|k| weapon(k, 2)).to_vec();
+        w.offer = Some(vec![Upgrade::Weapon(RepulsionStar), Upgrade::Heal]);
+        w.pending_levels = 1;
+        w.bot_pick();
+        assert!(w.replacing.is_none() && w.offer.is_none());
+        assert_eq!(w.weapon_level(RepulsionStar), 0);
+
+        w.weapons[1] = weapon(RepulsionStar, 1);
+        w.offer = Some(vec![Upgrade::Weapon(SpiritSeal), Upgrade::Heal]);
+        w.pending_levels = 1;
+        w.bot_pick();
+        assert_eq!((w.weapons[1].kind, w.weapons[1].level), (SpiritSeal, 1));
+    }
+
+    #[test]
+    fn cancel_keeps_the_offer() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        let new = unowned_weapon(&w);
+        with_replacement(&mut w, Upgrade::Weapon(new));
+        let before = w.offer.clone();
+        w.replace_with(None);
+        assert!(w.replacing.is_none());
+        assert_eq!(w.offer, before);
+        assert_eq!(w.pending_levels, 1);
+    }
+
+    #[test]
+    fn awakening_survives_complement_replacement() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        w.weapons[0].awakened = true;
+        let comp = complement(w.weapons[0].kind).0;
+        let j = w.passives.iter().position(|(k, _)| *k == comp).unwrap_or_else(|| {
+            w.passives[0].0 = comp;
+            0
+        });
+        let new = *ALL_PASSIVES.iter().find(|k| w.passive_level(**k) == 0).unwrap();
+        with_replacement(&mut w, Upgrade::Passive(new));
+        w.replace_with(Some(j));
+        assert_eq!(w.passive_level(comp), 0);
+        assert!(w.weapons[0].awakened);
+    }
+
+    #[test]
+    fn replacing_vitality_returns_its_hp() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        let base = w.player.max_hp;
+        w.passives = ALL_PASSIVES.iter().filter(|k| **k != PassiveKind::Vitality).take(hero_def(HeroId::Ren).passive_slots).map(|k| (*k, 2)).collect();
+        w.passives[0] = (PassiveKind::Vitality, 4);
+        w.player.max_hp += 80.0;
+        let other = *ALL_PASSIVES.iter().find(|k| w.passive_level(**k) == 0 && **k != PassiveKind::Vitality).unwrap();
+        with_replacement(&mut w, Upgrade::Passive(other));
+        w.replace_with(Some(0));
+        assert_eq!(w.player.max_hp, base);
+
+        w.passives[0] = (other, 6);
+        with_replacement(&mut w, Upgrade::Passive(PassiveKind::Vitality));
+        w.replace_with(Some(0));
+        assert_eq!(w.passive_level(PassiveKind::Vitality), 3);
+        assert_eq!(w.player.max_hp, base + 60.0);
+    }
+
+    #[test]
+    fn inherited_level_respects_the_new_skills_cap() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        w.passives[0] = (ALL_PASSIVES.iter().copied().find(|k| *k != PassiveKind::Abundance && *k != PassiveKind::Vitality).unwrap(), 8);
+        w.passives.retain(|(k, _)| *k != PassiveKind::Abundance);
+        while w.passives.len() < hero_def(HeroId::Ren).passive_slots {
+            let k = *ALL_PASSIVES.iter().find(|k| w.passive_level(**k) == 0 && **k != PassiveKind::Abundance).unwrap();
+            w.passives.push((k, 2));
+        }
+        with_replacement(&mut w, Upgrade::Passive(PassiveKind::Abundance));
+        w.replace_with(Some(0));
+        assert_eq!(w.passive_level(PassiveKind::Abundance), 3);
+    }
+
+    #[test]
+    fn replacing_vitality_floors_max_hp() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        w.passives = ALL_PASSIVES.iter().filter(|k| **k != PassiveKind::Vitality).take(hero_def(HeroId::Ren).passive_slots).map(|k| (*k, 2)).collect();
+        w.passives[0] = (PassiveKind::Vitality, 8);
+        w.player.max_hp = 127.0;
+        w.player.hp = 127.0;
+        let other = *ALL_PASSIVES.iter().find(|k| w.passive_level(**k) == 0 && **k != PassiveKind::Vitality).unwrap();
+        with_replacement(&mut w, Upgrade::Passive(other));
+        w.replace_with(Some(0));
+        assert_eq!(w.player.max_hp, 10.0);
+        assert!(w.player.hp > 0.0 && w.player.hp <= w.player.max_hp);
+    }
+
+    #[test]
+    fn extra_weapons_are_not_replaceable() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        let mut extra = weapon(unowned_weapon(&w), 1);
+        extra.extra = true;
+        w.weapons.insert(1, extra);
+        let new = w.weapons.iter().find(|o| o.extra).map(|_| *ALL_WEAPONS.iter().find(|k| w.weapon_level(**k) == 0 && hero_def(HeroId::Ren).weapon_pool().contains(k)).unwrap()).unwrap();
+        w.replacing = Some(Upgrade::Weapon(new));
+        let targets = w.replace_targets();
+        assert_eq!(targets.len(), 4);
+        assert!(targets.iter().all(|(u, _)| *u != Upgrade::Weapon(w.weapons[1].kind)));
+        assert!(!w.is_replacement(Upgrade::Weapon(w.weapons[1].kind)));
+    }
+
+    #[test]
+    fn replacement_consumes_one_level() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        let new = unowned_weapon(&w);
+        w.offer = Some(vec![Upgrade::Weapon(new)]);
+        w.pending_levels = 3;
+        w.choose(0);
+        w.replace_with(Some(1));
+        assert!(w.offer.is_some());
+        assert_eq!(w.pending_levels, 2);
+    }
+
+    #[test]
+    fn signature_can_be_replaced() {
+        let mut w = World::new(WorldConfig::default());
+        full_loadout(&mut w, 2);
+        w.weapons[0].kind = hero_def(HeroId::Ren).signature;
+        w.replacing = Some(Upgrade::Weapon(unowned_weapon(&w)));
+        assert!(w.replace_targets().iter().any(|(u, _)| *u == Upgrade::Weapon(hero_def(HeroId::Ren).signature)));
     }
 
     #[test]
@@ -4945,7 +5396,7 @@ mod tests {
             assert!(w.player.hp > 0.0 && w.player.hp <= w.player.max_hp, "{ev:?} broke HP");
             w.close_chest();
             while w.offer.is_some() {
-                w.choose(0);
+                w.bot_pick();
             }
             for _ in 0..120 {
                 w.step(Input::default());
@@ -5356,7 +5807,7 @@ mod tests {
         for _ in 0..60 * 31 {
             w.step(Input::default());
             if w.offer.is_some() {
-                w.choose(0);
+                w.bot_pick();
             }
         }
         assert!(!w.pickups.is_empty(), "a pickup should appear by 30s");
@@ -5566,7 +6017,7 @@ mod tests {
         let mut finale = false;
         for _ in 0..60 * 9 {
             if w.offer.is_some() {
-                w.choose(0);
+                w.bot_pick();
             }
             w.step(Input::default());
             finale |= w.events.iter().any(|e| matches!(e, Event::Burst { style: s, .. } if *s == style::PURIFY));
@@ -5663,7 +6114,7 @@ mod tests {
                     level_at_15 = Some(w.player.level);
                 }
                 if w.offer.is_some() {
-                    w.choose(0);
+                    w.bot_pick();
                 }
                 if w.chest_result.is_some() {
                     w.close_chest();
@@ -5677,17 +6128,90 @@ mod tests {
             let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
             let nl = w.boss().map(|b| format!("{} {:.0}%", b.2.short_name(), b.1 * 100.0)).unwrap_or("-".into());
             println!(
-                "seed {seed} [boss {nl}] bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                "seed {seed} [boss {nl}] bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  ({:.1}s real)  weapons {:?}  awakened {:?}",
                 w.bosses_down,
                 w.state,
                 w.time,
                 w.player.level,
                 level_at_15,
                 w.kills,
+                w.slots_full_round,
+                w.weapons.iter().filter(|x| !x.extra && x.level >= MAX_LEVEL).count(),
+                w.unique_offered as u8,
+                w.replacements,
                 started.elapsed().as_secs_f32(),
                 w.weapons.iter().map(|x| (x.kind, x.level)).collect::<Vec<_>>(),
                 awakened
             );
+        }
+    }
+
+    fn damage_on_one(kind: WeaponKind) -> f32 {
+        let mut w = World::new(WorldConfig { seed: 5, hero: HeroId::Ren, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.weapons = vec![OwnedWeapon { kind, level: MAX_LEVEL, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
+        w.spawn_enemy(EnemyKind::Oni, Vec2::new(60.0, 0.0));
+        w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
+        w.enemies.hp.iter_mut().for_each(|h| *h = 1e9);
+        let mut dealt = 0.0;
+        for _ in 0..60 * 6 {
+            w.step(Input::default());
+            dealt += w.events.iter().filter_map(|e| if let Event::Hit { amount, .. } = e { Some(*amount) } else { None }).sum::<f32>();
+        }
+        dealt
+    }
+
+    /// Ranks every weapon (crowd and single-target damage) and passive (bot wins). `cargo test --release -p sim skill_strength -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn skill_strength() {
+        let mut weapons: Vec<(WeaponKind, f32, f32, f32)> = ALL_WEAPONS
+            .iter()
+            .map(|&k| {
+                let (crowd, single) = (damage_over(k, false, HeroId::Ren), damage_on_one(k));
+                (k, crowd, single, (crowd * single).sqrt())
+            })
+            .collect();
+        weapons.sort_by(|a, b| b.3.total_cmp(&a.3));
+        println!("WEAPONS (strength = sqrt(crowd * single))");
+        for (k, crowd, single, s) in &weapons {
+            println!("{k:?}\tcrowd {crowd:.0}\tsingle {single:.0}\tstrength {s:.0}");
+        }
+        let first: u64 = std::env::var("SKILL_SEED0").ok().and_then(|s| s.parse().ok()).unwrap_or(21);
+        let seeds: u64 = std::env::var("SKILL_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+        let only = std::env::var("SKILL_ONLY").ok();
+        let mut passives: Vec<(Option<PassiveKind>, u32, f32)> = Vec::new();
+        let candidates = std::iter::once(None).chain(ALL_PASSIVES.iter().map(|p| Some(*p)));
+        for p in candidates.filter(|p| p.is_none_or(|p| only.as_ref().is_none_or(|o| format!("{p:?}") == *o))) {
+            let (mut wins, mut total_time) = (0, 0.0);
+            for seed in first..first + seeds {
+                let mut w = World::new(WorldConfig { seed, hero: HeroId::Ren, stage: StageId::ShrineValley, difficulty: Difficulty::Normal, ..Default::default() });
+                if let Some(p) = p {
+                    for _ in 0..passive_max(p) {
+                        w.apply_upgrade(Upgrade::Passive(p));
+                    }
+                }
+                while w.state == RunState::Playing {
+                    if w.offer.is_some() {
+                        w.bot_pick();
+                    }
+                    if w.chest_result.is_some() {
+                        w.close_chest();
+                    }
+                    if w.shrine_offer.is_some() {
+                        w.choose_shrine(Some(0));
+                    }
+                    let input = w.bot_input();
+                    w.step(input);
+                }
+                wins += (w.state == RunState::Won) as u32;
+                total_time += w.time;
+            }
+            passives.push((p, wins, total_time / seeds as f32));
+        }
+        passives.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.total_cmp(&a.2)));
+        println!("PASSIVES (wins of {seeds}, ties by mean time)");
+        for (p, wins, t) in &passives {
+            println!("{}\twins {wins}\tmean time {t:.0}", p.map_or("(none)".to_string(), |p| format!("{p:?}")));
         }
     }
 
@@ -5697,7 +6221,7 @@ mod tests {
         let before = w.player.max_hp;
         w.offer = Some(vec![Upgrade::Passive(PassiveKind::Vitality)]);
         w.pending_levels = 1;
-        w.choose(0);
+        w.bot_pick();
         for _ in 0..60 * 5 {
             w.step(Input::default());
         }

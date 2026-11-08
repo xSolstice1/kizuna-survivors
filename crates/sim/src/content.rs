@@ -23,6 +23,8 @@ pub const REACH_EDGE: f32 = 24.0;
 pub const DEFAULT_VIEW_HALF: Vec2 = Vec2::new(320.0, 180.0);
 /// Melee reach covers far fewer enemies, so melee heroes hit harder; hybrids keep pace without help.
 pub const MIGHT_MELEE: f32 = 2.3;
+pub const MIGHT_TOYA: f32 = 2.3;
+pub const MIGHT_RIKU: f32 = 2.0;
 /// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
 pub const BOSS_HP: f32 = 0.5;
 
@@ -158,6 +160,14 @@ impl PickupKind {
             PickupKind::Hourglass => "Enemies frozen for 5s",
             PickupKind::ExorcismSeal => "Banishes every enemy on screen",
             PickupKind::SenPurse => "+40 Sen",
+        }
+    }
+    pub fn tier(self) -> Tier {
+        match self {
+            PickupKind::Feast => Tier::Common,
+            PickupKind::SwiftGeta | PickupKind::OniSake | PickupKind::ShrineBell | PickupKind::SenPurse => Tier::Uncommon,
+            PickupKind::Hourglass => Tier::Rare,
+            PickupKind::ExorcismSeal => Tier::Legendary,
         }
     }
     /// Spawn weight.
@@ -737,7 +747,7 @@ pub struct HeroDef {
     pub pool_tags: &'static [Tag],
     /// Scales `REACH_HALF`.
     pub reach: f32,
-    /// Damage multiplier that offsets a shorter reach.
+    /// Per-hero damage lever; melee heroes offset their shorter reach.
     pub reach_might: f32,
     pub weapon_slots: usize,
     pub passive_slots: usize,
@@ -772,8 +782,10 @@ pub fn hero_def(id: HeroId) -> HeroDef {
     };
     let (reach, reach_might) = match id {
         HeroId::Ren | HeroId::Kuon | HeroId::Mika | HeroId::Nanami => (REACH_RANGED, 1.0),
-        HeroId::Riku | HeroId::Kaede | HeroId::Yuzu => (REACH_HYBRID, 1.0),
-        HeroId::Shun | HeroId::Toya | HeroId::Haru => (REACH_MELEE, MIGHT_MELEE),
+        HeroId::Riku => (REACH_HYBRID, MIGHT_RIKU),
+        HeroId::Kaede | HeroId::Yuzu => (REACH_HYBRID, 1.0),
+        HeroId::Toya => (REACH_MELEE, MIGHT_TOYA),
+        HeroId::Shun | HeroId::Haru => (REACH_MELEE, MIGHT_MELEE),
     };
     HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
 }
@@ -1043,6 +1055,43 @@ pub fn passive_max(kind: PassiveKind) -> u8 {
 
 // ───────────────────────── Upgrades ─────────────────────────
 
+/// Skill rarity; gear has its own `Rarity`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tier {
+    Common,
+    Uncommon,
+    Rare,
+    Legendary,
+    Mythic,
+    Unique,
+}
+
+pub const ALL_TIERS: [Tier; 6] = [Tier::Common, Tier::Uncommon, Tier::Rare, Tier::Legendary, Tier::Mythic, Tier::Unique];
+
+impl Tier {
+    pub fn name(self) -> &'static str {
+        match self {
+            Tier::Common => "Common",
+            Tier::Uncommon => "Uncommon",
+            Tier::Rare => "Rare",
+            Tier::Legendary => "Legendary",
+            Tier::Mythic => "Mythic",
+            Tier::Unique => "Unique",
+        }
+    }
+    /// Starting level-up offer weight for a skill not yet owned.
+    pub fn weight(self) -> f32 {
+        match self {
+            Tier::Common => 1.0,
+            Tier::Uncommon => 0.8,
+            Tier::Rare => 0.6,
+            Tier::Legendary => 0.4,
+            Tier::Mythic => 0.25,
+            Tier::Unique => 0.15,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Upgrade {
     Weapon(WeaponKind),
@@ -1052,6 +1101,9 @@ pub enum Upgrade {
     Sen,
     Blessing,
 }
+
+/// Chance an offer carries a replacement card when one is possible.
+pub const REPLACE_CHANCE: f32 = 0.15;
 
 pub const MAXED_FALLBACKS: [Upgrade; 3] = [Upgrade::Heal, Upgrade::Sen, Upgrade::Blessing];
 
@@ -1074,6 +1126,22 @@ pub const SEN_POUCH_RAMP: f32 = 300.0;
 pub const BLESSING_DAMAGE: f32 = 1.03;
 
 impl Upgrade {
+    pub fn tier(self) -> Tier {
+        use WeaponKind::*;
+        match self {
+            Upgrade::Weapon(SpiritSeal | VenomFang) => Tier::Unique,
+            Upgrade::Weapon(GravityWell | LanternVigil) => Tier::Mythic,
+            Upgrade::Weapon(GraveCleaver | FoxfireOrb | VoidLance) => Tier::Legendary,
+            Upgrade::Weapon(FoxMirage | MukadeSpines | Ofuda | FlamePool | Crescent) => Tier::Rare,
+            Upgrade::Weapon(CrimsonTendrils | IaiFlash | YinYangOrbs | StarFall | Familiars | MoonOrbs | GaleShuriken) => Tier::Uncommon,
+            Upgrade::Weapon(_) => Tier::Common,
+            Upgrade::Passive(PassiveKind::Might) => Tier::Mythic,
+            Upgrade::Passive(PassiveKind::Guard) => Tier::Legendary,
+            Upgrade::Passive(PassiveKind::Recovery | PassiveKind::Vitality) => Tier::Rare,
+            Upgrade::Passive(PassiveKind::Haste | PassiveKind::Abundance | PassiveKind::Swiftness) => Tier::Uncommon,
+            Upgrade::Passive(_) | Upgrade::Heal | Upgrade::Sen | Upgrade::Blessing => Tier::Common,
+        }
+    }
     pub fn name(self) -> &'static str {
         match self {
             Upgrade::Weapon(WeaponKind::Ofuda) => "Ofuda Volley",
@@ -1433,6 +1501,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hero_levers_are_per_hero() {
+        assert_eq!(hero_def(HeroId::Riku).reach_might, 2.0);
+        assert_eq!(hero_def(HeroId::Toya).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Shun).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Haru).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Kaede).reach_might, 1.0);
+        assert_eq!(hero_def(HeroId::Ren).reach_might, 1.0);
+    }
+
+    #[test]
+    fn tiers_follow_the_buckets() {
+        use Tier::*;
+        let count = |tiers: Vec<Tier>| ALL_TIERS.map(|t| tiers.iter().filter(|x| **x == t).count());
+        let weapons = count(ALL_WEAPONS.iter().map(|k| Upgrade::Weapon(*k).tier()).collect());
+        let passives = count(ALL_PASSIVES.iter().map(|k| Upgrade::Passive(*k).tier()).collect());
+        assert_eq!(weapons, [7, 7, 5, 3, 2, 2]);
+        assert_eq!(passives, [3, 3, 2, 1, 1, 0]);
+        assert!(MAXED_FALLBACKS.iter().all(|u| u.tier() == Common));
+    }
+
+    #[test]
+    fn signatures_are_never_unique() {
+        for h in ALL_HEROES {
+            assert_ne!(Upgrade::Weapon(hero_def(h).signature).tier(), Tier::Unique, "{h:?}");
+        }
+    }
+
+    #[test]
+    fn pickup_tiers_follow_spawn_weights() {
+        for a in ALL_PICKUPS {
+            for b in ALL_PICKUPS {
+                if a.weight() > b.weight() {
+                    assert!(a.tier() <= b.tier(), "{a:?} spawns more often than {b:?} but has a higher tier");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tier_weights_fall_with_rarity() {
+        let weights = ALL_TIERS.map(Tier::weight);
+        assert_eq!(weights, [1.0, 0.8, 0.6, 0.4, 0.25, 0.15]);
+        assert!(weights.windows(2).all(|w| w[0] > w[1]));
+    }
+
+    #[test]
     fn pacing_is_monotonic() {
         let mut prev = 0;
         for s in (0..=900).step_by(10) {
@@ -1463,4 +1577,12 @@ mod tests {
             }
         }
     }
+}
+
+/// Max HP one Vitality level grants.
+pub const VITALITY_HP: f32 = 20.0;
+
+/// Level a replacing skill joins at: half the overwritten level, within the new skill's cap.
+pub fn inherit_level(new: Upgrade, old: u8) -> u8 {
+    (old / 2).max(1).min(new.max_level())
 }

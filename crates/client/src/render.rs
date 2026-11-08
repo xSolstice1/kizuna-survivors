@@ -674,7 +674,7 @@ impl Fx {
                     }
                 }
                 Event::PickupTaken { pos, kind } => {
-                    self.say(&format!("{}! {}", kind.name(), kind.describe()));
+                    self.say(&format!("{} ({})! {}", kind.name(), kind.tier().name(), kind.describe()));
                     if kind == PickupKind::ExorcismSeal {
                         self.bursts.push((vec2(pos.x, pos.y), sim::content::EXORCISM_RADIUS, 0.0, 1));
                         self.shake = self.shake.max(0.5);
@@ -2214,6 +2214,8 @@ fn draw_pickup(a: &Assets, c: Vec2, k: PickupKind, t: f32) {
     draw_rectangle(c.x - 2.0, c.y - 140.0, 4.0, 140.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
     draw_ellipse(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, Color::new(col.r, col.g, col.b, 0.25));
     draw_ellipse_lines(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.8));
+    let tier = crate::ui::tier_color(k.tier());
+    draw_ellipse_lines(c.x, c.y + 4.0, 21.0 + 4.0 * pulse, 8.0 + 1.5 * pulse, 0.0, 1.0, Color::new(tier.r, tier.g, tier.b, 0.9));
     let bob = (t * 3.0 + c.y * 0.1).sin() * 2.5;
     backing(vec2(c.x, c.y - 10.0 + bob), 13.0, col, 0.6 + 0.4 * pulse);
     draw_texture_ex(a.pickup(k), (c.x - 10.0).round(), (c.y - 20.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });

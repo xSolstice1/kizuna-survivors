@@ -120,6 +120,7 @@ async fn main() {
     let mut special_queued = false;
     let mut overlay_focus = 0usize;
     let mut overlay_was_open = false;
+    let mut cards_focus = 0usize;
 
     let mut collection = menu::CollectionState::default();
     let mut armory_state = armory::ArmoryState::default();
@@ -176,7 +177,7 @@ async fn main() {
         if let Some(st) = perf {
             // Keep the scene in play: take level-ups and chests automatically.
             if world.offer.is_some() {
-                world.choose(0);
+                world.bot_pick();
             }
             if world.chest_result.is_some() {
                 world.close_chest();
@@ -517,8 +518,7 @@ async fn main() {
         let alert_blocked = world.paused() || screen == Screen::Paused || map_open;
         let ult_ready = matches!(screen, Screen::Playing | Screen::Paused) && !matches!(world.state, RunState::Dead | RunState::Won) && world.player.special >= 1.0 && world.form_kind().is_none();
         if ult_alert.update(ult_ready, alert_blocked, dt) {
-            // shortcut: reuses Sfx::Bell; a dedicated rising chime can be added to synth.rs later
-            audio.play(synth::Sfx::Bell);
+            audio.play(synth::Sfx::Rise);
         }
         ui::ult_alert(&ult_alert, ui::special_color(sim::content::hero_def(world.cfg.hero).special), touch.active, ult_ready && !alert_blocked);
         if dev.show_fps || stress.is_some() {
@@ -556,10 +556,24 @@ async fn main() {
                 world.choose_shrine(choice);
                 overlay_picked = true;
             }
-        } else if let Some(offer) = world.offer.clone() {
+        } else if world.offer.is_some() && world.replacing.is_some() {
             let fresh = !overlay_was_open;
             if fresh {
                 overlay_focus = 0;
+            }
+            let choice = ui::replace_picker(&world, &assets, &mut overlay_focus, touch.active);
+            if let Some(choice) = choice.filter(|_| !fresh) {
+                audio.play(synth::Sfx::Click);
+                if choice.is_none() {
+                    cards_focus = world.offer.as_ref().and_then(|o| o.iter().position(|&u| world.is_replacement(u))).unwrap_or(0);
+                }
+                world.replace_with(choice);
+                overlay_picked = true;
+            }
+        } else if let Some(offer) = world.offer.clone() {
+            let fresh = !overlay_was_open;
+            if fresh {
+                overlay_focus = std::mem::take(&mut cards_focus);
             }
             let picked = ui::level_up(&world, &offer, &assets, &mut overlay_focus, touch.active);
             if let Some(i) = picked.filter(|_| !fresh) {
