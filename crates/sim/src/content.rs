@@ -38,6 +38,16 @@ pub const NOPPERABO_FADE_IN: f32 = 0.6;
 pub const SHOT_RADIUS: f32 = 5.0;
 pub const SHOT_DAMAGE: f32 = 4.0;
 
+/// Share of refill spawns, from round 5, that are an Uncommon.
+pub const UNCOMMON_SHARE: f32 = 0.03;
+
+/// A Leader's banner: enemies this close move and hit harder.
+pub const BANNER_RADIUS: f32 = 140.0;
+pub const BANNER_SPEED: f32 = 1.25;
+pub const BANNER_DAMAGE: f32 = 1.25;
+/// Seconds the crew runs from a fallen Leader.
+pub const SCATTER_TIME: f32 = 2.0;
+
 /// Share of new spawns that are Chochin (from 4:00) and Nopperabo (from 9:00).
 pub fn chochin_share(t: f32) -> f32 {
     if t < 240.0 { 0.0 } else { (0.01 + (t - 240.0) / 660.0 * 0.02).min(0.03) }
@@ -204,6 +214,10 @@ pub const PICKUP_EVERY: (f32, f32) = (35.0, 55.0);
 pub const MAX_PICKUPS: usize = 4;
 /// Chance an Oni elite drops a pickup.
 pub const ONI_PICKUP_CHANCE: f32 = 0.25;
+/// Chance a Leader drops a pickup.
+pub const LEADER_PICKUP_CHANCE: f32 = 0.5;
+/// Chance an Uncommon drops a gear item.
+pub const UNCOMMON_GEAR: f32 = 0.0015;
 /// Radius the Exorcism Seal clears (about a screen).
 pub const EXORCISM_RADIUS: f32 = 420.0;
 

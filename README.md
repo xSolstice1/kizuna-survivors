@@ -55,11 +55,14 @@ More heroes are on the way. Heroes unlock by clearing worlds with a specific her
 
 ### Campaign
 
-- **Prologue + five worlds**, each with its own tiles, props, music, eight Otherworlders,
+- **Prologue + five worlds**, each with its own tiles, props, music, eleven Otherworlders (ten in the prologue), two Uncommons and a Leader among them,
   a sub-boss, a boss and a final boss, and a signature hazard (bullet curtains, explosive tags,
   spirit pressure, a blinding downpour, hostile domains).
+- **65 Otherworlders in all, in rarity tiers**: Common, Uncommon, Elite, Leader, Sub-boss and
+  Boss. Rarity shows as a coloured outline and a chevron, flag or boss-bar label. A Leader raises
+  a banner: nearby enemies move and hit harder until it falls, and its crew scatters.
 - **20 rounds a night**: every 4th round is a headline — an uncommon wave, the first elites, a
-  leader, the sub-boss, and the final boss in round 20 — while the bigger worlds add their own boss
+  Leader (rounds 12, 15, 18), the sub-boss, and the final boss in round 20 — while the bigger worlds add their own boss
   in round 18; the final boss must fall before dawn.
 - **A dominant element per world** that most of its enemies carry: Shotengai Fire, Shrine Valley
   Earth, Ember Leaf Wind, Pale Citadel Ice, Rainward Water, Shatterline Electric.

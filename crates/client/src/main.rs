@@ -413,6 +413,7 @@ async fn main() {
                 }
                 Shrine => world.shrine = Some(world.player.pos + sim::Vec2::new(0.0, 40.0)),
                 ClearEnemies => world.debug_clear_enemies(),
+                Newcomers => world.debug_spawn_newcomers(),
                 _ => {}
             }
             audio.play(synth::Sfx::Buy);
@@ -709,6 +710,11 @@ fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
         }
         Sen => profile.sen += 10_000,
         Dust => profile.dust += 5_000,
+        MeetAll => {
+            for k in &mut profile.enemy_kills {
+                *k = (*k).max(1);
+            }
+        }
         _ => {}
     }
 }

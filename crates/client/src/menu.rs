@@ -568,6 +568,8 @@ struct Entry {
     name: String,
     lines: Vec<String>,
     elem: Option<Element>,
+    /// A word in the last line drawn in its own colour.
+    mark: Option<(String, Color)>,
 }
 
 fn enemy_icon(assets: &Assets, k: EnemyKind) -> (&Texture2D, Color) {
@@ -605,14 +607,16 @@ fn entry(profile: &Profile, tab: Tab, i: usize) -> Entry {
         Tab::Otherworlders => {
             let k = ALL_ENEMIES[i];
             let kills = profile.enemy_kills[i];
+            let rarity = k.rarity();
             Entry {
                 found: found(profile, tab, i),
                 name: k.name().into(),
                 lines: vec![
                     k.lore().into(),
-                    format!("{}  ·  Defeated: {kills}{}", sim::campaign::home_stage(k).def().name, if k.is_boss() { "   (boss)" } else { "" }),
+                    format!("{}  ·  {}  ·  Defeated: {kills}", sim::campaign::home_stage(k).def().name, rarity.name()),
                 ],
                 elem: Some(k.element()),
+                mark: crate::ui::enemy_rarity_color(rarity).map(|c| (rarity.name().to_string(), c)),
             }
         }
         Tab::Weapons => {
@@ -625,6 +629,7 @@ fn entry(profile: &Profile, tab: Tab, i: usize) -> Entry {
                 name: u.name().into(),
                 lines: vec![u.describe(1), format!("Awakens with: {}", Upgrade::Passive(p).name()), format!("Used by: {}", users.join(", "))],
                 elem: Some(k.element()),
+                mark: None,
             }
         }
         Tab::Awakenings => {
@@ -638,12 +643,13 @@ fn entry(profile: &Profile, tab: Tab, i: usize) -> Entry {
                     recipe_text(Upgrade::Weapon(k).name(), Upgrade::Passive(p).name()),
                 ],
                 elem: Some(k.element()),
+                mark: None,
             }
         }
         Tab::Passives => {
             let k = ALL_PASSIVES[i];
             let u = Upgrade::Passive(k);
-            Entry { found: found(profile, tab, i), name: u.name().into(), lines: vec![u.describe(1)], elem: None }
+            Entry { found: found(profile, tab, i), name: u.name().into(), lines: vec![u.describe(1)], elem: None, mark: None }
         }
         Tab::Shrines => {
             let ev = ALL_SHRINE_EVENTS[i];
@@ -653,9 +659,10 @@ fn entry(profile: &Profile, tab: Tab, i: usize) -> Entry {
                 name: ev.name().into(),
                 lines: vec![format!("Blessing: {bless}"), format!("Price: {price}")],
                 elem: None,
+                mark: None,
             }
         }
-        Tab::Heroes if !hero_def(ALL_HEROES[i]).finished => Entry { found: false, name: "???".into(), lines: vec!["Coming soon.".into()], elem: None },
+        Tab::Heroes if !hero_def(ALL_HEROES[i]).finished => Entry { found: false, name: "???".into(), lines: vec!["Coming soon.".into()], elem: None, mark: None },
         Tab::Heroes => {
             let h = ALL_HEROES[i];
             let d = hero_def(h);
@@ -669,6 +676,7 @@ fn entry(profile: &Profile, tab: Tab, i: usize) -> Entry {
                     format!("Unlock: {}", unlock_text(h)),
                 ],
                 elem: Some(d.element),
+                mark: None,
             }
         }
         Tab::Relics => {
@@ -679,6 +687,7 @@ fn entry(profile: &Profile, tab: Tab, i: usize) -> Entry {
                 name: r.name().into(),
                 lines: vec![r.describe().into(), format!("Always active. Earned by clearing {home} on Nightmare.")],
                 elem: None,
+                mark: None,
             }
         }
     }
@@ -776,9 +785,20 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
             crate::ui::element_tag(el, px + pw - 20.0 - crate::ui::element_tag_width(el, 20.0), py + 40.0, 20.0);
         }
         let mut y = py + 72.0;
-        for line in &e.lines {
+        for (n, line) in e.lines.iter().enumerate() {
+            let mark = if n + 1 == e.lines.len() { e.mark.as_ref() } else { None };
             for l in kit::wrap(line, pw - 40.0, 20) {
-                kit::text(&l, px + 20.0, y, 20.0, Color::new(0.9, 0.9, 0.95, 1.0));
+                let body = Color::new(0.9, 0.9, 0.95, 1.0);
+                match mark.and_then(|(word, c)| l.find(word.as_str()).map(|at| (at, word, *c))) {
+                    Some((at, word, c)) => {
+                        let (before, after) = (&l[..at], &l[at + word.len()..]);
+                        let bx = px + 20.0 + kit::measure(before, 20).width;
+                        kit::text(before, px + 20.0, y, 20.0, body);
+                        kit::text(word, bx, y, 20.0, c);
+                        kit::text(after, bx + kit::measure(word, 20).width, y, 20.0, body);
+                    }
+                    None => kit::text(&l, px + 20.0, y, 20.0, body),
+                }
                 y += 24.0;
             }
         }

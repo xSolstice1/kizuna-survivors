@@ -240,6 +240,7 @@ impl Relic {
 pub const ROUNDS: u8 = 20;
 pub const SUB_BOSS_ROUND: u8 = 16;
 pub const MID_BOSS_ROUND: u8 = 18;
+pub const LEADER_ROUNDS: [u8; 3] = [12, 15, 18];
 
 /// The set piece that opens every fourth round.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,6 +270,10 @@ pub struct StageDef {
     /// Optional second boss, spawned at round 18.
     pub boss: Option<EnemyKind>,
     pub final_boss: EnemyKind,
+    /// Two tougher fodder that join from round 5.
+    pub uncommon: [EnemyKind; 2],
+    /// Crew captain whose banner buffs the swarm.
+    pub leader: EnemyKind,
     pub final_at: f32,
     /// Dawn: the run ends (lost) if the final boss still lives.
     pub limit: f32,
@@ -331,6 +336,12 @@ impl StageDef {
             _ => None,
         }
     }
+    /// Every enemy kind this stage can field.
+    pub fn roster(&self) -> Vec<EnemyKind> {
+        let mut roster = vec![self.fodder, self.fodder_b, self.ranged, self.blinker, self.elite, self.mini, self.final_boss, self.uncommon[0], self.uncommon[1], self.leader];
+        roster.extend(self.boss);
+        roster
+    }
     pub fn long(&self) -> bool {
         self.final_at > 900.0
     }
@@ -345,6 +356,7 @@ const fn world(
     chapter: &'static str,
     blurb: &'static str,
     roster: [EnemyKind; 8],
+    extra: [EnemyKind; 3],
     mechanic: Mechanic,
     ranged_mult: f32,
     tier: f32,
@@ -363,6 +375,8 @@ const fn world(
         mini: roster[5],
         boss: Some(roster[6]),
         final_boss: roster[7],
+        uncommon: [extra[0], extra[1]],
+        leader: extra[2],
         final_at: 1500.0,
         limit: 1800.0,
         elite_wave: true,
@@ -391,6 +405,8 @@ pub static STAGES: [StageDef; 6] = [
         mini: GreatOni,
         boss: None,
         final_boss: NightLord,
+        uncommon: [RokurokubiClerk, TsurubeDrop],
+        leader: CaptainKitsunebi,
         final_at: 900.0,
         limit: 1020.0,
         elite_wave: false,
@@ -409,6 +425,7 @@ pub static STAGES: [StageDef; 6] = [
         "World 1",
         "A valley hidden from the world by a veiled moon. Its spirits fight in patterns of light.",
         [Kodama, PaperCrane, LanternFairy, FoxMaskPhantom, Komainu, BellMaiden, ToriiSerpent, Mitsuhime],
+        [ShardMoth, BoneEaterCrow, AdmiralTengu],
         Mechanic::Curtains,
         2.2,
         1.0,
@@ -420,6 +437,7 @@ pub static STAGES: [StageDef; 6] = [
         "World 2",
         "A burning border forest where a ninja war never ended. Watch the ground.",
         [StrawPuppet, LeafShinobi, KunaiThrower, SmokeNinja, IronRonin, Kagerou, EmberToad, BurningShogun],
+        [RoguePuppeteer, ClayBird, MistCaptain],
         Mechanic::Tags,
         1.4,
         1.15,
@@ -431,6 +449,7 @@ pub static STAGES: [StageDef; 6] = [
         "World 3",
         "White walls without end, where lost souls wait at the gates. The air itself presses down.",
         [LostSoul, MaskedHound, PaleArcher, ShadeDancer, BoneSentinel, GateCaptain, HollowMonarch, PaleSeraph],
+        [MaskedRetainer, HollowHusk, NumberedQuartermaster],
         Mechanic::Pressure,
         1.3,
         1.3,
@@ -442,6 +461,7 @@ pub static STAGES: [StageDef; 6] = [
         "World 4",
         "A drowned city ward under a red moon. Something hunts in the rain; so does something else.",
         [DrownedRat, RainGhoul, GutterSpitter, UmbrellaStalker, WardButcher, NightInvestigator, GutterMother, CrimsonRainLord],
+        [BladetailRunner, MaskCollector, DrownedCaptain],
         Mechanic::Downpour,
         1.2,
         1.45,
@@ -453,6 +473,7 @@ pub static STAGES: [StageDef; 6] = [
         "World 5",
         "The crossing where the city broke. Curses walk the zebra lines, and domains open without warning.",
         [CursedSpawn, WailingCommuter, CurseEye, GlitchShade, GradeOneBrute, PatchworkSorcerer, CrossingCalamity, ShatterSovereign],
+        [SwarmMother, ToolThief, CurseCaptain],
         Mechanic::Domains,
         1.4,
         1.6,
@@ -463,8 +484,7 @@ pub static STAGES: [StageDef; 6] = [
 /// The stage an enemy belongs to (for the Collection).
 pub fn home_stage(k: EnemyKind) -> StageId {
     for s in &STAGES {
-        let roster = [s.fodder, s.fodder_b, s.ranged, s.blinker, s.elite, s.mini, s.final_boss];
-        if roster.contains(&k) || s.boss == Some(k) {
+        if s.roster().contains(&k) {
             return s.id;
         }
     }
@@ -474,15 +494,23 @@ pub fn home_stage(k: EnemyKind) -> StageId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enemies::{Rank, ALL_ENEMIES};
+    use crate::enemies::{EnemyRarity, Rank, ALL_ENEMIES};
 
     #[test]
     fn worlds_are_mostly_their_element() {
         for s in ALL_STAGES {
             let d = s.def();
-            let mut roster = vec![d.fodder, d.fodder_b, d.ranged, d.blinker, d.elite, d.mini, d.final_boss];
-            roster.extend(d.boss);
+            let roster = d.roster();
             let own = roster.iter().filter(|k| k.element() == s.element()).count();
+            let expected = match s {
+                StageId::Shotengai => (6, 10),
+                StageId::ShrineValley => (7, 11),
+                StageId::EmberLeaf => (7, 11),
+                StageId::PaleCitadel => (8, 11),
+                StageId::Rainward => (7, 11),
+                StageId::Shatterline => (7, 11),
+            };
+            assert_eq!((own, roster.len()), expected, "{s:?}");
             assert!(own as f32 / roster.len() as f32 >= 0.55, "{s:?}");
             for k in &roster {
                 assert!(!k.element().is_rare() || k.rank() >= Rank::Mini, "{k:?} is rare-element below Mini");
@@ -494,13 +522,16 @@ mod tests {
     fn every_enemy_has_a_home_and_rosters_match_ranks() {
         for k in ALL_ENEMIES {
             let s = home_stage(k).def();
-            let listed = [s.fodder, s.fodder_b, s.ranged, s.blinker, s.elite, s.mini, s.final_boss].contains(&k) || s.boss == Some(k);
-            assert!(listed, "{k:?} is in no roster");
+            assert!(s.roster().contains(&k), "{k:?} is in no roster");
         }
         for s in &STAGES {
             assert_eq!(s.elite.rank(), Rank::Elite, "{:?}", s.id);
             assert_eq!(s.mini.rank(), Rank::Mini, "{:?}", s.id);
             assert_eq!(s.final_boss.rank(), Rank::Final, "{:?}", s.id);
+            for u in s.uncommon {
+                assert_eq!(u.rarity(), EnemyRarity::Uncommon, "{u:?}");
+            }
+            assert_eq!(s.leader.rarity(), EnemyRarity::Leader, "{:?}", s.id);
             if let Some(b) = s.boss {
                 assert_eq!(b.rank(), Rank::Boss);
             }

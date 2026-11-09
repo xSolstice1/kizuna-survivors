@@ -1,6 +1,6 @@
 //! The run simulation: player, weapons, spawn director, enemies, pickups.
 
-use crate::campaign::{Difficulty, Headline, Mechanic, StageDef, StageId, MID_BOSS_ROUND, SUB_BOSS_ROUND};
+use crate::campaign::{Difficulty, Headline, Mechanic, StageDef, StageId, LEADER_ROUNDS, MID_BOSS_ROUND, SUB_BOSS_ROUND};
 use crate::content::*;
 use crate::gear::{self, ArsenalArt, Exotic, Item, Loadout, Rarity, Unique};
 use crate::grid::Grid;
@@ -87,6 +87,8 @@ pub enum Event {
     SpecialUsed { pos: Vec2 },
     /// A mini-boss or boss arrived.
     BossSpawned(EnemyKind),
+    /// A Leader arrived with its crew.
+    LeaderSpawned { kind: EnemyKind },
     /// The elite wave began.
     EliteWave,
     /// A new round began.
@@ -393,6 +395,11 @@ pub struct Enemies {
     pub slow: Vec<f32>,
     /// Light: the next hit on this enemy crits.
     pub marked: Vec<bool>,
+    /// Inside a live Leader's banner this tick.
+    pub banner: Vec<bool>,
+    /// Seconds left fleeing `scatter_from`, the point a Leader fell.
+    pub scatter: Vec<f32>,
+    pub scatter_from: Vec<Vec2>,
 }
 
 impl Enemies {
@@ -431,6 +438,9 @@ impl Enemies {
         self.stagger.swap_remove(i);
         self.slow.swap_remove(i);
         self.marked.swap_remove(i);
+        self.banner.swap_remove(i);
+        self.scatter.swap_remove(i);
+        self.scatter_from.swap_remove(i);
     }
 }
 
@@ -935,6 +945,7 @@ impl World {
         self.director();
         self.update_mechanic();
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
+        self.update_banners();
         // Needs the fresh grid (queries index into the enemy arrays).
         self.update_bosses();
         self.move_enemies();
@@ -1184,8 +1195,9 @@ impl World {
             let r = PLAYER_RADIUS + enemies.radius[j];
             let faded = (enemy_def(enemies.kind[j]).ai == Ai::Blink && enemies.ai_state[j] != 0) || (frozen && !enemies.kind[j].is_boss());
             if enemies.hp[j] > 0.0 && !faded && (enemies.pos[j] - p).length_sq() <= r * r {
-                if enemies.damage[j] > worst {
-                    worst = enemies.damage[j];
+                let damage = enemies.damage[j] * if enemies.banner[j] { BANNER_DAMAGE } else { 1.0 };
+                if damage > worst {
+                    worst = damage;
                     worst_elem = Some(enemies.kind[j].element());
                 }
             }
@@ -1307,12 +1319,37 @@ impl World {
         e.stagger.push(0.0);
         e.slow.push(0.0);
         e.marked.push(false);
+        e.banner.push(false);
+        e.scatter.push(0.0);
+        e.scatter_from.push(Vec2::ZERO);
     }
 
     fn spawn_boss(&mut self, kind: EnemyKind) {
         let p = self.ring_point(self.cfg.spawn_radius * 0.8);
         self.spawn_enemy(kind, p);
         self.events.push(if kind.rank() == Rank::Final { Event::NightLordSpawned(kind) } else { Event::BossSpawned(kind) });
+    }
+
+    fn leader_alive(&self) -> bool {
+        self.leaders().next().is_some()
+    }
+
+    fn spawn_leader(&mut self) {
+        if !self.leader_alive() {
+            let p = self.ring_point(self.cfg.spawn_radius);
+            self.spawn_leader_at(p);
+        }
+    }
+
+    fn spawn_leader_at(&mut self, p: Vec2) {
+        let st = self.stage();
+        self.spawn_enemy(st.leader, p);
+        let crew = (10.0 * self.cfg.difficulty.density()) as usize;
+        for k in 0..crew {
+            let a = k as f32 / crew as f32 * std::f32::consts::TAU;
+            self.spawn_enemy(st.fodder, p + Vec2::from_angle(a) * 50.0);
+        }
+        self.events.push(Event::LeaderSpawned { kind: st.leader });
     }
 
     fn start_round(&mut self, round: u8, basic: EnemyKind, rung: usize) {
@@ -1322,19 +1359,13 @@ impl World {
         match round {
             4 => {
                 let n = (24.0 * density) as usize;
-                self.spawn_ring(st.fodder_b, n, 270.0);
+                self.spawn_ring(&st.uncommon, n, 270.0);
                 self.chests.push((self.player.pos + Vec2::new(0.0, -60.0), chest_tier(st.elite)));
             }
             8 if st.elite_wave => {
                 let n = 4 + self.cfg.difficulty.index() * 2;
-                self.spawn_ring(st.elite, n, self.cfg.spawn_radius);
+                self.spawn_ring(&[st.elite], n, self.cfg.spawn_radius);
                 self.events.push(Event::EliteWave);
-            }
-            12 => {
-                for _ in 0..3 {
-                    let p = self.ring_point(self.cfg.spawn_radius);
-                    self.spawn_enemy(st.elite, p);
-                }
             }
             SUB_BOSS_ROUND => self.spawn_boss(st.mini),
             MID_BOSS_ROUND => {
@@ -1344,6 +1375,9 @@ impl World {
             }
             _ => {}
         }
+        if LEADER_ROUNDS.contains(&round) {
+            self.spawn_leader();
+        }
         if st.shrine_rounds.contains(&round) {
             let a = self.rng.range(0.0, std::f32::consts::TAU);
             self.shrine = Some(stage::resolve(self.cfg.stage, self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
@@ -1351,15 +1385,15 @@ impl World {
         }
         if st.ring_rounds.contains(&round) {
             let n = (120.0 * density * LADDER_COUNT[rung]) as usize;
-            self.spawn_ring(basic, n, 270.0);
+            self.spawn_ring(&[basic], n, 270.0);
         }
     }
 
-    fn spawn_ring(&mut self, kind: EnemyKind, n: usize, radius: f32) {
+    fn spawn_ring(&mut self, kinds: &[EnemyKind], n: usize, radius: f32) {
         for k in 0..n {
             let a = k as f32 / n as f32 * std::f32::consts::TAU;
             let p = self.player.pos + Vec2::from_angle(a) * radius;
-            self.spawn_enemy(kind, p);
+            self.spawn_enemy(kinds[k % kinds.len()], p);
         }
     }
 
@@ -1382,7 +1416,9 @@ impl World {
             let r = self.rng.f32();
             let lift = LADDER_LIFT[rung];
             let (c, n) = (chochin_share(pace) * st.ranged_mult * lift, nopperabo_share(pace) * lift);
-            let kind = if r < c {
+            let kind = if self.round() >= 5 && self.rng.f32() < UNCOMMON_SHARE {
+                st.uncommon[(self.rng.f32() * 2.0) as usize % 2]
+            } else if r < c {
                 st.ranged
             } else if r < c + n {
                 st.blinker
@@ -1411,6 +1447,9 @@ impl World {
                 }
                 if let (true, Some(b)) = (current > MID_BOSS_ROUND && self.round_seen < MID_BOSS_ROUND, st.boss) {
                     self.spawn_boss(b);
+                }
+                if LEADER_ROUNDS.iter().any(|&r| r > self.round_seen && r < current) {
+                    self.spawn_leader();
                 }
                 self.round_seen = current - 1;
             }
@@ -1441,6 +1480,22 @@ impl World {
         if self.cfg.stage == StageId::Shotengai { 0 } else { self.cfg.stage.index() as u8 }
     }
 
+    pub fn leaders(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.enemies.len()).filter(|&i| self.enemies.kind[i].is_leader() && self.enemies.hp[i] > 0.0)
+    }
+
+    fn update_banners(&mut self) {
+        let leaders: Vec<Vec2> = self.leaders().map(|i| self.enemies.pos[i]).collect();
+        let e = &mut self.enemies;
+        for i in 0..e.len() {
+            e.scatter[i] = (e.scatter[i] - DT).max(0.0);
+            e.banner[i] = !leaders.is_empty()
+                && !e.kind[i].is_leader()
+                && !e.kind[i].is_boss()
+                && leaders.iter().any(|&l| (e.pos[i] - l).length_sq() < BANNER_RADIUS * BANNER_RADIUS);
+        }
+    }
+
     /// Generic bosses: phases by HP, a rotating spray, and a cycle of moves from their kit.
     fn update_bosses(&mut self) {
         let player = self.player.pos;
@@ -1454,6 +1509,13 @@ impl World {
             if enemy_def(kind).ai != Ai::Boss || self.enemies.hp[i] <= 0.0 {
                 continue;
             }
+            if !kind.is_boss() {
+                let held = self.freeze > 0.0 || self.enemies.stagger[i] > 0.0 || domain.is_some_and(|c| (self.enemies.pos[i] - c).length_sq() < DOMAIN_RADIUS * DOMAIN_RADIUS);
+                if held {
+                    self.enemies.vel[i] = Vec2::ZERO;
+                    continue;
+                }
+            }
             let kit = boss_kit(kind);
             let boss = Some(kind.element());
             let phases = boss_phases(kind, extra);
@@ -1464,6 +1526,11 @@ impl World {
             let slow = match domain {
                 Some(c) if (p - c).length_sq() < DOMAIN_RADIUS * DOMAIN_RADIUS => 0.15,
                 _ => 1.0,
+            };
+            let slow = if !kind.is_boss() && self.cfg.hero == HeroId::Kuon && to.length_sq() < STILLNESS_RADIUS * STILLNESS_RADIUS {
+                slow * STILLNESS_SLOW
+            } else {
+                slow
             };
             // Phase changes: each equal slice of HP lost.
             let frac = e.hp[i] / e.max_hp[i];
@@ -1752,6 +1819,13 @@ impl World {
             let p = e.pos[i];
             let ri = e.radius[i];
             let mut speed = e.speed[i];
+            if e.scatter[i] > 0.0 {
+                e.vel[i] = (p - e.scatter_from[i]).normalize_or_zero() * speed;
+                continue;
+            }
+            if e.banner[i] {
+                speed *= BANNER_SPEED;
+            }
             // Stillness: space thickens around Kuon.
             if stillness && (e.pos[i] - player).length_sq() < STILLNESS_RADIUS * STILLNESS_RADIUS {
                 speed *= STILLNESS_SLOW;
@@ -3499,10 +3573,33 @@ impl World {
         }
     }
 
+    /// A fallen Leader ends the banner at once; the crew near it runs.
+    fn scatter_crews(&mut self) {
+        let e = &mut self.enemies;
+        let mut fell = false;
+        for &d in &self.dead {
+            if !e.kind[d].is_leader() {
+                continue;
+            }
+            fell = true;
+            let from = e.pos[d];
+            for i in 0..e.len() {
+                if e.hp[i] > 0.0 && !e.kind[i].is_boss() && (e.pos[i] - from).length_sq() < BANNER_RADIUS * BANNER_RADIUS {
+                    e.scatter[i] = SCATTER_TIME;
+                    e.scatter_from[i] = from;
+                }
+            }
+        }
+        if fell {
+            e.banner.fill(false);
+        }
+    }
+
     fn remove_dead_enemies(&mut self) {
         self.pass_on_deaths();
         self.dead.clear();
         self.dead.extend((0..self.enemies.len()).filter(|&i| self.enemies.hp[i] <= 0.0));
+        self.scatter_crews();
         // Descending order keeps swap_remove indices valid.
         for k in (0..self.dead.len()).rev() {
             let i = self.dead[k];
@@ -3520,6 +3617,7 @@ impl World {
             if self.cfg.stress.is_none() {
                 let find = 1.0 + self.bonus.gear_find;
                 let (n, min) = match kind.rank() {
+                    Rank::Fodder if kind.rarity() == EnemyRarity::Uncommon => ((self.rng.f32() < UNCOMMON_GEAR * find) as usize, Rarity::Common),
                     Rank::Fodder => ((self.rng.f32() < 0.0004 * find) as usize, Rarity::Common),
                     Rank::Elite => ((self.rng.f32() < 0.06 * find) as usize, Rarity::Common),
                     Rank::Mini => (1, Rarity::Rare),
@@ -3582,7 +3680,8 @@ impl World {
                     self.coins.push((pos, coin));
                 }
             }
-            if kind.rank() == Rank::Elite && self.cfg.stress.is_none() && self.rng.f32() < ONI_PICKUP_CHANCE * (1.0 + self.bonus.luck) && self.pickups.len() < MAX_PICKUPS {
+            let pickup_chance = if kind.is_leader() { LEADER_PICKUP_CHANCE } else { ONI_PICKUP_CHANCE };
+            if kind.rank() == Rank::Elite && self.cfg.stress.is_none() && self.rng.f32() < pickup_chance * (1.0 + self.bonus.luck) && self.pickups.len() < MAX_PICKUPS {
                 let k = PickupKind::roll(self.rng.f32());
                 self.pickups.push((pos, k));
                 self.events.push(Event::PickupSpawned { pos, kind: k });
@@ -4852,6 +4951,18 @@ impl World {
         }
     }
 
+    /// Dev: the stage's Leader with its crew 120 units away, plus 3 of each Uncommon beside the player.
+    pub fn debug_spawn_newcomers(&mut self) {
+        if !self.leader_alive() {
+            self.spawn_leader_at(self.player.pos + Vec2::new(120.0, 0.0));
+        }
+        let st = self.stage();
+        for k in 0..6 {
+            let p = self.player.pos + Vec2::from_angle(k as f32 / 6.0 * std::f32::consts::TAU) * 90.0;
+            self.spawn_enemy(st.uncommon[k % 2], p);
+        }
+    }
+
     pub fn debug_awaken_all(&mut self) {
         for w in &mut self.weapons {
             w.level = MAX_LEVEL;
@@ -5198,6 +5309,34 @@ mod tests {
         w.remove_dead_enemies();
     }
 
+    fn drop_shares(kind: EnemyKind, kills: usize) -> (f32, f32, usize) {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        w.weapons.clear();
+        let (mut gear, mut pickups) = (0, 0);
+        for _ in 0..kills {
+            w.events.clear();
+            w.pickups.clear();
+            w.spawn_enemy(kind, w.player.pos + Vec2::new(300.0, 0.0));
+            let j = w.enemies.len() - 1;
+            kill_step(&mut w, j);
+            gear += w.events.iter().filter(|e| matches!(e, Event::GearDrop { .. })).count();
+            pickups += w.pickups.len();
+        }
+        (gear as f32 / kills as f32, pickups as f32 / kills as f32, w.chests.len())
+    }
+
+    #[test]
+    fn uncommon_and_leader_drops() {
+        let (gear, _, chests) = drop_shares(EnemyKind::ToolThief, 200_000);
+        assert!((gear - UNCOMMON_GEAR).abs() <= UNCOMMON_GEAR * 0.4, "uncommon gear share {gear}");
+        assert_eq!(chests, 0);
+        let (gear, _, _) = drop_shares(EnemyKind::Wisp, 2000);
+        assert!(gear < 0.003, "common gear share {gear}");
+        let (_, pickups, chests) = drop_shares(EnemyKind::CaptainKitsunebi, 2000);
+        assert!((0.4..=0.6).contains(&pickups), "leader pickup share {pickups}");
+        assert_eq!(chests, 2000);
+    }
+
     fn set_drop_world() -> World {
         let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
         w.bonus.gear_find = 1000.0;
@@ -5413,6 +5552,124 @@ mod tests {
         let e = &w.enemies;
         assert_eq!(e.len(), 1);
         assert_eq!((e.burn[0], e.burn_dps[0], e.soak[0], e.stagger[0], e.slow[0], e.marked[0]), (0.0, 0.0, 0.0, 0.0, 0.0, false));
+    }
+
+    #[test]
+    fn banner_columns_follow_swap_remove() {
+        let mut w = quiet_world();
+        add_enemy(&mut w, EnemyKind::Oni, 100.0);
+        let k = add_enemy(&mut w, EnemyKind::Oni, 130.0);
+        w.enemies.banner[k] = true;
+        w.enemies.scatter[k] = 1.5;
+        w.enemies.scatter_from[k] = Vec2::new(7.0, 8.0);
+        w.enemies.hp[0] = 0.0;
+        w.remove_dead_enemies();
+        let e = &w.enemies;
+        assert_eq!(e.len(), 1);
+        assert_eq!((e.banner[0], e.scatter[0], e.scatter_from[0]), (true, 1.5, Vec2::new(7.0, 8.0)));
+    }
+
+    fn leader_world() -> (World, usize) {
+        let mut w = quiet_world();
+        let leader = w.stage().leader;
+        let l = add_enemy(&mut w, leader, 300.0);
+        (w, l)
+    }
+
+    #[test]
+    fn banner_buffs_only_nearby() {
+        let (mut w, l) = leader_world();
+        let near = add_enemy(&mut w, EnemyKind::Wisp, 400.0);
+        let far = add_enemy(&mut w, EnemyKind::Wisp, 500.0);
+        w.enemies.speed[near] = 50.0;
+        w.enemies.speed[far] = 50.0;
+        w.step(Input::default());
+        let e = &w.enemies;
+        assert!(e.banner[near] && !e.banner[far] && !e.banner[l]);
+        let ratio = e.vel[near].length() / e.vel[far].length();
+        assert!((ratio - BANNER_SPEED).abs() < 0.01, "ratio {ratio}");
+    }
+
+    #[test]
+    fn banner_hits_harder() {
+        let hit = |banner_near: bool| {
+            let mut w = World::new(WorldConfig::default());
+            w.weapons.clear();
+            w.enemies = Enemies::default();
+            let p = w.player.pos;
+            w.spawn_enemy(EnemyKind::Wisp, p);
+            w.enemies.damage[0] = 20.0;
+            if banner_near {
+                let leader = w.stage().leader;
+                w.spawn_enemy(leader, p + Vec2::new(60.0, 0.0));
+                w.enemies.damage[1] = 0.0;
+            }
+            w.update_banners();
+            w.grid.rebuild(w.player.pos, &w.enemies.pos);
+            let before = w.player.hp;
+            w.contact_damage();
+            (before - w.player.hp, w.armor())
+        };
+        let ((plain, armor), (buffed, _)) = (hit(false), hit(true));
+        assert_eq!(plain, 20.0 - armor);
+        assert_eq!(buffed, 20.0 * BANNER_DAMAGE - armor);
+    }
+
+    #[test]
+    fn banner_ends_when_leader_dies() {
+        let (mut w, l) = leader_world();
+        let near = add_enemy(&mut w, EnemyKind::Wisp, 400.0);
+        w.enemies.speed[near] = 50.0;
+        w.step(Input::default());
+        assert!(w.enemies.banner[near]);
+        let death = w.enemies.pos[l];
+        kill_step(&mut w, l);
+        assert!(w.enemies.banner.iter().all(|b| !b));
+        assert_eq!(w.enemies.len(), 1);
+        assert_eq!(w.enemies.scatter[0], SCATTER_TIME);
+        assert_eq!(w.enemies.scatter_from[0], death);
+        let before = (w.enemies.pos[0] - death).length();
+        w.step(Input::default());
+        assert!((w.enemies.pos[0] - death).length() > before);
+        for _ in 0..((SCATTER_TIME + 0.1) / DT) as usize {
+            w.step(Input::default());
+        }
+        let to_player = (w.player.pos - w.enemies.pos[0]).normalize_or_zero();
+        w.step(Input::default());
+        let v = w.enemies.vel[0].normalize_or_zero();
+        assert!(v.x * to_player.x + v.y * to_player.y > 0.9);
+    }
+
+    #[test]
+    fn frozen_leader_holds_still() {
+        for hold in ["none", "freeze", "stagger", "firmament"] {
+            let mut w = World::new(WorldConfig { hero: HeroId::Kuon, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+            w.weapons.clear();
+            let leader = w.stage().leader;
+            let l = add_enemy(&mut w, leader, 300.0);
+            w.enemies.speed[l] = 34.0;
+            w.enemies.ai_timer[l] = 0.0;
+            match hold {
+                "freeze" => w.freeze = 1.0,
+                "stagger" => w.enemies.stagger[l] = 1.0,
+                "firmament" => {
+                    w.player.form = DOMAIN_DURATION;
+                    w.domain_center = w.enemies.pos[l];
+                }
+                _ => {}
+            }
+            let at = w.enemies.pos[l];
+            for _ in 0..30 {
+                w.step(Input::default());
+            }
+            if hold == "none" {
+                assert_ne!(w.enemies.pos[l], at, "a free Leader moves");
+                assert!(!w.shots.is_empty() || !w.hazards.is_empty(), "a free Leader fires");
+            } else {
+                assert_eq!(w.enemies.pos[l], at, "{hold}");
+                assert!(w.shots.is_empty() && w.hazards.is_empty(), "{hold}");
+            }
+        }
     }
 
     #[test]
@@ -6428,10 +6685,140 @@ mod tests {
         w.time = at - 1.0;
         w.round_seen = 3;
         step_to(&mut w, at - DT);
-        let (chests, kasa) = (w.chests.len(), count_of(&w, st.fodder_b));
+        let chests = w.chests.len();
         step_to(&mut w, at + 0.1);
         assert_eq!(w.chests.len(), chests + 1);
-        assert!(count_of(&w, st.fodder_b) >= kasa + 20);
+    }
+
+    fn is_uncommon(k: EnemyKind) -> bool {
+        k.rarity() == EnemyRarity::Uncommon
+    }
+
+    fn live_leaders(w: &World) -> usize {
+        w.enemies.kind.iter().filter(|k| k.is_leader()).count()
+    }
+
+    #[test]
+    fn round_four_spawns_uncommons() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        let st = w.stage();
+        let at = st.round_start(4);
+        w.time = at - 1.0;
+        w.round_seen = 3;
+        step_to(&mut w, at - DT);
+        let (chests, cranes) = (w.chests.len(), count_of(&w, st.fodder_b));
+        step_to(&mut w, at + 0.1);
+        assert_eq!(w.chests.len(), chests + 1);
+        assert!(count_of(&w, st.uncommon[0]) + count_of(&w, st.uncommon[1]) >= 20);
+        assert!(count_of(&w, st.fodder_b) <= cranes + 2);
+    }
+
+    #[test]
+    fn uncommons_join_the_mix() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, seed: 7, ..Default::default() });
+        w.player.iframes = 1e9;
+        let st = w.stage();
+        let (mut early, mut late, mut late_total) = (0, 0, 0);
+        while w.time < st.round_start(11) {
+            w.enemies.hp.iter_mut().for_each(|h| *h = 0.0);
+            w.grid.rebuild(w.player.pos, &w.enemies.pos);
+            w.remove_dead_enemies();
+            if w.paused() {
+                w.time += 0.5;
+                continue;
+            }
+            let first = w.next_id;
+            w.step(Input::default());
+            let round = w.round();
+            let fresh = w.enemies.id.iter().zip(&w.enemies.kind).filter(|(id, _)| id.wrapping_sub(first) < 1 << 31);
+            for (_, k) in fresh {
+                if round <= 4 && is_uncommon(*k) && w.time < st.round_start(4) {
+                    early += 1;
+                }
+                if round >= 5 && round != 8 && !k.is_boss() && k.rank() != Rank::Elite {
+                    late_total += 1;
+                    late += is_uncommon(*k) as usize;
+                }
+            }
+        }
+        assert_eq!(early, 0);
+        let share = late as f32 / late_total as f32;
+        assert!((0.015..0.06).contains(&share), "share {share} ({late}/{late_total})");
+    }
+
+    #[test]
+    fn leaders_arrive_on_their_rounds() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        let st = w.stage();
+        w.player.iframes = 1e9;
+        w.next_elite = f32::MAX;
+        let mut arrived = Vec::new();
+        for r in 11..=20u8 {
+            let at = st.round_start(r);
+            w.time = at - 0.5;
+            w.round_seen = r - 1;
+            let elites = count_of(&w, st.elite);
+            w.events.clear();
+            while w.time < at + 0.2 {
+                w.step(Input::default());
+                if w.events.iter().any(|e| matches!(e, Event::LeaderSpawned { kind } if *kind == st.leader)) {
+                    arrived.push(r);
+                    w.events.clear();
+                }
+            }
+            if r == 12 {
+                assert_eq!(count_of(&w, st.elite), elites, "round 12 must not add stand-in elites");
+            }
+            if let Some(j) = w.enemies.kind.iter().position(|k| k.is_leader()) {
+                kill_step(&mut w, j);
+            }
+        }
+        assert_eq!(arrived, vec![12, 15, 18]);
+    }
+
+    #[test]
+    fn leader_near_kuon_is_slowed_by_stillness() {
+        let speed_near = |hero| {
+            let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, hero, ..Default::default() });
+            w.spawn_leader_at(w.player.pos + Vec2::new(40.0, 0.0));
+            let l = w.enemies.kind.iter().position(|k| k.is_leader()).unwrap();
+            w.update_bosses();
+            w.enemies.vel[l].length()
+        };
+        assert!(speed_near(HeroId::Kuon) < speed_near(HeroId::Riku) * 0.5);
+    }
+
+    #[test]
+    fn leader_brings_a_crew() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        let st = w.stage();
+        w.spawn_leader();
+        assert_eq!(live_leaders(&w), 1);
+        assert_eq!(count_of(&w, st.fodder), (10.0 * w.cfg.difficulty.density()) as usize);
+        let l = w.enemies.kind.iter().position(|k| k.is_leader()).unwrap();
+        for i in 0..w.enemies.len() {
+            if i != l {
+                let d = (w.enemies.pos[i] - w.enemies.pos[l]).length();
+                assert!((d - 50.0).abs() < 0.01, "crew at {d}");
+            }
+        }
+        w.spawn_leader();
+        assert_eq!(live_leaders(&w), 1);
+    }
+
+    #[test]
+    fn round_skip_spawns_one_leader() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        let st = w.stage();
+        w.player.iframes = 1e9;
+        w.time = st.round_start(11) + 0.1;
+        w.round_seen = 11;
+        w.step(Input::default());
+        w.time = st.round_start(19) + 0.1;
+        w.events.clear();
+        w.step(Input::default());
+        assert_eq!(live_leaders(&w), 1);
+        assert_eq!(w.events.iter().filter(|e| matches!(e, Event::LeaderSpawned { .. })).count(), 1);
     }
 
     #[test]
@@ -7019,6 +7406,7 @@ mod tests {
             let mut level_at_15 = None;
             let mut maxed_offers = 0u32;
             let mut first_maxed = None;
+            let mut gear_drops = 0u32;
             while w.state == RunState::Playing {
                 if level_at_15.is_none() && w.time >= RUN_SECONDS {
                     level_at_15 = Some(w.player.level);
@@ -7038,12 +7426,15 @@ mod tests {
                 }
                 let input = w.bot_input();
                 w.step(input);
+                gear_drops += w.events.iter().filter(|e| matches!(e, Event::GearDrop { .. })).count() as u32;
             }
             let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
             let nl = w.boss().map(|b| format!("{} {:.0}%", b.2.short_name(), b.1 * 100.0)).unwrap_or("-".into());
+            let uncommon_kills: u32 = ALL_ENEMIES.iter().filter(|k| k.rarity() == EnemyRarity::Uncommon).map(|k| w.kills_by_kind[k.index()]).sum();
+            let leader_kills: u32 = ALL_ENEMIES.iter().filter(|k| k.is_leader()).map(|k| w.kills_by_kind[k.index()]).sum();
             let eligible: u32 = ALL_ENEMIES.iter().filter(|k| matches!(k.rank(), Rank::Mini | Rank::Boss | Rank::Final)).map(|k| w.kills_by_kind[k.index()]).sum();
             println!(
-                "seed {seed} [boss {nl}] set_eligible_kills {eligible} bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  maxed_offers {}  first_maxed {:?}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                "seed {seed} [boss {nl}] uncommon_kills {uncommon_kills} leader_kills {leader_kills} gear_drops {gear_drops} set_eligible_kills {eligible} bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  maxed_offers {}  first_maxed {:?}  ({:.1}s real)  weapons {:?}  awakened {:?}",
                 w.bosses_down,
                 w.state,
                 w.time,

@@ -473,3 +473,154 @@ None.
 - Rechecks still open: Kuon 10/10 on seeds 41–50; Haru, Kaede, Mika, Nanami, Yuzu unmeasured; `BOSS_HP`
   `shortcut:` until human playtests; Darkness drain and Ice slow on bosses (phase 4 watch items).
 - Balance vs `5f82b71` (Normal, seeds 21–30 / 41–50): see the phase 5 plan, "Measured".
+
+## Phase 6 addendum (2026-11-09)
+
+Design gate answers for section 5, approved by the user on 2026-11-09. Where this section and section 5 disagree, this section wins.
+
+### Decisions (user)
+
+1. **Element reconcile: change the element on 6 drafts.** The bar stays: `worlds_are_mostly_their_element` counts
+   every roster kind, the new ones included, and still needs ≥ 55%. As drafted, 4 worlds fail (Shotengai 5/10,
+   Shrine Valley 5/11, Ember Leaf 5/11, Shatterline 6/11). Only the elements below change; archetypes stay.
+
+   | World (element) | Enemy | Draft | Now | World count |
+   |---|---|---|---|---|
+   | Shotengai (Fire) | Tsurube Drop | Wind | **Fire** (tsurube-bi is a fire yokai) | 6/10 |
+   | Shrine Valley (Earth) | Bone-Eater Crow | Wind | **Earth** | |
+   | Shrine Valley (Earth) | Admiral Tengu | Wind | **Earth** (mountain tengu) | 7/11 |
+   | Ember Leaf (Wind) | Rogue Puppeteer | Earth | **Wind** | |
+   | Ember Leaf (Wind) | Exploding Clay Bird | Fire | **Wind** (dives from the sky) | 7/11 |
+   | Shatterline (Electric) | Curse User Captain | Earth | **Electric** | 7/11 |
+
+   Unchanged: Rokurokubi Clerk Earth, Captain Kitsunebi Fire, Shard Moth Wind, Mist Swordsman Captain Water, all of
+   Pale Citadel (8/11) and Rainward (7/11). All 18 still use common elements.
+
+2. **Rarity on the outline, element on the ring.** Enemy rarity draws as a coloured outline on the sprite. It
+   reuses the gear rarity colours (`armory.rs` `rarity_color`): Uncommon = gear Uncommon green, Elite = Rare
+   blue, Leader = Epic purple, Sub-boss = Legendary orange, Boss = Mythic red. Commons have no outline. Colour is
+   never the only cue, so each tier also has a shape:
+
+   | Rarity | Outline | Shape cue |
+   |---|---|---|
+   | Common | none | none |
+   | Uncommon | green | 1 chevron |
+   | Elite | blue | 2 chevrons |
+   | Leader | purple | banner flag + faint banner-radius circle |
+   | Sub-boss | orange | nameplate with the word "Sub-boss" |
+   | Boss (Boss and Final) | red | nameplate with the word "Boss" |
+
+   The element ring (Mini+) and the element pip stay as the UI pass left them. The codex (Otherworlders tab) shows
+   both the rarity (coloured word) and the element (`ui::element_tag`).
+
+3. **Balance target: within 2 wins.** No config (world × hero, Normal, 10 seeds) may lose more than 2 wins against
+   `c1eca45` on fresh seeds. Same method as phase 5: baseline from `git archive c1eca45`, own `CARGO_TARGET_DIR`,
+   never tune and confirm on the same seeds. The set is phase 5's 30 configs (15 configs × 2 seed blocks: the five
+   measured heroes on Shrine Valley, Ren and Riku on the other worlds). A miss is re-run on a fresh 10-seed block;
+   only a repeated miss forces tuning (user, builder check).
+4. **Uncommon gear budget: about +1 item per Normal run** on average (user, builder check). Fodder drops gear at
+   `0.0004 × find` and Elites at `0.06 × find` (`world.rs` ~L3523); today a run yields about 2–4 items. The builder
+   derives the Uncommon gear chance from measured Uncommon kills per run and adds a gear-per-run print to
+   `balance_full_run`. Set pieces stay Mini/Boss/Final only.
+
+### Model (my calls)
+
+- New `EnemyRarity { Common, Uncommon, Elite, Leader, SubBoss, Boss }` with `EnemyKind::rarity()`. `Rank` stays.
+  The new kinds get Rank Fodder (Uncommon) and Elite (Leader), so crowd counting, reach padding and Elite-based
+  code treat them like today's tiers. Existing kinds map Fodder → Common, Elite → Elite, Mini → SubBoss,
+  Boss/Final → Boss.
+- 18 new `EnemyKind` variants in `ALL_ENEMIES` (47 → 65), each world's three placed right after that world's
+  existing kinds so the codex groups by world. Saves key enemy kills by the variant's name (`meta.rs` `key_of`),
+  so old saves load unchanged in any order; the variant names are save keys and must be final when phase 6
+  ships. The Collection total grows, so existing
+  players' completion % drops; that is accepted.
+- `StageDef` gains the world's two Uncommons and its Leader. `home_stage`, `worlds_are_mostly_their_element` and
+  `every_enemy_has_a_home_and_rosters_match_ranks` include them.
+
+### Spawning (my calls, from section 4)
+
+- **Uncommons:** the round-4 headline spawns a wave of the world's two Uncommons (it keeps the round-4 chest).
+  From round 5 on they join the regular mix as a small share of fodder spawns. The builder sets the share.
+- **Leader:** spawns at the start of rounds 12, 15 and 18, with a crew made of the world's fodder ringed around
+  it. If the previous Leader is still alive, no new one spawns. No Leader spawns in round 20.
+- **Banner:** while the Leader lives, enemies within its banner radius gain speed and contact damage (their shots
+  are unchanged). The Leader does not
+  buff itself or bosses. When the Leader dies, enemies inside the radius scatter: they move away from its death
+  point for a short time, then resume. Scatter is new code; nothing like it exists today.
+- **Starting values for the builder** (tuned with the bot): banner radius 140, +25% speed, +25% damage, scatter
+  2 s. Uncommon XP 2× the XP of its world's `fodder_b` kind (4); gear chance per decision 4. Leader drops like an Elite
+  (chest tier, coins, gear), and its pickup chance is 50% in place of the Elite's 25%, not stacked.
+- The round-12 Leader replaces the stand-in elites phase 2 spawned at that headline.
+
+### Behaviour drafts (builder may change; reuse existing `Ai` / `Move` where it fits)
+
+| Enemy | Movement | Signature |
+|---|---|---|
+| Rokurokubi Clerk | `Dash` (neck lunge) | — |
+| Tsurube Drop | `Blink` (drops beside the player) | — |
+| Shard Moth | fast `Chase`, low HP | — |
+| Bone-Eater Crow | `Dash` (dive) | — |
+| Rogue Puppeteer | `Ranged` `Single` every 4.5 s (tuned from `Fan3`, see "Carried into phase 7") | — |
+| Exploding Clay Bird | `Charger` (dive) | — |
+| Masked Fracción | `Dash` | — |
+| Hollow Husk | slow `Chase`, high HP, large | — |
+| Kagune Runner | `Dash` | — |
+| Mask Collector | `Blink` | — |
+| Grade-Three Swarm Mother | `Hop` | — |
+| Cursed Tool Thief | `Blink` | — |
+| Captain Kitsunebi (Leader) | holds range | `Fan` of fox-fire |
+| Admiral Tengu (Leader) | `Blink` | `Rain` of falling stones |
+| Mist Swordsman Captain (Leader) | `Blink` from fog | `Charge` slash |
+| Espada Quartermaster (Leader) | slow advance | `Ring` of ice |
+| Drowned Pirate Captain (Leader) | `Chase` | `Summon` crew |
+| Curse User Captain (Leader) | holds range | `Rain` of cursed lightning |
+
+Archetype extras from section 5 (the clay bird explodes, the Swarm Mother sheds small curses, the Tool Thief steals
+pickups) are optional: build one only if it is cheap and reuses existing code. Otherwise the archetype shows
+through art and lore alone (my call).
+
+### Art, codex, README
+
+- HD sprites for all 18 via a new `tools/hd` script in the style of `enemies_w12.py` / `enemies_w34.py` /
+  `enemies_w5.py`, plus `.px` sources if the client needs them. Leaders read as captains (coat, hat or banner) at
+  Elite size or larger.
+- Lore: one or two short sentences in the house voice. Leaders lean on One Piece, Uncommons on their world's
+  inspiration.
+- README: enemy counts (47 → 65), plus the enemy rarity tiers and Leaders where Campaign describes the night.
+- Done means screenshots of every new sprite, both in a run and in the codex (headless Chrome, `--mute-audio`).
+
+### Non-goals for phase 6
+
+- No changes to existing enemies' elements, stats or behaviour beyond what the balance target forces.
+- No new Volley or boss patterns unless a Leader signature truly cannot reuse one.
+- Phase 5 debt (effects drawn past reach, stale-PWA save risk, open rechecks) stays as recorded unless it blocks
+  phase 6.
+
+## Carried into phase 7 (from phase 6, 2026-11-09)
+
+- Phase 6 final values: `UNCOMMON_SHARE` 0.03 (refill spawns from round 5), round-4 wave 24 × density Uncommons,
+  `LEADER_ROUNDS` [12, 15, 18] (one Leader alive at a time; round-skip catch-up spawns one), Leader crew 10 × density
+  of the world's `fodder`, `BANNER_RADIUS` 140, `BANNER_SPEED` 1.25, `BANNER_DAMAGE` 1.25 (contact only),
+  `SCATTER_TIME` 2.0, `UNCOMMON_GEAR` 0.0015 (ruling: net of the 0.0004 Fodder rate, ≈ +1 item per Normal run at
+  ~900 Uncommon kills), `LEADER_PICKUP_CHANCE` 0.5 (replaces the Elite 0.25). Uncommon XP 4; Leader XP 60.
+- Ember Leaf tuning (bot): Rogue Puppeteer `Fan3` every 4.0 s → `Single` every 4.5 s; Mist Swordsman Captain HP
+  860 → 640, contact damage 24 → 16. Other worlds' newcomers keep their starting stats.
+- Names changed for originality (user-checked at plan review): Masked Fracción → Masked Retainer, Espada
+  Quartermaster → Numbered Quartermaster, Kagune Runner → Bladetail Runner. Variant names are save keys; never rename.
+- Leaders are `Ai::Boss` with `Rank::Elite`: not bosses (no boss bar or music, no Set/Exotic roll, 1 phase). They
+  hold still under freeze, stagger and Firmament, and Kuon's Stillness slows them. Fox Mirage decoys do not pull
+  Leaders (parked).
+- Rarity display: outline from a per-texture silhouette (alpha ≥ 48, 8 offsets, one batch), chevrons for
+  Uncommon/Elite, flag + faint banner circle for Leaders, "SUB-BOSS"/"BOSS" prefix on the boss bar, coloured rarity
+  word in the codex. Prologue Oni, Great Oni and Night Lord are outlined too. Phone-aspect layout was not
+  screenshotted (driver is 16:9 only).
+- Balance (phase 6 plan, "Measured"): every config within 2 wins of `c1eca45` under the miss rule. **Recheck: Riku on
+  Ember Leaf** passes the rule but is 14 → 8 wins over 40 runs (seeds 81–130). It was already the weakest config.
+- Art: `tools/gen_p6.py` (`.px`) and `tools/hd/enemies_p6.py` (HD, needs Pillow; not installed system-wide on the
+  build machine). Weakest reads at 1×: Rogue Puppeteer cloak on Ember Leaf ground, Hollow Husk (boxy), Quartermaster
+  hat patch, Curse Captain and Mask Collector on dark ground.
+- Not built (optional in the addendum): clay bird explosion, Swarm Mother shedding curses, Tool Thief stealing pickups.
+- Perf: stress test (~2000 Commons, headless swiftshader, one sample) 39 fps at `c1eca45` vs 34–35 fps; re-measure
+  natively.
+- Still open from phase 5: effects drawn past reach, stale-PWA save risk (bump the service-worker cache on deploy),
+  Kuon 10/10, Haru/Kaede/Mika/Nanami/Yuzu unmeasured, `BOSS_HP` shortcut, Darkness drain / Ice slow on bosses.

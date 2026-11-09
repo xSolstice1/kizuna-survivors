@@ -6,6 +6,7 @@ use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
 use sim::content::{Element, EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
+use sim::enemies::EnemyRarity;
 use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
@@ -23,7 +24,7 @@ pub fn world_scale() -> f32 {
     }
 }
 
-/// Source of a campaign enemy's sprite (None for prologue enemies, which have named fields).
+/// Source of an enemy's sprite (None for the original prologue kinds, which have named fields).
 fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
     Some(match k {
         EnemyKind::Kodama => "w1/fodder_a",
@@ -66,6 +67,24 @@ fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
         EnemyKind::PatchworkSorcerer => "w5/mini",
         EnemyKind::CrossingCalamity => "w5/boss",
         EnemyKind::ShatterSovereign => "w5/final",
+        EnemyKind::RokurokubiClerk => "rokurokubi_clerk",
+        EnemyKind::TsurubeDrop => "tsurube_drop",
+        EnemyKind::CaptainKitsunebi => "captain_kitsunebi",
+        EnemyKind::ShardMoth => "w1/uncommon_a",
+        EnemyKind::BoneEaterCrow => "w1/uncommon_b",
+        EnemyKind::AdmiralTengu => "w1/leader",
+        EnemyKind::RoguePuppeteer => "w2/uncommon_a",
+        EnemyKind::ClayBird => "w2/uncommon_b",
+        EnemyKind::MistCaptain => "w2/leader",
+        EnemyKind::MaskedRetainer => "w3/uncommon_a",
+        EnemyKind::HollowHusk => "w3/uncommon_b",
+        EnemyKind::NumberedQuartermaster => "w3/leader",
+        EnemyKind::BladetailRunner => "w4/uncommon_a",
+        EnemyKind::MaskCollector => "w4/uncommon_b",
+        EnemyKind::DrownedCaptain => "w4/leader",
+        EnemyKind::SwarmMother => "w5/uncommon_a",
+        EnemyKind::ToolThief => "w5/uncommon_b",
+        EnemyKind::CurseCaptain => "w5/leader",
         _ => return None,
     })
 }
@@ -95,6 +114,8 @@ pub struct Assets {
     pub chochin: Texture2D,
     pub nopperabo: Texture2D,
     pub night_lord: Texture2D,
+    oni_outline: Texture2D,
+    night_lord_outline: Texture2D,
     pub talisman: Texture2D,
     pub orb: Texture2D,
     pub gem: Texture2D,
@@ -104,6 +125,8 @@ pub struct Assets {
     icons: Vec<(&'static str, Texture2D)>,
     /// Campaign enemies, indexed like `ALL_ENEMIES` (None for the prologue's own sprites).
     world_enemies: Vec<Option<Texture2D>>,
+    /// White silhouettes of the Uncommon-and-above campaign enemies, same indexing.
+    enemy_outlines: Vec<Option<Texture2D>>,
     gear_icons: Vec<(&'static str, Texture2D)>,
     /// Soft round shadow, batched under crowds.
     pub shadow: Texture2D,
@@ -118,6 +141,19 @@ impl Assets {
             let walk_b = hero.lift(14..19, 27..32);
             [hero.texture(), walk_a.texture(), walk_b.texture()]
         };
+        let (oni, oni_outline) = sprites::art_and_outline("oni");
+        let (night_lord, night_lord_outline) = sprites::art_and_outline("night_lord");
+        let (world_enemies, enemy_outlines): (Vec<_>, Vec<_>) = sim::content::ALL_ENEMIES
+            .iter()
+            .map(|k| match world_enemy_src(*k) {
+                Some(src) => {
+                    let sprite = sprites::sprite(src);
+                    let outline = (k.rarity() > sim::enemies::EnemyRarity::Common).then(|| sprites::silhouette(&sprite));
+                    (Some(sprite.texture()), outline)
+                }
+                None => (None, None),
+            })
+            .unzip();
         let heroes = ALL_HEROES
             .iter()
             .map(|h| match h {
@@ -154,10 +190,12 @@ impl Assets {
             coin: sprites::art("coin"),
             wisp: sprites::art("wisp"),
             kasa: sprites::art("kasa"),
-            oni: sprites::art("oni"),
+            oni,
             chochin: sprites::art("chochin"),
             nopperabo: sprites::art("nopperabo"),
-            night_lord: sprites::art("night_lord"),
+            night_lord,
+            oni_outline,
+            night_lord_outline,
             talisman: sprites::art("talisman"),
             orb: sprites::art("orb"),
             gem: sprites::art("gem"),
@@ -208,7 +246,8 @@ impl Assets {
             ("relic_w4", sprites::art("icons/relic_w4")),
             ("relic_w5", sprites::art("icons/relic_w5")),
             ],
-            world_enemies: sim::content::ALL_ENEMIES.iter().map(|k| world_enemy_src(*k).map(sprites::art)).collect(),
+            world_enemies,
+            enemy_outlines,
             shadow: {
                 let (w, h) = (32u16, 16u16);
                 let mut px = vec![0u8; w as usize * h as usize * 4];
@@ -512,6 +551,7 @@ impl Fx {
 
     pub fn absorb(&mut self, events: &[Event], player: sim::Vec2) {
         let mut round_banner = None;
+        let boss_arrived = events.iter().any(|e| matches!(e, Event::BossSpawned(_) | Event::NightLordSpawned(_)));
         for ev in events {
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
@@ -575,6 +615,12 @@ impl Fx {
                     let name = if kind == EnemyKind::GreatOni { "A GREAT ONI".to_string() } else { kind.name().to_uppercase() };
                     self.announce(format!("{name} APPROACHES"));
                     self.say(self.lines().boss);
+                }
+                Event::LeaderSpawned { kind } => {
+                    if !boss_arrived {
+                        self.announce(format!("{} rallies the crew", kind.name()));
+                    }
+                    self.shake = self.shake.max(0.2);
                 }
                 Event::EliteWave => {
                     self.announce("ELITE WAVE".into());
@@ -844,7 +890,21 @@ fn dimmed(c: Color) -> Color {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, flip: bool, accent: Color, time: f64, sprites: &mut Sprites<'a>, shadows: &mut Sprites<'a>, shadow: &'a Texture2D) {
+fn draw_world_enemy<'a>(
+    world: &World,
+    i: usize,
+    t: &'a Texture2D,
+    outline: Option<&'a Texture2D>,
+    tint: Color,
+    flip: bool,
+    accent: Color,
+    time: f64,
+    sprites: &mut Sprites<'a>,
+    shadows: &mut Sprites<'a>,
+    outlines: &mut Sprites<'a>,
+    cues: &mut Vec<(f32, f32, EnemyRarity, f32)>,
+    shadow: &'a Texture2D,
+) {
     use sim::content::{enemy_def, Ai, Rank};
     let e = &world.enemies;
     let (pos, kind) = (e.pos[i], e.kind[i]);
@@ -898,7 +958,55 @@ fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, 
     if !world.in_reach(pos, e.radius[i]) {
         tint = dimmed(tint);
     }
-    sprites.push(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+    let (x, y) = ((pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round());
+    let rarity = kind.rarity();
+    if let (Some(outline), Some(c)) = (outline, outline_tint(rarity, tint.a)) {
+        for (dx, dy) in OUTLINE_OFFSETS {
+            outlines.push(outline, x + dx, y + dy, c, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+        }
+        cues.push((pos.x, y, rarity, tint.a));
+    }
+    if let (EnemyRarity::Leader, Some(c)) = (rarity, crate::ui::enemy_rarity_color(rarity)) {
+        draw_circle_lines(pos.x, pos.y, sim::content::BANNER_RADIUS, 1.5, Color::new(c.r, c.g, c.b, 0.12));
+    }
+    sprites.push(t, x, y, tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+}
+
+const OUTLINE_OFFSETS: [(f32, f32); 8] = [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5), (-1.1, -1.1), (1.1, -1.1), (-1.1, 1.1), (1.1, 1.1)];
+
+fn outline_tint(rarity: EnemyRarity, alpha: f32) -> Option<Color> {
+    crate::ui::enemy_rarity_color(rarity).map(|c| Color::new(c.r, c.g, c.b, alpha))
+}
+
+/// Outline for an enemy drawn straight to the screen (not batched), under its sprite.
+fn draw_outline_now(outline: &Texture2D, x: f32, y: f32, size: Vec2, flip: bool, rarity: EnemyRarity) {
+    let Some(c) = outline_tint(rarity, 1.0) else { return };
+    for (dx, dy) in OUTLINE_OFFSETS {
+        draw_texture_ex(outline, x + dx, y + dy, c, DrawTextureParams { flip_x: flip, dest_size: Some(size), ..Default::default() });
+    }
+}
+
+/// Shape cue above the sprite, so rarity reads without the colour: chevrons for Uncommon and
+/// Elite, a pennant on a pole for a Leader.
+fn draw_rarity_cue(x: f32, top: f32, rarity: EnemyRarity, alpha: f32) {
+    let Some(c) = crate::ui::enemy_rarity_color(rarity) else { return };
+    let c = Color::new(c.r, c.g, c.b, c.a * alpha);
+    let dark = Color::new(0.0, 0.0, 0.0, 0.6 * alpha);
+    let chevrons = match rarity {
+        EnemyRarity::Uncommon => 1,
+        EnemyRarity::Elite => 2,
+        _ => 0,
+    };
+    for k in 0..chevrons {
+        let y = top - 3.0 - k as f32 * 5.0;
+        draw_triangle(vec2(x - 5.0, y + 1.0), vec2(x + 5.0, y + 1.0), vec2(x, y - 5.0), dark);
+        draw_triangle(vec2(x - 4.0, y), vec2(x + 4.0, y), vec2(x, y - 4.0), c);
+    }
+    if rarity == EnemyRarity::Leader {
+        draw_line(x, top + 2.0, x, top - 18.0, 2.0, dark);
+        draw_line(x, top + 2.0, x, top - 17.0, 1.0, c);
+        draw_triangle(vec2(x, top - 18.0), vec2(x + 11.0, top - 14.0), vec2(x, top - 10.0), c);
+    }
 }
 
 /// World hazards: tag/blast and lightning telegraphs, spirit pressure, hostile domains.
@@ -1106,6 +1214,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let e = &world.enemies;
     let mut sprites = Sprites::new();
     let mut shadows = Sprites::new();
+    let mut outlines = Sprites::new();
+    let mut cues = Vec::new();
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
         let pos = e.pos[i];
@@ -1141,6 +1251,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             };
             let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+            draw_outline_now(&a.oni_outline, (pos.x - 32.0).round(), (pos.y - 52.0).round(), vec2(64.0, 64.0), flip, e.kind[i].rarity());
+            cues.push((pos.x, (pos.y - 52.0).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
                 &a.oni,
                 (pos.x - 32.0).round(),
@@ -1157,6 +1269,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
             draw_ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
+            draw_outline_now(&a.night_lord_outline, (pos.x - 48.0).round(), (pos.y - 84.0 + bob).round(), vec2(96.0, 96.0), false, e.kind[i].rarity());
+            cues.push((pos.x, (pos.y - 84.0 + bob).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
                 &a.night_lord,
                 (pos.x - 48.0).round(),
@@ -1168,7 +1282,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
         let kind = e.kind[i];
         if let Some(t) = &a.world_enemies[kind.index()] {
-            draw_world_enemy(world, i, t, tint, flip, fx.accent, time, &mut sprites, &mut shadows, &a.shadow);
+            draw_world_enemy(world, i, t, a.enemy_outlines[kind.index()].as_ref(), tint, flip, fx.accent, time, &mut sprites, &mut shadows, &mut outlines, &mut cues, &a.shadow);
             continue;
         }
         let (tex, half, bottom) = match e.kind[i] {
@@ -1189,10 +1303,22 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         if out_of_reach {
             tint = dimmed(tint);
         }
-        sprites.push(tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
+        let (x, y) = ((pos.x - half).round(), (pos.y - bottom).round());
+        let rarity = e.kind[i].rarity();
+        if let (EnemyKind::Oni, Some(c)) = (e.kind[i], outline_tint(rarity, tint.a)) {
+            for (dx, dy) in OUTLINE_OFFSETS {
+                outlines.push(&a.oni_outline, x + dx, y + dy, c, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
+            }
+            cues.push((pos.x, y, rarity, tint.a));
+        }
+        sprites.push(tex, x, y, tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
     }
     shadows.flush();
+    outlines.flush();
     sprites.flush();
+    for (x, top, rarity, alpha) in cues {
+        draw_rarity_cue(x, top, rarity, alpha);
+    }
 
     // Player: walk cycle while moving, blink during i-frames.
     let pl = &world.player;
@@ -2419,4 +2545,28 @@ fn draw_divine(world: &World, t: f32) {
         draw_circle_lines(c.x, c.y, fr, 3.0, Color::new(1.0, 0.45, 0.5, 0.5 + 0.5 * k));
     }
     let _ = world;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boss_banner_survives_a_leader_in_the_same_batch() {
+        let mut fx = Fx::new();
+        fx.absorb(&[Event::BossSpawned(EnemyKind::GreatOni), Event::LeaderSpawned { kind: EnemyKind::Oni }], sim::Vec2::ZERO);
+        assert!(fx.banner.as_ref().is_some_and(|(t, _)| t.contains("APPROACHES")), "{:?}", fx.banner);
+    }
+
+    #[test]
+    fn every_enemy_has_its_own_sprite() {
+        use EnemyKind::*;
+        // GreatOni is the oni texture drawn at double size with a tint, so it has no art path either.
+        let own_texture = [Wisp, Kasa, Chochin, Nopperabo, NightLord, Oni, GreatOni];
+        for k in sim::content::ALL_ENEMIES {
+            if !own_texture.contains(&k) {
+                assert!(world_enemy_src(k).is_some(), "{k:?} falls back to the oni sprite");
+            }
+        }
+    }
 }

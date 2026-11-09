@@ -349,11 +349,17 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
         };
         kit::panel_ex(bx - 10.0, 90.0 + by, bw + 20.0, BOSS_PANEL_BOTTOM - 90.0 - by, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
         let name_c = Color::new(1.0, 0.75, 0.75, 1.0);
+        let r = kind.rarity();
+        let prefix = enemy_rarity_color(r).map(|c| (format!("{}  ·  ", r.name().to_uppercase()), c));
+        let prefix_w = prefix.as_ref().map_or(0.0, |(p, _)| kit::measure(p, 14).width);
         let tag_w = element_tag_width(kind.element(), 14.0) + 10.0;
-        let name_w = kit::measure(&name, 14).width.min(bw - tag_w);
-        let nx = w / 2.0 - (name_w + tag_w) / 2.0;
-        kit::text_fit(&name, nx, 106.0 + by, name_w, 14.0, name_c);
-        element_tag(kind.element(), nx + name_w + 10.0, 106.0 + by, 14.0);
+        let name_w = kit::measure(&name, 14).width.min(bw - tag_w - prefix_w);
+        let nx = w / 2.0 - (prefix_w + name_w + tag_w) / 2.0;
+        if let Some((p, c)) = &prefix {
+            kit::text(p, nx, 106.0 + by, 14.0, *c);
+        }
+        kit::text_fit(&name, nx + prefix_w, 106.0 + by, name_w, 14.0, name_c);
+        element_tag(kind.element(), nx + prefix_w + name_w + 10.0, 106.0 + by, 14.0);
         // Phase pips for bosses that fight in phases.
         let phases = sim::content::boss_phases(kind, world.cfg.difficulty.extra_phases());
         if kind != EnemyKind::NightLord && kind != EnemyKind::GreatOni && phases > 1 {
@@ -705,15 +711,30 @@ pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize) -> Opti
     picked
 }
 
+/// Outline and label colour of an enemy rarity, shared with the gear tiers; Common has none.
+pub fn enemy_rarity_color(r: sim::enemies::EnemyRarity) -> Option<Color> {
+    use sim::enemies::EnemyRarity::*;
+    use sim::gear::Rarity;
+    let tier = match r {
+        Common => return None,
+        Uncommon => Rarity::Uncommon,
+        Elite => Rarity::Rare,
+        Leader => Rarity::Epic,
+        SubBoss => Rarity::Legendary,
+        Boss => Rarity::Mythic,
+    };
+    Some(crate::armory::rarity_color(tier))
+}
+
 /// `below_boss_bar` drops the banner under the boss panel so both stay readable.
 pub fn banner(text: &str, left: f32, below_boss_bar: bool) {
     let a = (left / 0.5).min(1.0);
     let (w, h) = (screen_width(), screen_height());
-    let d = kit::measure(text, 30);
-    let bw = d.width + 80.0;
+    let text_w = kit::measure(text, 30).width.min(w - 2.0 * kit::MARGIN - 80.0);
+    let bw = text_w + 80.0;
     let y = if below_boss_bar { BOSS_PANEL_BOTTOM + 6.0 + 36.0 } else { h * 0.22 };
     kit::panel_ex((w - bw) / 2.0, y - 36.0, bw, 52.0, Color::new(0.10, 0.05, 0.08, 0.85 * a), Color::new(1.0, 0.82, 0.42, 0.6 * a));
-    centered(text, y, 30.0, Color::new(1.0, 0.86, 0.5, a));
+    kit::text_fit_centered(text, w / 2.0, y, text_w, 30.0, Color::new(1.0, 0.86, 0.5, a));
 }
 
 // ───────────────────────── Title / loading ─────────────────────────
@@ -1243,6 +1264,22 @@ mod tests {
             for (name, c) in &others {
                 let d = distance(element_color(e), *c);
                 assert!(d >= 0.12, "{} vs {name}: {d:.3}", e.name());
+            }
+        }
+    }
+
+    #[test]
+    fn enemy_rarity_colors_match_gear_tiers() {
+        use sim::enemies::EnemyRarity::*;
+        use sim::gear::Rarity;
+        assert!(enemy_rarity_color(Common).is_none());
+        let tiers = [(Uncommon, Rarity::Uncommon), (Elite, Rarity::Rare), (Leader, Rarity::Epic), (SubBoss, Rarity::Legendary), (Boss, Rarity::Mythic)];
+        for (i, (r, g)) in tiers.iter().enumerate() {
+            let c = enemy_rarity_color(*r).expect("coloured");
+            assert_eq!(c, crate::armory::rarity_color(*g), "{r:?}");
+            for (o, _) in &tiers[i + 1..] {
+                let d = distance(c, enemy_rarity_color(*o).unwrap());
+                assert!(d >= 0.12, "{r:?} vs {o:?}: {d:.3}");
             }
         }
     }

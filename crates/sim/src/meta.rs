@@ -869,6 +869,7 @@ pub fn enemy_found(p: &Profile, k: EnemyKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::EnemyRarity;
     use crate::WorldConfig;
 
     #[test]
@@ -886,6 +887,24 @@ mod tests {
         assert_eq!(p.add_item(mythic), 0);
         assert_eq!(p.items.len(), BAG_SIZE + 1);
         assert!(p.dust > dust);
+    }
+
+    #[test]
+    fn old_save_keeps_enemy_kills() {
+        let old: Vec<_> = ALL_ENEMIES.iter().filter(|k| !matches!(k.rarity(), EnemyRarity::Uncommon | EnemyRarity::Leader)).collect();
+        assert_eq!(old.len(), 47);
+        let mut text = String::new();
+        for (n, k) in old.iter().enumerate() {
+            text += &format!("enemy.{}={}\n", key_of(*k), n + 1);
+        }
+        let p = Profile::parse(&text);
+        for (n, k) in old.iter().enumerate() {
+            assert_eq!(p.enemy_kills[k.index()], n as u64 + 1, "{k:?}");
+        }
+        for k in ALL_ENEMIES.iter().filter(|k| !old.contains(k)) {
+            assert_eq!(p.enemy_kills[k.index()], 0, "{k:?}");
+        }
+        assert_eq!(Profile::parse(&p.serialize()).serialize(), p.serialize());
     }
 
     #[test]
