@@ -9,7 +9,7 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 RUSTFLAGS="-C target-feature=+simd128 -C link-arg=--allow-undefined" cargo build -p client --release --target wasm32-unknown-unknown
 
 rm -rf dist && mkdir -p dist
-cp web/index.html web/perf.js dist/
+cp web/index.html web/perf.js web/manifest.webmanifest web/icon-192.png web/icon-512.png dist/
 cp "$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/macroquad-0.4.*/js | tail -1)/mq_js_bundle.js" dist/
 WASM="$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/client.wasm"
 if command -v wasm-opt >/dev/null; then
@@ -17,6 +17,10 @@ if command -v wasm-opt >/dev/null; then
 else
   cp "$WASM" dist/game.wasm
 fi
+# Service worker last: it precaches every game file above, keyed by their combined hash.
+FILES=$(cd dist && ls | sed 's/.*/"&"/' | paste -sd, -)
+BUILD=$(cat dist/* | cksum | cut -d' ' -f1)
+sed -e "s/__BUILD__/$BUILD/" -e "s/__FILES__/$FILES/" web/sw.js > dist/sw.js
 cp web/vercel.json dist/
 # Keep the Vercel project link inside dist/ so `vercel deploy` from dist targets the right project.
 if [ -d .vercel ]; then cp -r .vercel dist/; fi

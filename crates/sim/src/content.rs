@@ -11,12 +11,25 @@ pub use crate::enemies::*;
 
 pub const MAX_ENEMY_RADIUS: f32 = 36.0;
 
+use crate::Vec2;
+
+/// Attacks only land inside this box around the player (shrunk on small screens).
+pub const REACH_HALF: Vec2 = Vec2::new(192.0, 108.0);
+pub const REACH_RANGED: f32 = 1.0;
+pub const REACH_HYBRID: f32 = 0.9;
+pub const REACH_MELEE: f32 = 0.8;
+/// Reach stays at least this far inside the visible edge.
+pub const REACH_EDGE: f32 = 24.0;
+pub const DEFAULT_VIEW_HALF: Vec2 = Vec2::new(320.0, 180.0);
+/// Melee reach covers far fewer enemies, so melee heroes hit harder; hybrids keep pace without help.
+pub const MIGHT_MELEE: f32 = 2.3;
+pub const MIGHT_TOYA: f32 = 2.3;
+pub const MIGHT_RIKU: f32 = 2.0;
+/// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
+pub const BOSS_HP: f32 = 0.5;
+
 /// The Night Lord arrives at RUN_SECONDS; if still alive at this time, dawn takes the player.
 pub const DAWN_LIMIT: f32 = 17.0 * 60.0;
-
-pub fn night_lord_hp() -> f32 {
-    50_000.0
-}
 
 /// Seconds a Nopperabo takes to fade back in after a blink (harmless meanwhile).
 pub const NOPPERABO_FADE_IN: f32 = 0.6;
@@ -25,7 +38,7 @@ pub const NOPPERABO_FADE_IN: f32 = 0.6;
 pub const SHOT_RADIUS: f32 = 5.0;
 pub const SHOT_DAMAGE: f32 = 4.0;
 
-/// Share of new spawns that are Chochin (from 4:00) and Nopperabo (from 9:00, after the mid-boss).
+/// Share of new spawns that are Chochin (from 4:00) and Nopperabo (from 9:00).
 pub fn chochin_share(t: f32) -> f32 {
     if t < 240.0 { 0.0 } else { (0.01 + (t - 240.0) / 660.0 * 0.02).min(0.03) }
 }
@@ -33,7 +46,6 @@ pub fn chochin_share(t: f32) -> f32 {
 pub fn nopperabo_share(t: f32) -> f32 {
     if t < 540.0 { 0.0 } else { (0.02 + (t - 540.0) / 360.0 * 0.02).min(0.04) }
 }
-pub const MIDBOSS_AT: f32 = 480.0;
 
 // ───────────────────────── Ren's special ─────────────────────────
 
@@ -148,6 +160,14 @@ impl PickupKind {
             PickupKind::Hourglass => "Enemies frozen for 5s",
             PickupKind::ExorcismSeal => "Banishes every enemy on screen",
             PickupKind::SenPurse => "+40 Sen",
+        }
+    }
+    pub fn tier(self) -> Tier {
+        match self {
+            PickupKind::Feast => Tier::Common,
+            PickupKind::SwiftGeta | PickupKind::OniSake | PickupKind::ShrineBell | PickupKind::SenPurse => Tier::Uncommon,
+            PickupKind::Hourglass => Tier::Rare,
+            PickupKind::ExorcismSeal => Tier::Legendary,
         }
     }
     /// Spawn weight.
@@ -725,12 +745,17 @@ pub struct HeroDef {
     pub signature: WeaponKind,
     /// Weapons with any of these tags (plus `Shared`) can be offered.
     pub pool_tags: &'static [Tag],
+    /// Scales `REACH_HALF`.
+    pub reach: f32,
+    /// Per-hero damage lever; melee heroes offset their shorter reach.
+    pub reach_might: f32,
     pub weapon_slots: usize,
     pub passive_slots: usize,
     /// False while the hero's own sprite and special move are still placeholders.
     pub finished: bool,
     pub special: SpecialKind,
     pub special_name: &'static str,
+    pub element: Element,
 }
 
 pub fn hero_def(id: HeroId) -> HeroDef {
@@ -756,7 +781,24 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Kuon => (SpecialKind::Firmament, "Domain: Endless Firmament"),
         _ => (SpecialKind::Barrier, "Barrier"),
     };
-    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, weapon_slots: 4, passive_slots: 6, finished, special, special_name }
+    let (reach, reach_might) = match id {
+        HeroId::Ren | HeroId::Kuon | HeroId::Mika | HeroId::Nanami => (REACH_RANGED, 1.0),
+        HeroId::Riku => (REACH_HYBRID, MIGHT_RIKU),
+        HeroId::Kaede | HeroId::Yuzu => (REACH_HYBRID, 1.0),
+        HeroId::Toya => (REACH_MELEE, MIGHT_TOYA),
+        HeroId::Shun | HeroId::Haru => (REACH_MELEE, MIGHT_MELEE),
+    };
+    let element = match id {
+        HeroId::Ren => Element::Light,
+        HeroId::Riku | HeroId::Nanami => Element::Fire,
+        HeroId::Shun => Element::Darkness,
+        HeroId::Toya => Element::Earth,
+        HeroId::Kuon => Element::Ice,
+        HeroId::Kaede | HeroId::Yuzu => Element::Electric,
+        HeroId::Mika => Element::Water,
+        HeroId::Haru => Element::Wind,
+    };
+    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name, element }
 }
 
 impl HeroDef {
@@ -805,10 +847,10 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
 pub fn awakened_text(kind: WeaponKind) -> &'static str {
     match kind {
         WeaponKind::Ofuda => "Seal Storm: an endless stream of homing seals that explode on contact, on top of twice the talismans.",
-        WeaponKind::MoonOrbs => "Lunar Eclipse: a second ring of moons, and moonbeams sweep the whole screen every few seconds.",
+        WeaponKind::MoonOrbs => "Lunar Eclipse: a second ring of moons, and moonbeams sweep your reach every few seconds.",
         WeaponKind::SakuraField => "Hanafubuki: a ceaseless spiral storm of cutting petals pours out of a wider field that heals you.",
         WeaponKind::ThunderChain => "Heavenfall: lightning keeps crashing down from the sky on nearby enemies, plus twice the chains.",
-        WeaponKind::Taiko => "Festival Quake: colossal shockwaves roll out across the screen between the beats.",
+        WeaponKind::Taiko => "Festival Quake: colossal shockwaves roll out across your reach between the beats.",
         WeaponKind::StarFall => "Meteor: giant meteors crash down and leave burning craters, on top of twice the stars.",
         WeaponKind::Crescent => "Moonlit Waves: cuts a full circle and every swing fires eight crescent waves.",
         WeaponKind::FlamePool => "Foxfire Trail: you leave a trail of burning ground wherever you walk; pools burn longer and wider.",
@@ -1022,7 +1064,165 @@ pub fn passive_max(kind: PassiveKind) -> u8 {
     }
 }
 
+// ───────────────────────── Elements ─────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Element {
+    Fire,
+    Water,
+    Electric,
+    Earth,
+    Wind,
+    Ice,
+    Light,
+    Darkness,
+}
+
+pub const ALL_ELEMENTS: [Element; 8] = [Element::Fire, Element::Water, Element::Electric, Element::Earth, Element::Wind, Element::Ice, Element::Light, Element::Darkness];
+
+pub const ELEM_STRONG: f32 = 1.5;
+pub const ELEM_WEAK: f32 = 0.75;
+pub const ELEM_INTO_RARE: f32 = 0.9;
+pub const ELEM_FROM_RARE: f32 = 1.15;
+pub const ELEM_RARE_CLASH: f32 = 1.5;
+/// Damage bonus for a hero's skills of their own element.
+pub const AFFINITY_DAMAGE: f32 = 1.1;
+
+pub const PROC_CHANCE: f32 = 0.15;
+/// Fire: the burn deals `BURN_SHARE` of the hit, spread over `BURN_SECONDS`, one tick every `BURN_TICK`.
+pub const BURN_SECONDS: f32 = 3.0;
+pub const BURN_SHARE: f32 = 0.3;
+pub const BURN_TICK: f32 = 0.5;
+pub const SOAK_SECONDS: f32 = 4.0;
+/// Electric damage multiplier on soaked enemies.
+pub const SOAK_ELECTRIC: f32 = 1.3;
+pub const CHAIN_RANGE: f32 = 90.0;
+pub const CHAIN_SHARE: f32 = 0.5;
+pub const STAGGER_SECONDS: f32 = 0.4;
+/// 6-piece signatures: stagger damage multiplier, Pale Gate shatter share of max HP and radius.
+pub const SET6_STAGGER: f32 = 1.3;
+pub const SET6_SHATTER: f32 = 0.5;
+pub const SET6_SHATTER_R: f32 = 60.0;
+pub const KNOCK_EXTRA: f32 = 220.0;
+pub const SLOW_SECONDS: f32 = 2.0;
+pub const SLOW_FACTOR: f32 = 0.65;
+/// Darkness: player HP restored per proc.
+pub const DRAIN_HEAL: f32 = 0.5;
+
+impl Element {
+    pub fn name(self) -> &'static str {
+        match self {
+            Element::Fire => "Fire",
+            Element::Water => "Water",
+            Element::Electric => "Electric",
+            Element::Earth => "Earth",
+            Element::Wind => "Wind",
+            Element::Ice => "Ice",
+            Element::Light => "Light",
+            Element::Darkness => "Darkness",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Element::Fire => "fire",
+            Element::Water => "water",
+            Element::Electric => "electric",
+            Element::Earth => "earth",
+            Element::Wind => "wind",
+            Element::Ice => "ice",
+            Element::Light => "light",
+            Element::Darkness => "darkness",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Element> {
+        ALL_ELEMENTS.iter().copied().find(|e| e.key() == k)
+    }
+
+    pub fn is_rare(self) -> bool {
+        matches!(self, Element::Light | Element::Darkness)
+    }
+
+    /// The element this one is strong against; Light and Darkness sit outside the cycle.
+    pub fn beats(self) -> Option<Element> {
+        match self {
+            Element::Water => Some(Element::Fire),
+            Element::Fire => Some(Element::Ice),
+            Element::Ice => Some(Element::Wind),
+            Element::Wind => Some(Element::Earth),
+            Element::Earth => Some(Element::Electric),
+            Element::Electric => Some(Element::Water),
+            Element::Light | Element::Darkness => None,
+        }
+    }
+}
+
+pub fn element_mult(attacker: Element, target: Element) -> f32 {
+    match (attacker.is_rare(), target.is_rare()) {
+        (true, true) if attacker != target => ELEM_RARE_CLASH,
+        (true, false) => ELEM_FROM_RARE,
+        (false, true) => ELEM_INTO_RARE,
+        (false, false) if attacker.beats() == Some(target) => ELEM_STRONG,
+        (false, false) if target.beats() == Some(attacker) => ELEM_WEAK,
+        _ => 1.0,
+    }
+}
+
+impl WeaponKind {
+    pub fn element(self) -> Element {
+        use WeaponKind::*;
+        match self {
+            FlamePool | FoxfireOrb | Familiars | RepulsionStar => Element::Fire,
+            PurificationWave | Devour | VenomFang => Element::Water,
+            ThunderChain | IaiFlash | Taiko => Element::Electric,
+            StarFall | CrimsonTendrils | MukadeSpines => Element::Earth,
+            Ofuda | SakuraField | Crescent | GaleShuriken | FoxMirage => Element::Wind,
+            MoonOrbs | SoulTether | YinYangOrbs => Element::Ice,
+            SpiritSeal | LanternVigil => Element::Light,
+            GraveCleaver | GravityWell | VoidLance => Element::Darkness,
+        }
+    }
+}
+
 // ───────────────────────── Upgrades ─────────────────────────
+
+/// Skill rarity; gear has its own `Rarity`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tier {
+    Common,
+    Uncommon,
+    Rare,
+    Legendary,
+    Mythic,
+    Unique,
+}
+
+pub const ALL_TIERS: [Tier; 6] = [Tier::Common, Tier::Uncommon, Tier::Rare, Tier::Legendary, Tier::Mythic, Tier::Unique];
+
+impl Tier {
+    pub fn name(self) -> &'static str {
+        match self {
+            Tier::Common => "Common",
+            Tier::Uncommon => "Uncommon",
+            Tier::Rare => "Rare",
+            Tier::Legendary => "Legendary",
+            Tier::Mythic => "Mythic",
+            Tier::Unique => "Unique",
+        }
+    }
+    /// Starting level-up offer weight for a skill not yet owned.
+    pub fn weight(self) -> f32 {
+        match self {
+            Tier::Common => 1.0,
+            Tier::Uncommon => 0.8,
+            Tier::Rare => 0.6,
+            Tier::Legendary => 0.4,
+            Tier::Mythic => 0.25,
+            Tier::Unique => 0.15,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Upgrade {
@@ -1033,6 +1233,11 @@ pub enum Upgrade {
     Sen,
     Blessing,
 }
+
+/// Chance an offer carries a replacement card when one is possible.
+pub const REPLACE_CHANCE: f32 = 0.15;
+/// Same, once every owned skill is maxed and only fallback cards remain.
+pub const MAXED_REPLACE_CHANCE: f32 = 0.25;
 
 pub const MAXED_FALLBACKS: [Upgrade; 3] = [Upgrade::Heal, Upgrade::Sen, Upgrade::Blessing];
 
@@ -1055,6 +1260,22 @@ pub const SEN_POUCH_RAMP: f32 = 300.0;
 pub const BLESSING_DAMAGE: f32 = 1.03;
 
 impl Upgrade {
+    pub fn tier(self) -> Tier {
+        use WeaponKind::*;
+        match self {
+            Upgrade::Weapon(SpiritSeal | VenomFang) => Tier::Unique,
+            Upgrade::Weapon(GravityWell | LanternVigil) => Tier::Mythic,
+            Upgrade::Weapon(GraveCleaver | FoxfireOrb | VoidLance) => Tier::Legendary,
+            Upgrade::Weapon(FoxMirage | MukadeSpines | Ofuda | FlamePool | Crescent) => Tier::Rare,
+            Upgrade::Weapon(CrimsonTendrils | IaiFlash | YinYangOrbs | StarFall | Familiars | MoonOrbs | GaleShuriken) => Tier::Uncommon,
+            Upgrade::Weapon(_) => Tier::Common,
+            Upgrade::Passive(PassiveKind::Might) => Tier::Mythic,
+            Upgrade::Passive(PassiveKind::Guard) => Tier::Legendary,
+            Upgrade::Passive(PassiveKind::Recovery | PassiveKind::Vitality) => Tier::Rare,
+            Upgrade::Passive(PassiveKind::Haste | PassiveKind::Abundance | PassiveKind::Swiftness) => Tier::Uncommon,
+            Upgrade::Passive(_) | Upgrade::Heal | Upgrade::Sen | Upgrade::Blessing => Tier::Common,
+        }
+    }
     pub fn name(self) -> &'static str {
         match self {
             Upgrade::Weapon(WeaponKind::Ofuda) => "Ofuda Volley",
@@ -1235,9 +1456,6 @@ pub fn chest_rarity(count: usize) -> &'static str {
 
 // ───────────────────────── Shrine Events ─────────────────────────
 
-/// Times (seconds) a roadside shrine appears.
-pub const SHRINE_TIMES: [f32; 4] = [180.0, 360.0, 540.0, 720.0];
-
 /// A shrine offers a blessing that always comes with a price.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShrineEvent {
@@ -1334,6 +1552,9 @@ impl Default for Modifiers {
 
 // ───────────────────────── Progression & pacing ─────────────────────────
 
+/// Attacks only land inside the reach box, so kills are rarer; each gem is worth more to keep levelling on pace.
+pub const XP_GAIN: f32 = 2.0;
+
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;
     (5.0 + 3.5 * l + 0.35 * l * l).round() as u32
@@ -1386,6 +1607,9 @@ pub fn kasa_share(t: f32) -> f32 {
     }
 }
 
+/// Extra enemy HP and damage step for each headline round reached.
+pub const HEADLINE_BUMP: f32 = 1.01;
+
 /// Enemy HP multiplier over the run.
 pub fn hp_scale(t: f32) -> f32 {
     let m = t / 60.0;
@@ -1406,12 +1630,84 @@ pub fn elite_interval(t: f32) -> f32 {
     }
 }
 
-pub const ELITE_EVERY: f32 = 120.0;
-pub const SWARM_RING_TIMES: [f32; 3] = [300.0, 600.0, 840.0];
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn element_cycle_matches_spec() {
+        use Element::*;
+        let cycle = [Water, Fire, Ice, Wind, Earth, Electric];
+        for (i, a) in cycle.iter().enumerate() {
+            let b = cycle[(i + 1) % 6];
+            assert_eq!(a.beats(), Some(b));
+            assert_eq!(element_mult(*a, b), 1.5);
+            assert_eq!(element_mult(b, *a), 0.75);
+            assert_eq!(element_mult(*a, Light), 0.9);
+            assert_eq!(element_mult(Darkness, *a), 1.15);
+        }
+        assert_eq!(element_mult(Fire, Wind), 1.0);
+        assert_eq!(element_mult(Light, Darkness), 1.5);
+        assert_eq!(element_mult(Darkness, Light), 1.5);
+        assert_eq!(element_mult(Light, Light), 1.0);
+    }
+
+    #[test]
+    fn weapon_elements_follow_the_rules() {
+        for e in ALL_ELEMENTS {
+            let n = ALL_WEAPONS.iter().filter(|k| k.element() == e).count();
+            if e.is_rare() { assert!(n <= 3, "{e:?} has {n}") } else { assert!(n >= 3, "{e:?} has {n}") }
+        }
+        for k in ALL_WEAPONS.iter().filter(|k| k.element().is_rare()) {
+            assert!(Upgrade::Weapon(*k).tier() >= Tier::Legendary, "{k:?} is rare-element below Legendary");
+        }
+    }
+
+    #[test]
+    fn hero_levers_are_per_hero() {
+        assert_eq!(hero_def(HeroId::Riku).reach_might, 2.0);
+        assert_eq!(hero_def(HeroId::Toya).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Shun).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Haru).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Kaede).reach_might, 1.0);
+        assert_eq!(hero_def(HeroId::Ren).reach_might, 1.0);
+    }
+
+    #[test]
+    fn tiers_follow_the_buckets() {
+        use Tier::*;
+        let count = |tiers: Vec<Tier>| ALL_TIERS.map(|t| tiers.iter().filter(|x| **x == t).count());
+        let weapons = count(ALL_WEAPONS.iter().map(|k| Upgrade::Weapon(*k).tier()).collect());
+        let passives = count(ALL_PASSIVES.iter().map(|k| Upgrade::Passive(*k).tier()).collect());
+        assert_eq!(weapons, [7, 7, 5, 3, 2, 2]);
+        assert_eq!(passives, [3, 3, 2, 1, 1, 0]);
+        assert!(MAXED_FALLBACKS.iter().all(|u| u.tier() == Common));
+    }
+
+    #[test]
+    fn signatures_are_never_unique() {
+        for h in ALL_HEROES {
+            assert_ne!(Upgrade::Weapon(hero_def(h).signature).tier(), Tier::Unique, "{h:?}");
+        }
+    }
+
+    #[test]
+    fn pickup_tiers_follow_spawn_weights() {
+        for a in ALL_PICKUPS {
+            for b in ALL_PICKUPS {
+                if a.weight() > b.weight() {
+                    assert!(a.tier() <= b.tier(), "{a:?} spawns more often than {b:?} but has a higher tier");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tier_weights_fall_with_rarity() {
+        let weights = ALL_TIERS.map(Tier::weight);
+        assert_eq!(weights, [1.0, 0.8, 0.6, 0.4, 0.25, 0.15]);
+        assert!(weights.windows(2).all(|w| w[0] > w[1]));
+    }
 
     #[test]
     fn pacing_is_monotonic() {
@@ -1444,4 +1740,12 @@ mod tests {
             }
         }
     }
+}
+
+/// Max HP one Vitality level grants.
+pub const VITALITY_HP: f32 = 20.0;
+
+/// Level a replacing skill joins at: half the overwritten level, within the new skill's cap.
+pub fn inherit_level(new: Upgrade, old: u8) -> u8 {
+    (old / 2).max(1).min(new.max_level())
 }

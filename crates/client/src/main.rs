@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use sim::campaign::{MID_BOSS_ROUND, SUB_BOSS_ROUND};
 use sim::world::DT;
 use sim::meta::{Profile, RunReport};
 use sim::{Input, RunState, Stress, World, WorldConfig};
@@ -117,6 +118,9 @@ async fn main() {
     let mut chest_anim: Option<chest_ui::ChestAnim> = None;
     // Space is latched until the sim next steps; at high refresh rates many frames take no step.
     let mut special_queued = false;
+    let mut overlay_focus = 0usize;
+    let mut overlay_was_open = false;
+    let mut cards_focus = 0usize;
 
     let mut collection = menu::CollectionState::default();
     let mut armory_state = armory::ArmoryState::default();
@@ -128,6 +132,7 @@ async fn main() {
     // The big map view is open (the run pauses meanwhile).
     let mut map_open = false;
     let mut map_opened_now = false;
+    let mut ult_alert = ui::UltAlert::default();
     let mut touch = touch::TouchControls::default();
 
     kit::init();
@@ -172,7 +177,7 @@ async fn main() {
         if let Some(st) = perf {
             // Keep the scene in play: take level-ups and chests automatically.
             if world.offer.is_some() {
-                world.choose(0);
+                world.bot_pick();
             }
             if world.chest_result.is_some() {
                 world.close_chest();
@@ -197,7 +202,8 @@ async fn main() {
         kit::begin_ui();
         let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
         touch.update(in_run && !map_open);
-        if touch.pause && in_run {
+        let portrait = screen_height() > screen_width();
+        if (touch.pause || portrait) && in_run {
             screen = Screen::Paused;
         }
         let now = get_time();
@@ -226,6 +232,7 @@ async fn main() {
                 save::store(&profile);
                 audio.play(synth::Sfx::Buy);
             }
+            ui::rotate_prompt();
             next_frame().await;
             continue;
         }
@@ -317,6 +324,7 @@ async fn main() {
             Screen::Playing | Screen::Paused => {}
         }
         if !matches!(screen, Screen::Playing | Screen::Paused) {
+            ui::rotate_prompt();
             next_frame().await;
             continue;
         }
@@ -385,10 +393,10 @@ async fn main() {
             use devmenu::DevAction::*;
             let st = world.stage();
             match a {
-                SkipMini => world.time = world.time.max(st.mini_at - 3.0),
+                SkipMini => world.time = world.time.max(st.round_start(SUB_BOSS_ROUND) - 3.0),
                 SkipBoss => {
-                    if let Some((_, at)) = st.boss {
-                        world.time = world.time.max(at - 3.0);
+                    if st.boss.is_some() {
+                        world.time = world.time.max(st.round_start(MID_BOSS_ROUND) - 3.0);
                     }
                 }
                 SkipFinal => world.time = world.time.max(st.final_at - 3.0),
@@ -441,13 +449,15 @@ async fn main() {
             input.move_dir = input.move_dir + touch.dir();
             special_queued |= is_key_pressed(KeyCode::Space) || touch.special;
             input.special = special_queued;
+            let scale = render::world_scale();
+            world.view_half = sim::Vec2::new(screen_width() / scale / 2.0, screen_height() / scale / 2.0);
             let t0 = get_time();
             let mut steps = 0;
             while acc >= DT && steps < 4 && !world.paused() {
                 let t_s = get_time();
                 world.step(input);
                 perf_parts[0] += (get_time() - t_s) * 1000.0;
-                fx.absorb(&world.events);
+                fx.absorb(&world.events, world.player.pos);
                 audio.absorb(&world.events);
                 // Delivered exactly once, even if the sim steps several times this frame.
                 input.special = false;
@@ -508,6 +518,12 @@ async fn main() {
                 map_opened_now = true;
             }
         }
+        let alert_blocked = world.paused() || screen == Screen::Paused || map_open;
+        let ult_ready = matches!(screen, Screen::Playing | Screen::Paused) && !matches!(world.state, RunState::Dead | RunState::Won) && world.player.special >= 1.0 && world.form_kind().is_none();
+        if ult_alert.update(ult_ready, alert_blocked, dt) {
+            audio.play(synth::Sfx::Rise);
+        }
+        ui::ult_alert(&ult_alert, ui::element_color(sim::content::hero_def(world.cfg.hero).element), touch.active, ult_ready && !alert_blocked);
         if dev.show_fps || stress.is_some() {
             ui::debug_overlay(get_fps(), sim_ms, &world, stress.is_some());
         }
@@ -517,9 +533,13 @@ async fn main() {
         }
 
         if let (Some((text, left)), false) = (&fx.banner, world.paused()) {
-            ui::banner(text, *left);
+            ui::banner(text, *left, world.boss().is_some());
         }
-        if let Some(items) = world.chest_result.clone() {
+        let mut overlay_picked = false;
+        let focus_overlay_open = world.chest_result.is_none() && (world.shrine_offer.is_some() || world.offer.is_some());
+        if portrait {
+            // The rotate prompt covers the screen; draw no widgets so taps reach nothing.
+        } else if let Some(items) = world.chest_result.clone() {
             let anim = chest_anim.get_or_insert_with(|| chest_ui::ChestAnim::new(items));
             let done = anim.update_and_draw(&assets, dt);
             for cue in anim.cues.drain(..) {
@@ -531,14 +551,40 @@ async fn main() {
                 chest_anim = None;
             }
         } else if let Some(offer) = world.shrine_offer.clone() {
-            if let Some(choice) = ui::shrine(&offer, &assets) {
+            let fresh = !overlay_was_open;
+            if fresh {
+                overlay_focus = 0;
+            }
+            let choice = ui::shrine(&offer, &assets, &mut overlay_focus);
+            if let Some(choice) = choice.filter(|_| !fresh) {
                 audio.play(if choice.is_some() { synth::Sfx::Chime } else { synth::Sfx::Click });
                 world.choose_shrine(choice);
+                overlay_picked = true;
+            }
+        } else if world.offer.is_some() && world.replacing.is_some() {
+            let fresh = !overlay_was_open;
+            if fresh {
+                overlay_focus = 0;
+            }
+            let choice = ui::replace_picker(&world, &assets, &mut overlay_focus, touch.active);
+            if let Some(choice) = choice.filter(|_| !fresh) {
+                audio.play(synth::Sfx::Click);
+                if choice.is_none() {
+                    cards_focus = world.offer.as_ref().and_then(|o| o.iter().position(|&u| world.is_replacement(u))).unwrap_or(0);
+                }
+                world.replace_with(choice);
+                overlay_picked = true;
             }
         } else if let Some(offer) = world.offer.clone() {
-            if let Some(i) = ui::level_up(&world, &offer, &assets) {
+            let fresh = !overlay_was_open;
+            if fresh {
+                overlay_focus = std::mem::take(&mut cards_focus);
+            }
+            let picked = ui::level_up(&world, &offer, &assets, &mut overlay_focus, touch.active);
+            if let Some(i) = picked.filter(|_| !fresh) {
                 audio.play(synth::Sfx::Click);
                 world.choose(i);
+                overlay_picked = true;
             }
         } else if over {
             match ui::results(&world, world.state == RunState::Won, report.as_ref(), &fx.lines(), &assets) {
@@ -599,6 +645,8 @@ async fn main() {
             }
         }
 
+        overlay_was_open = focus_overlay_open && !overlay_picked;
+
         if perf_frames > 60 {
             perf_cpu += (get_time() - frame_start) * 1000.0;
         }
@@ -607,6 +655,7 @@ async fn main() {
                 get_screen_data().export_png(&path);
             }
         }
+        ui::rotate_prompt();
         next_frame().await
     }
 }
@@ -637,7 +686,7 @@ fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
         }
         GrantArts => {
             for art in gear::LEGENDARY_ARTS {
-                let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 40, None);
+                let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 40);
                 it.art = Some(art);
                 profile.add_item(it);
             }
@@ -646,7 +695,16 @@ fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
             for k in 0..20 {
                 let r = if k % 3 == 0 { Rarity::Mythic } else { Rarity::Legendary };
                 let set = sim::campaign::ALL_STAGES[(rng.next_u32() as usize) % 6];
-                profile.add_item(gear::roll_item(&mut rng, None, r, 40, Some(set)));
+                let mut it = gear::roll_item(&mut rng, None, r, 40);
+                it.set = Some(set);
+                profile.add_item(it);
+            }
+        }
+        GrantSet => {
+            let world = profile.stage;
+            for slot in gear::set_pieces(world) {
+                let piece = (0..500).map(|_| gear::roll_set_piece(&mut rng, world, 40)).find(|it| it.slot == slot);
+                profile.add_item(piece.expect("a Set piece for every slot"));
             }
         }
         Sen => profile.sen += 10_000,

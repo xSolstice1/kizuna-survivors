@@ -200,9 +200,10 @@ pub enum Sfx {
     LashSfx,
     Chomp,
     Crunch,
+    Rise,
 }
 
-pub const ALL_SFX: [Sfx; 53] = [
+pub const ALL_SFX: [Sfx; 54] = [
     Sfx::Hit,
     Sfx::Pop,
     Sfx::BigPop,
@@ -256,6 +257,7 @@ pub const ALL_SFX: [Sfx; 53] = [
     Sfx::LashSfx,
     Sfx::Chomp,
     Sfx::Crunch,
+    Sfx::Rise,
 ];
 
 /// Bell-like tone: inharmonic sine partials.
@@ -365,6 +367,12 @@ pub fn sfx(s: Sfx) -> Buf {
             b = Buf::new(1.6);
             bell(&mut b, 0.0, midi(79.0), 1.6, 0.45);
             bell(&mut b, 0.25, midi(86.0), 1.3, 0.3);
+        }
+        Sfx::Rise => {
+            b = Buf::new(0.45);
+            for (i, n) in [74.0, 79.0, 86.0].iter().enumerate() {
+                b.add(i as f32 * 0.1, Note::new(Sine, midi(*n), 0.25, 0.3).env(0.01, 2.0));
+            }
         }
         Sfx::Chime => {
             b = Buf::new(0.9);

@@ -6,7 +6,7 @@ use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
 use crate::kit::{mouse_position, screen_height, screen_width};
-use sim::content::{awakened_name, awakened_text, complement, hero_def, EnemyKind, Upgrade, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
+use sim::content::{awakened_name, awakened_text, complement, hero_def, Element, EnemyKind, Upgrade, ALL_ENEMIES, ALL_HEROES, ALL_PASSIVES, ALL_SHRINE_EVENTS, ALL_WEAPONS};
 use sim::campaign::{Difficulty, StageId, ALL_DIFFICULTIES, ALL_RELICS, ALL_STAGES};
 use kit::SAKURA;
 use sim::meta::{collection_progress, enemy_found, unlock_text, PowerUp, Profile, ALL_POWERUPS};
@@ -18,6 +18,7 @@ pub const ACCENT: Color = Color::new(1.0, 0.43, 0.63, 1.0);
 const GOLD: Color = Color::new(1.0, 0.85, 0.4, 1.0);
 const DIM: Color = Color::new(1.0, 1.0, 1.0, 0.55);
 
+/// Unlike kit::centered, no drop shadow.
 pub fn centered_at(text: &str, cx: f32, y: f32, size: f32, color: Color) {
     let d = kit::measure(text, size as u16);
     kit::text(text, cx - d.width / 2.0, y, size, color);
@@ -45,9 +46,9 @@ pub fn fullscreen_button(r: Rect) {
 fn sen_badge(assets: &Assets, sen: u32) {
     let v = format!("{sen}");
     let w = kit::measure(&v, 20).width + kit::measure("SEN", 14).width + 28.0;
-    let x = screen_width() - w - 20.0;
-    kit::chip(x, 18.0, "SEN", &v, GOLD);
-    draw_texture_ex(&assets.coin, x - 26.0, 22.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
+    let x = screen_width() - w - kit::MARGIN;
+    kit::chip(x, kit::MARGIN, "SEN", &v, GOLD);
+    draw_texture_ex(&assets.coin, x - 26.0, kit::MARGIN + 4.0, WHITE, DrawTextureParams { dest_size: Some(vec2(22.0, 22.0)), ..Default::default() });
 }
 
 pub fn backdrop(time: f64) {
@@ -189,7 +190,7 @@ pub fn title_rect() -> Rect {
 }
 
 /// One illustrated card on the main menu.
-fn menu_card(r: Rect, label: &str, sub: &str, accent: Color, art: impl FnOnce(Rect, bool)) -> bool {
+fn menu_card(r: Rect, label: &str, sub: &str, pip: Option<Element>, accent: Color, art: impl FnOnce(Rect, bool)) -> bool {
     let mouse: Vec2 = mouse_position().into();
     let hover = r.contains(mouse);
     let t = get_time() as f32;
@@ -229,7 +230,16 @@ fn menu_card(r: Rect, label: &str, sub: &str, accent: Color, art: impl FnOnce(Re
         draw_rectangle(r.x, r.y + r.h - 3.0, r.w, 3.0, Color::new(accent.r, accent.g, accent.b, 0.8));
     }
     kit::text_fit_centered(label, r.x + r.w / 2.0, r.y + r.h - 38.0, r.w - 16.0, 24.0, if hover { WHITE } else { Color::new(0.92, 0.9, 0.98, 1.0) });
-    kit::text_fit_centered(sub, r.x + r.w / 2.0, r.y + r.h - 16.0, r.w - 16.0, 13.0, Color::new(accent.r, accent.g, accent.b, 0.9));
+    let sub_color = Color::new(accent.r, accent.g, accent.b, 0.9);
+    match pip {
+        Some(e) => {
+            let size = kit::fit(sub, r.w - 16.0 - 14.0, 13.0);
+            let left = r.x + r.w / 2.0 - (kit::measure(sub, size as u16).width + 14.0) / 2.0;
+            crate::ui::element_pip(e, left + 5.0, r.y + r.h - 16.0 - size * 0.32, 5.0);
+            kit::text(sub, left + 14.0, r.y + r.h - 16.0, size, sub_color);
+        }
+        None => kit::text_fit_centered(sub, r.x + r.w / 2.0, r.y + r.h - 16.0, r.w - 16.0, 13.0, sub_color),
+    }
     kit::rounded_outline(r.x, r.y, r.w, r.h, 12.0, if hover { 2.5 } else { 1.5 }, if hover { accent } else { Color::new(1.0, 1.0, 1.0, 0.16) });
     hover && is_mouse_button_pressed(MouseButton::Left)
 }
@@ -302,7 +312,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     let card = |i: usize| Rect::new(x0 + i as f32 * (cw + gap), cy, cw, ch);
     let stage = profile.stage;
     let sdef = stage.def();
-    if menu_card(card(0), "START", &format!("{}  ·  {}", sdef.chapter, sdef.name), crate::stage::accent(stage), |r, hover| {
+    if menu_card(card(0), "START", &format!("{}  ·  {}", sdef.chapter, sdef.name), Some(stage.element()), crate::stage::accent(stage), |r, hover| {
         let c = crate::stage::accent(stage);
         gradient(r.x, r.y, r.w, r.h, Color::new(c.r * 0.25, c.g * 0.2, c.b * 0.35, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         art.draw_patch(stage, r.x, r.y + r.h * 0.72, r.w, r.h * 0.28, 2.0);
@@ -314,7 +324,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     }) {
         action = Some(MenuAction::Start);
     }
-    if menu_card(card(1), "ARMORY", &format!("{} items", profile.items.len()), kit::SKY, |r, _| {
+    if menu_card(card(1), "ARMORY", &format!("{} items", profile.items.len()), None, kit::SKY, |r, _| {
         gradient(r.x, r.y, r.w, r.h, Color::new(0.12, 0.18, 0.32, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.48, r.w * 0.36, Color::new(0.35, 0.6, 1.0, 0.12));
         tex_in(&assets.hero(profile.selected)[0], r.x + r.w / 2.0, r.y + r.h * 0.8, r.h * 0.5, WHITE);
@@ -328,7 +338,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     }) {
         action = Some(MenuAction::Armory);
     }
-    if menu_card(card(2), "SHRINE DRAW", "Test your fortune", GOLD, |r, hover| {
+    if menu_card(card(2), "SHRINE DRAW", "Test your fortune", None, GOLD, |r, hover| {
         gradient(r.x, r.y, r.w, r.h, Color::new(0.32, 0.12, 0.14, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         let glow = if hover { 0.3 } else { 0.18 };
         draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.62, r.w * 0.3, Color::new(1.0, 0.75, 0.35, glow));
@@ -343,7 +353,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     }) {
         action = Some(MenuAction::Draw);
     }
-    if menu_card(card(3), "SHRINE SHOP", "Permanent blessings", kit::JADE, |r, _| {
+    if menu_card(card(3), "SHRINE SHOP", "Permanent blessings", None, kit::JADE, |r, _| {
         gradient(r.x, r.y, r.w, r.h, Color::new(0.1, 0.24, 0.18, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.45, r.w * 0.4, Color::new(0.4, 1.0, 0.6, 0.1));
         for (k, name) in ["might", "guard", "haste", "vitality", "magnetism", "recovery"].iter().enumerate() {
@@ -361,7 +371,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Shop);
     }
     let found = profile.enemy_kills.iter().filter(|k| **k > 0).count();
-    if menu_card(card(4), "COLLECTIONS", &format!("{found} Otherworlders met"), SAKURA, |r, _| {
+    if menu_card(card(4), "COLLECTIONS", &format!("{found} Otherworlders met"), None, SAKURA, |r, _| {
         gradient(r.x, r.y, r.w, r.h, Color::new(0.24, 0.1, 0.28, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         let show = [EnemyKind::Wisp, EnemyKind::Kodama, EnemyKind::LeafShinobi, EnemyKind::LostSoul, EnemyKind::RainGhoul, EnemyKind::CursedSpawn, EnemyKind::Chochin, EnemyKind::LanternFairy, EnemyKind::CurseEye];
         for (k, e) in show.iter().enumerate() {
@@ -378,18 +388,18 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Start);
     }
 
-    if dev && kit::button(Rect::new(20.0, h - 52.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
+    if dev && kit::button(Rect::new(kit::MARGIN, h - kit::MARGIN - 36.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
         action = Some(MenuAction::Dev);
     }
     // Copyright (the font has no © glyph, so the circle is drawn).
     let owner = "2026 xSolstice1";
     let ow = kit::measure(owner, 13).width;
-    let (cx2, cy2) = (w - 24.0 - ow - 14.0, h - 18.0);
+    let (cx2, cy2) = (w - kit::MARGIN - ow - 14.0, h - kit::MARGIN - 4.0);
     draw_circle_lines(cx2, cy2, 6.5, 1.2, Color::new(1.0, 1.0, 1.0, 0.45));
     kit::text("c", cx2 - 3.2, cy2 + 3.6, 11.0, Color::new(1.0, 1.0, 1.0, 0.45));
-    kit::text(owner, w - 24.0 - ow, h - 13.5, 13.0, Color::new(1.0, 1.0, 1.0, 0.45));
+    kit::text(owner, w - kit::MARGIN - ow, h - kit::MARGIN, 13.0, Color::new(1.0, 1.0, 1.0, 0.45));
     let hint = "WASD / arrows to move   ·   Space: special   ·   Esc to pause";
-    kit::text_fit_centered(hint, w / 2.0, h - 14.0, w - 300.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
+    kit::text_fit_centered(hint, w / 2.0, h - kit::MARGIN, w - 300.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
     action
 }
 
@@ -552,34 +562,57 @@ impl Default for CollectionState {
     }
 }
 
-/// One entry: (found, icon, name, text lines).
-struct Entry<'a> {
+/// One entry: found flag, name, text lines.
+struct Entry {
     found: bool,
-    icon: &'a Texture2D,
-    tint: Color,
     name: String,
     lines: Vec<String>,
+    elem: Option<Element>,
 }
 
 fn enemy_icon(assets: &Assets, k: EnemyKind) -> (&Texture2D, Color) {
     (assets.enemy_tex(k), if k == EnemyKind::GreatOni { Color::new(0.85, 0.7, 1.0, 1.0) } else { WHITE })
 }
 
-fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry<'a> {
+/// Cheap discovery check: no strings, used for counts and grid cells.
+fn found(profile: &Profile, tab: Tab, i: usize) -> bool {
+    match tab {
+        Tab::Otherworlders => enemy_found(profile, ALL_ENEMIES[i]),
+        Tab::Weapons => profile.weapons_found.contains(&ALL_WEAPONS[i]),
+        Tab::Awakenings => profile.awakenings_found.contains(&ALL_WEAPONS[i]),
+        Tab::Passives => profile.passives_found.contains(&ALL_PASSIVES[i]),
+        Tab::Shrines => profile.shrines_found.contains(&ALL_SHRINE_EVENTS[i]),
+        Tab::Heroes => hero_def(ALL_HEROES[i]).finished && profile.is_unlocked(ALL_HEROES[i]),
+        Tab::Relics => profile.relics.contains(&ALL_RELICS[i]),
+    }
+}
+
+/// Grid-cell icon and tint, matching `entry` without building its text.
+fn cell_icon<'a>(assets: &'a Assets, tab: Tab, i: usize) -> (&'a Texture2D, Color) {
+    match tab {
+        Tab::Otherworlders => enemy_icon(assets, ALL_ENEMIES[i]),
+        Tab::Weapons => (assets.icon(Upgrade::Weapon(ALL_WEAPONS[i])), WHITE),
+        Tab::Awakenings => (assets.icon(Upgrade::Weapon(ALL_WEAPONS[i])), GOLD),
+        Tab::Passives => (assets.icon(Upgrade::Passive(ALL_PASSIVES[i])), WHITE),
+        Tab::Shrines => (&assets.shrine, WHITE),
+        Tab::Heroes => (&assets.hero(ALL_HEROES[i])[0], WHITE),
+        Tab::Relics => (assets.icon_named(ALL_RELICS[i].icon()), WHITE),
+    }
+}
+
+fn entry(profile: &Profile, tab: Tab, i: usize) -> Entry {
     match tab {
         Tab::Otherworlders => {
             let k = ALL_ENEMIES[i];
-            let (icon, tint) = enemy_icon(assets, k);
             let kills = profile.enemy_kills[i];
             Entry {
-                found: enemy_found(profile, k),
-                icon,
-                tint,
+                found: found(profile, tab, i),
                 name: k.name().into(),
                 lines: vec![
                     k.lore().into(),
                     format!("{}  ·  Defeated: {kills}{}", sim::campaign::home_stage(k).def().name, if k.is_boss() { "   (boss)" } else { "" }),
                 ],
+                elem: Some(k.element()),
             }
         }
         Tab::Weapons => {
@@ -588,68 +621,64 @@ fn entry<'a>(profile: &Profile, assets: &'a Assets, tab: Tab, i: usize) -> Entry
             let (p, _) = complement(k);
             let users: Vec<&str> = ALL_HEROES.iter().filter(|h| hero_def(**h).weapon_pool().contains(&k)).map(|h| hero_def(*h).name.split(' ').next().unwrap_or("")).collect();
             Entry {
-                found: profile.weapons_found.contains(&k),
-                icon: assets.icon(u),
-                tint: WHITE,
+                found: found(profile, tab, i),
                 name: u.name().into(),
                 lines: vec![u.describe(1), format!("Awakens with: {}", Upgrade::Passive(p).name()), format!("Used by: {}", users.join(", "))],
+                elem: Some(k.element()),
             }
         }
         Tab::Awakenings => {
             let k = ALL_WEAPONS[i];
             let (p, _) = complement(k);
             Entry {
-                found: profile.awakenings_found.contains(&k),
-                icon: assets.icon(Upgrade::Weapon(k)),
-                tint: GOLD,
+                found: found(profile, tab, i),
                 name: awakened_name(k).into(),
                 lines: vec![
                     awakened_text(k).into(),
-                    format!("Recipe: {} at max level + {}, from a chest after 10:00.", Upgrade::Weapon(k).name(), Upgrade::Passive(p).name()),
+                    recipe_text(Upgrade::Weapon(k).name(), Upgrade::Passive(p).name()),
                 ],
+                elem: Some(k.element()),
             }
         }
         Tab::Passives => {
             let k = ALL_PASSIVES[i];
             let u = Upgrade::Passive(k);
-            Entry { found: profile.passives_found.contains(&k), icon: assets.icon(u), tint: WHITE, name: u.name().into(), lines: vec![u.describe(1)] }
+            Entry { found: found(profile, tab, i), name: u.name().into(), lines: vec![u.describe(1)], elem: None }
         }
         Tab::Shrines => {
             let ev = ALL_SHRINE_EVENTS[i];
             let (bless, price) = ev.text();
             Entry {
-                found: profile.shrines_found.contains(&ev),
-                icon: &assets.shrine,
-                tint: WHITE,
+                found: found(profile, tab, i),
                 name: ev.name().into(),
                 lines: vec![format!("Blessing: {bless}"), format!("Price: {price}")],
+                elem: None,
             }
         }
-        Tab::Heroes if !hero_def(ALL_HEROES[i]).finished => Entry { found: false, icon: &assets.hero(ALL_HEROES[i])[0], tint: WHITE, name: "???".into(), lines: vec!["Coming soon.".into()] },
+        Tab::Heroes if !hero_def(ALL_HEROES[i]).finished => Entry { found: false, name: "???".into(), lines: vec!["Coming soon.".into()], elem: None },
         Tab::Heroes => {
             let h = ALL_HEROES[i];
             let d = hero_def(h);
             Entry {
-                found: profile.is_unlocked(h),
-                icon: &assets.hero(h)[0],
-                tint: WHITE,
+                found: found(profile, tab, i),
                 name: d.name.into(),
                 lines: vec![
                     format!("{}. Starts with {}.", d.archetype, Upgrade::Weapon(d.signature).name()),
                     format!("Innate: {}", d.innate_text),
+                    format!("Affinity: {}", crate::ui::affinity_bonus_text()),
                     format!("Unlock: {}", unlock_text(h)),
                 ],
+                elem: Some(d.element),
             }
         }
         Tab::Relics => {
             let r = ALL_RELICS[i];
             let home = ALL_STAGES.iter().find(|s| s.def().relic == Some(r)).map_or("", |s| s.def().name);
             Entry {
-                found: profile.relics.contains(&r),
-                icon: assets.icon_named(r.icon()),
-                tint: WHITE,
+                found: found(profile, tab, i),
                 name: r.name().into(),
                 lines: vec![r.describe().into(), format!("Always active. Earned by clearing {home} on Nightmare.")],
+                elem: None,
             }
         }
     }
@@ -671,9 +700,9 @@ fn hint(tab: Tab) -> &'static str {
 pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, time: f64) -> bool {
     backdrop(time);
     let w = screen_width();
-    let (found, total) = collection_progress(profile);
+    let (done, total) = collection_progress(profile);
     centered("COLLECTION", 64.0, 44.0, ACCENT);
-    centered(&format!("{found} / {total} discovered"), 92.0, 20.0, DIM);
+    centered(&format!("{done} / {total} discovered"), 92.0, 20.0, DIM);
 
     // Tabs.
     let (tw, th, tg) = (156.0, 36.0, 8.0);
@@ -682,7 +711,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     for (i, t) in TABS.iter().enumerate() {
         let r = Rect::new(tx0 + i as f32 * (tw + tg), 108.0, tw, th);
         let sel = st.tab == *t;
-        let n = (0..t.len()).filter(|k| entry(profile, assets, *t, *k).found).count();
+        let n = (0..t.len()).filter(|k| found(profile, *t, *k)).count();
         kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.24, 0.12, 0.22, 0.97) } else { PANEL }, if sel { ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         let label = format!("{} {}/{}", t.name(), n, t.len());
         kit::text_fit_centered(&label, r.x + tw / 2.0, r.y + 24.0, tw - 12.0, 16.0, if sel { WHITE } else { DIM });
@@ -705,17 +734,18 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     let x0 = (w - (cols as f32 * cw + (cols as f32 - 1.0) * gap)) / 2.0;
     let y0 = 160.0;
     for i in 0..n {
-        let e = entry(profile, assets, st.tab, i);
+        let (icon, icon_tint) = cell_icon(assets, st.tab, i);
+        let is_found = found(profile, st.tab, i);
         let r = Rect::new(x0 + (i % cols) as f32 * (cw + gap), y0 + (i / cols) as f32 * (cw + gap), cw, cw);
         let sel = st.cursor == i;
         kit::panel_ex(r.x, r.y, r.w, r.h, if sel { Color::new(0.20, 0.12, 0.26, 0.97) } else { PANEL }, if sel { ACCENT } else if r.contains(mouse) { Color::new(1.0, 1.0, 1.0, 0.5) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         // Fit the icon into the cell keeping its aspect ratio.
-        let (iw, ih) = { let n = crate::sprites::nat(e.icon); (n.x, n.y) };
+        let (iw, ih) = { let n = crate::sprites::nat(icon); (n.x, n.y) };
         let k = ((cw - 22.0) / iw.max(ih)).floor().max(1.0).min(4.0);
         let (dw, dh) = (iw * k, ih * k);
-        let tint = if e.found { e.tint } else { Color::new(0.0, 0.0, 0.0, 0.85) };
-        draw_texture_ex(e.icon, (r.x + (cw - dw) / 2.0).round(), (r.y + (cw - dh) / 2.0).round(), tint, DrawTextureParams { dest_size: Some(vec2(dw, dh)), ..Default::default() });
-        if !e.found {
+        let tint = if is_found { icon_tint } else { Color::new(0.0, 0.0, 0.0, 0.85) };
+        draw_texture_ex(icon, (r.x + (cw - dw) / 2.0).round(), (r.y + (cw - dh) / 2.0).round(), tint, DrawTextureParams { dest_size: Some(vec2(dw, dh)), ..Default::default() });
+        if !is_found {
             let d = kit::measure("?", 30);
             kit::text("?", r.x + (cw - d.width) / 2.0, r.y + cw / 2.0 + 10.0, 30.0, DIM);
         }
@@ -736,14 +766,18 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
 
     // Detail panel.
     let rows = n.div_ceil(cols) as f32;
-    let e = entry(profile, assets, st.tab, st.cursor);
+    let e = entry(profile, st.tab, st.cursor);
     let (px, py, pw, ph) = ((w - 760.0) / 2.0, y0 + rows * (cw + gap) + 14.0, 760.0, 170.0);
     kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
     if e.found {
-        kit::text_fit(&e.name, px + 20.0, py + 40.0, pw - 40.0, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
+        let tag_w = e.elem.map_or(0.0, |el| crate::ui::element_tag_width(el, 20.0) + 16.0);
+        kit::text_fit(&e.name, px + 20.0, py + 40.0, pw - 40.0 - tag_w, 30.0, if st.tab == Tab::Awakenings { GOLD } else { WHITE });
+        if let Some(el) = e.elem {
+            crate::ui::element_tag(el, px + pw - 20.0 - crate::ui::element_tag_width(el, 20.0), py + 40.0, 20.0);
+        }
         let mut y = py + 72.0;
         for line in &e.lines {
-            for l in wrap(line, pw - 40.0, 20) {
+            for l in kit::wrap(line, pw - 40.0, 20) {
                 kit::text(&l, px + 20.0, y, 20.0, Color::new(0.9, 0.9, 0.95, 1.0));
                 y += 24.0;
             }
@@ -758,24 +792,6 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
         }
     }
     button(Rect::new((w - 200.0) / 2.0, py + ph + 18.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape)
-}
-
-fn wrap(text: &str, width: f32, size: u16) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-        if kit::measure(&candidate, size).width > width && !line.is_empty() {
-            out.push(std::mem::take(&mut line));
-            line = word.to_string();
-        } else {
-            line = candidate;
-        }
-    }
-    if !line.is_empty() {
-        out.push(line);
-    }
-    out
 }
 
 // ───────────────────────── Settings ─────────────────────────
@@ -826,6 +842,10 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
 }
 
 // ───────────────────────── Stats ─────────────────────────
+
+fn recipe_text(weapon: &str, passive: &str) -> String {
+    format!("Recipe: {weapon} at max level + {passive}, from a chest after {}.", fmt_time(sim::content::AWAKEN_FROM))
+}
 
 fn fmt_time(t: f32) -> String {
     let s = t.max(0.0) as u32;
@@ -998,6 +1018,7 @@ pub fn stats(profile: &Profile, assets: &Assets, scroll: &mut StripScroll, time:
         draw_texture_ex(tex, x + 10.0, hy + 14.0, WHITE, DrawTextureParams { source: Some(Rect::new(0.0, 0.0, 24.0 * crate::sprites::UP, 18.0 * crate::sprites::UP)), dest_size: Some(vec2(48.0, 36.0)), ..Default::default() });
         let name = hero_def(*h).name.split(' ').next().unwrap_or("");
         kit::text(name, x + 64.0, hy + 30.0, 17.0, kit::INK);
+        crate::ui::element_pip(hero_def(*h).element, x + 64.0 + kit::measure(name, 17).width + 10.0, hy + 24.0, 5.0);
         let hi = h.index();
         let plural = |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
         kit::text(&plural(profile.hero_runs[hi], "night", "nights"), x + 64.0, hy + 50.0, 13.0, kit::DIM);
@@ -1100,8 +1121,10 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
             }
             // Boss progress: mini / boss / final (bits ever defeated).
             let bits = profile.stage_bosses[si];
-            let kinds: Vec<(EnemyKind, u8)> = [Some((def.mini, 1u8)), def.boss.map(|(b, _)| (b, 2u8)), Some((def.final_boss, 4u8))].into_iter().flatten().collect();
+            let kinds: Vec<(EnemyKind, u8)> = [Some((def.mini, 1u8)), def.boss.map(|b| (b, 2u8)), Some((def.final_boss, 4u8))].into_iter().flatten().collect();
             let mut bx = r.x + r.w - 14.0 - kinds.len() as f32 * 24.0;
+            let el = sid.element();
+            crate::ui::element_tag(el, bx - 12.0 - crate::ui::element_tag_width(el, 14.0), r.y + 132.0, 14.0);
             for (k, bit) in kinds {
                 let tex = assets.enemy_tex(k);
                 let s = 20.0 / tex.width().max(tex.height());
@@ -1131,7 +1154,7 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
     let py = y0 + 2.0 * (ch + gap) + 4.0;
     let pw = (w - 60.0).min(1180.0);
     let px = (w - pw) / 2.0;
-    kit::panel_ex(px, py, pw, 720.0 - py - 12.0, PANEL, Color::new(1.0, 1.0, 1.0, 0.18));
+    kit::panel_ex(px, py, pw, screen_height() - kit::MARGIN - py, PANEL, Color::new(1.0, 1.0, 1.0, 0.18));
     let bw = 150.0;
     for d in ALL_DIFFICULTIES {
         let rr = Rect::new(px + 16.0 + d.index() as f32 * (bw + 10.0), py + 14.0, bw, 40.0);
@@ -1170,19 +1193,22 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
         sim::gear::drop_ilvl(sid, d.index(), asc)
     );
     let tx = px + 16.0 + 3.0 * (bw + 10.0) + 6.0;
-    let tw = px + pw - 262.0 - tx;
-    kit::text_fit(&mods, tx, py + 30.0, tw, 15.0, kit::INK);
+    let hero_x = px + pw - 286.0;
+    let tw = hero_x - 14.0 - tx;
+    for (k, l) in kit::wrap(&mods, tw, 13).iter().take(2).enumerate() {
+        kit::text(l, tx, py + 28.0 + k as f32 * 15.0, 13.0, kit::INK);
+    }
     let reward = match (d, def.relic) {
         (Difficulty::Nightmare, Some(r)) => format!("First clear: +{} Sen and the relic {} ({})", d.first_clear_sen(), r.name(), r.describe()),
         _ => format!("First clear: +{} Sen{}", d.first_clear_sen(), if d == Difficulty::Normal && sid != StageId::Shotengai { ", opens the next world" } else { "" }),
     };
-    kit::text_fit(&reward, tx, py + 50.0, tw, 14.0, GOLD);
+    kit::text_fit(&reward, tx, py + 62.0, tw, 14.0, GOLD);
     let twist = if def.mechanic == sim::campaign::Mechanic::None {
         def.blurb.to_string()
     } else {
         format!("{}  ·  {}: {}", def.blurb, def.mechanic.name(), def.mechanic.describe())
     };
-    let lines = kit::wrap(&twist, pw - 300.0, 15);
+    let lines = kit::wrap(&twist, hero_x - 14.0 - (px + 16.0), 15);
     let ty = if profile.difficulty == Difficulty::Nightmare && open_asc > 0 { py + 106.0 } else { py + 80.0 };
     for (k, l) in lines.iter().take(2).enumerate() {
         kit::text(l, px + 16.0, ty + k as f32 * 19.0, 15.0, DIM);
@@ -1190,8 +1216,9 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
     let mut action = None;
     // The active hero (chosen in the Armory).
     let hdef = hero_def(profile.selected);
-    draw_texture_ex(&assets.hero(profile.selected)[0], px + pw - 250.0, py + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(36.0, 48.0)), ..Default::default() });
-    kit::text_fit(hdef.name.split(' ').next().unwrap_or(""), px + pw - 250.0, py + 78.0, 50.0, 12.0, DIM);
+    draw_texture_ex(&assets.hero(profile.selected)[0], hero_x, py + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(36.0, 48.0)), ..Default::default() });
+    kit::text_fit(hdef.name.split(' ').next().unwrap_or(""), hero_x, py + 78.0, 80.0, 14.0, DIM);
+    crate::ui::element_tag(hdef.element, hero_x, py + 98.0, 14.0);
     if button(Rect::new(px + pw - 196.0, py + 14.0, 180.0, 48.0), "Begin the night", profile.stage_open(sid)) || is_key_pressed(KeyCode::Enter) {
         action = Some(StageAction::Go);
     }
@@ -1199,4 +1226,43 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
         action = Some(StageAction::Back);
     }
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recipe_text_uses_awaken_time() {
+        let txt = recipe_text("Star Fall", "Might");
+        assert!(txt.contains(&fmt_time(sim::content::AWAKEN_FROM)), "{txt}");
+    }
+
+    #[test]
+    fn found_matches_each_tab_rule() {
+        let mut p = Profile::default();
+        p.enemy_kills[1] = 3;
+        p.weapons_found.push(ALL_WEAPONS[2]);
+        p.awakenings_found.push(ALL_WEAPONS[0]);
+        p.passives_found.push(ALL_PASSIVES[1]);
+        p.shrines_found.push(ALL_SHRINE_EVENTS[0]);
+        p.relics.push(ALL_RELICS[0]);
+        for t in TABS {
+            let mut hits = 0;
+            for i in 0..t.len() {
+                let want = match t {
+                    Tab::Otherworlders => enemy_found(&p, ALL_ENEMIES[i]),
+                    Tab::Weapons => p.weapons_found.contains(&ALL_WEAPONS[i]),
+                    Tab::Awakenings => p.awakenings_found.contains(&ALL_WEAPONS[i]),
+                    Tab::Passives => p.passives_found.contains(&ALL_PASSIVES[i]),
+                    Tab::Shrines => p.shrines_found.contains(&ALL_SHRINE_EVENTS[i]),
+                    Tab::Heroes => hero_def(ALL_HEROES[i]).finished && p.is_unlocked(ALL_HEROES[i]),
+                    Tab::Relics => p.relics.contains(&ALL_RELICS[i]),
+                };
+                assert_eq!(found(&p, t, i), want, "{} {i}", t.name());
+                hits += want as usize;
+            }
+            assert!(hits > 0, "{} sample profile finds nothing", t.name());
+        }
+    }
 }

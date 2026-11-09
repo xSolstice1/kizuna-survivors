@@ -2,6 +2,8 @@
 //! Stages (see `campaign`) pick their roster from here; the sim drives each enemy by its
 //! `Ai`, so a new enemy is a few lines of data plus a sprite.
 
+use crate::content::Element;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnemyKind {
     // ── Prologue: Neon Shotengai ──
@@ -212,6 +214,19 @@ impl EnemyKind {
             ToriiSerpent | EmberToad | HollowMonarch | GutterMother | CrossingCalamity => Rank::Boss,
             NightLord | Mitsuhime | BurningShogun | PaleSeraph | CrimsonRainLord | ShatterSovereign => Rank::Final,
             _ => Rank::Fodder,
+        }
+    }
+
+    pub fn element(self) -> Element {
+        match self {
+            Wisp | Chochin | Oni | NightLord | LanternFairy | EmberToad | BurningShogun | WardButcher => Element::Fire,
+            Kasa | DrownedRat | RainGhoul | GutterSpitter | GutterMother | CrimsonRainLord | PatchworkSorcerer => Element::Water,
+            NightInvestigator | CursedSpawn | WailingCommuter | CurseEye | GlitchShade | CrossingCalamity => Element::Electric,
+            GreatOni | Kodama | FoxMaskPhantom | Komainu | BellMaiden | ToriiSerpent | IronRonin | BoneSentinel | GradeOneBrute => Element::Earth,
+            Nopperabo | PaperCrane | StrawPuppet | LeafShinobi | KunaiThrower | SmokeNinja | Kagerou | UmbrellaStalker => Element::Wind,
+            LostSoul | MaskedHound | PaleArcher | ShadeDancer | GateCaptain => Element::Ice,
+            Mitsuhime | PaleSeraph => Element::Light,
+            HollowMonarch | ShatterSovereign => Element::Darkness,
         }
     }
 

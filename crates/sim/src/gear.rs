@@ -8,7 +8,7 @@
 //! producing better gear. Legendary and Mythic items also carry a unique effect.
 
 use crate::campaign::StageId;
-use crate::content::WeaponKind;
+use crate::content::{Element, WeaponKind, ALL_ELEMENTS};
 use crate::meta::Bonus;
 use crate::rng::Rng;
 
@@ -110,31 +110,33 @@ pub enum Rarity {
     Mythic,
     /// Hand-made artefacts: a fixed signature effect, 6 high-quality rolls, one worn at a time.
     Exotic,
+    /// A world's set piece: Exotic-quality rolls on a set slot, with a unique.
+    Set,
 }
 
-pub const ALL_RARITIES: [Rarity; 7] = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic, Rarity::Exotic];
+pub const ALL_RARITIES: [Rarity; 8] = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic, Rarity::Exotic, Rarity::Set];
 
 impl Rarity {
     pub fn index(self) -> usize {
         self as usize
     }
     pub fn name(self) -> &'static str {
-        ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exotic"][self.index()]
+        ["Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Exotic", "Set"][self.index()]
     }
-    /// Rolled bonuses: Common 1 ... Mythic 6 (Exotic 6).
+    /// Rolled bonuses: Common 1 ... Mythic 6 (Exotic and Set 6).
     pub fn affixes(self) -> usize {
         (self.index() + 1).min(6)
     }
     fn mult(self) -> f32 {
-        [1.0, 1.06, 1.12, 1.2, 1.3, 1.45, 1.6][self.index()]
+        [1.0, 1.06, 1.12, 1.2, 1.3, 1.45, 1.6, 1.75][self.index()]
     }
     /// Spirit Dust from salvaging.
     pub fn dust(self) -> u32 {
-        [1, 3, 8, 20, 50, 140, 400][self.index()]
+        [1, 3, 8, 20, 50, 140, 400, 800][self.index()]
     }
     /// Level of the library weapon a low-rarity Arsenal grants.
     pub fn arsenal_level(self) -> u8 {
-        [1, 2, 4, 6, 8, 8, 8][self.index()]
+        [1, 2, 4, 6, 8, 8, 8, 8][self.index()]
     }
 }
 
@@ -397,6 +399,17 @@ impl ArsenalArt {
             ArsenalArt::GrassCutter => "Grass-Cutter Sweep",
         }
     }
+    pub fn element(self) -> Element {
+        match self {
+            ArsenalArt::RaijinDrums => Element::Electric,
+            ArsenalArt::FoxProcession => Element::Fire,
+            ArsenalArt::TenguFan | ArsenalArt::GrassCutter => Element::Wind,
+            ArsenalArt::DragonCoil => Element::Water,
+            ArsenalArt::Moonfall => Element::Ice,
+            ArsenalArt::SkeletonHand | ArsenalArt::ShadowStar => Element::Darkness,
+            ArsenalArt::YinYangBreaker => Element::Light,
+        }
+    }
     pub fn key(self) -> &'static str {
         match self {
             ArsenalArt::RaijinDrums => "raijin_drums",
@@ -467,6 +480,8 @@ pub const ALL_EXOTICS: [Exotic; 14] = [
 pub const MAX_FINGERS: u32 = 10;
 /// Chance a world's final boss drops one of that world's Exotics, before the difficulty multiplier.
 pub const EXOTIC_CHANCE: f32 = 0.0025;
+/// Chance a Mini, Boss or Final kill drops one of that world's set pieces, before the difficulty multiplier.
+pub const SET_CHANCE: f32 = 0.13;
 
 /// Exotic drop multiplier by difficulty (Normal, Hard, Nightmare); Ascension adds 10% per tier.
 pub fn exotic_mult(difficulty: usize, ascension: u32) -> f32 {
@@ -493,6 +508,18 @@ impl Exotic {
             Exotic::Kusanagi => "Kusanagi, the Grass-Cutter",
             Exotic::YataMirror => "Yata no Kagami",
             Exotic::Yasakani => "Yasakani no Magatama",
+        }
+    }
+    pub fn element(self) -> Element {
+        match self {
+            Exotic::LanternHeart | Exotic::NineSeal => Element::Fire,
+            Exotic::JeweledBranch | Exotic::UnbrokenYinYang | Exotic::YataMirror => Element::Light,
+            Exotic::CloneScroll | Exotic::HollowMask | Exotic::HungerOrgan | Exotic::SovereignFinger => Element::Darkness,
+            Exotic::WhiteHaori => Element::Ice,
+            Exotic::ThousandCounter => Element::Water,
+            Exotic::ClosedHandVow => Element::Electric,
+            Exotic::Kusanagi => Element::Wind,
+            Exotic::Yasakani => Element::Earth,
         }
     }
     pub fn key(self) -> &'static str {
@@ -578,11 +605,12 @@ pub const REGALIA_TEXT: &str = "Imperial Regalia (all three Treasures): +1 reviv
 
 /// An Exotic item with its fixed design and six high-quality rolls.
 pub fn roll_exotic(rng: &mut Rng, e: Exotic, ilvl: u16) -> Item {
-    let mut it = roll_item(rng, Some(e.slot()), Rarity::Exotic, ilvl, None);
+    let mut it = roll_item(rng, Some(e.slot()), Rarity::Exotic, ilvl);
     it.unique = None;
     it.arsenal = None;
     it.art = e.art();
     it.exotic = Some(e);
+    it.element = e.element();
     for a in &mut it.affixes {
         a.quality = 0.7 + 0.3 * a.quality;
     }
@@ -601,16 +629,48 @@ pub fn set_name(s: StageId) -> &'static str {
     }
 }
 
-/// (2-piece, 4-piece) set text.
-pub fn set_text(s: StageId) -> (&'static str, &'static str) {
+/// The six slots a world's set covers; Rings come as a pair.
+pub fn set_pieces(s: StageId) -> [Slot; 6] {
+    use Slot::*;
     match s {
+        StageId::Shotengai => [Hat, Top, Bottom, Gloves, Shoes, Charm],
+        StageId::ShrineValley => [Hat, Top, Necklace, Earring, Ring, Ring],
+        StageId::EmberLeaf => [Top, Bottom, Gloves, Shoes, Ring, Ring],
+        StageId::PaleCitadel => [Hat, Top, Bottom, Necklace, Earring, Omamori],
+        StageId::Rainward => [Gloves, Shoes, Necklace, Omamori, Ring, Ring],
+        StageId::Shatterline => [Hat, Gloves, Earring, Charm, Ring, Ring],
+    }
+}
+
+/// (2-piece, 4-piece, 5-piece, 6-piece) set text.
+pub fn set_text(s: StageId) -> [&'static str; 4] {
+    let (two, four) = match s {
         StageId::Shotengai => ("+10% Sen gain.", "+10% damage."),
         StageId::ShrineValley => ("+15% area.", "Enemy bullets have a 30% chance to pass through you harmlessly."),
         StageId::EmberLeaf => ("+10% move speed.", "Every 6s an explosive tag lands on nearby Otherworlders. Tags can't hurt you."),
         StageId::PaleCitadel => ("+10% damage.", "Immune to spirit pressure. Kills sometimes release a soul that heals you."),
         StageId::Rainward => ("+20% max health.", "Lightning strikes an Otherworlder near you every 3s. Lightning can't hurt you."),
         StageId::Shatterline => ("+8% cooldown reduction.", "Immune to hostile domains, and +25% damage."),
-    }
+    };
+    let six = match s {
+        StageId::Shotengai => "Burning Otherworlders pass their flames on when they fall.",
+        StageId::ShrineValley => "Staggered Otherworlders take 30% more damage.",
+        StageId::EmberLeaf => "Wind hits trigger their effect twice as often.",
+        StageId::PaleCitadel => "Slowed Otherworlders shatter when they fall, hurting those nearby.",
+        StageId::Rainward => "Every Water hit soaks. Soaked Otherworlders take 30% more Electric damage.",
+        StageId::Shatterline => "Electric chains jump to one more Otherworlder.",
+    };
+    let five = match s.element() {
+        Element::Fire => "+25% Fire damage and +25% Fire resistance.",
+        Element::Water => "+25% Water damage and +25% Water resistance.",
+        Element::Electric => "+25% Electric damage and +25% Electric resistance.",
+        Element::Earth => "+25% Earth damage and +25% Earth resistance.",
+        Element::Wind => "+25% Wind damage and +25% Wind resistance.",
+        Element::Ice => "+25% Ice damage and +25% Ice resistance.",
+        Element::Light => "+25% Light damage and +25% Light resistance.",
+        Element::Darkness => "+25% Darkness damage and +25% Darkness resistance.",
+    };
+    [two, four, five, six]
 }
 
 fn set_two(s: StageId, b: &mut Bonus) {
@@ -664,13 +724,40 @@ pub struct Item {
     pub art: Option<ArsenalArt>,
     pub exotic: Option<Exotic>,
     pub locked: bool,
+    pub element: Element,
 }
 
 pub const MAX_PLUS: u8 = 10;
+/// Element damage and resistance per item, before the item's scale.
+pub const ELEM_ITEM: f32 = 0.02;
+pub const RESIST_CAP: f32 = 0.60;
+
+/// The one element rule, for fresh rolls (`r` from the rng) and old saves (`r` from the item id).
+fn pick_element(it: &Item, r: u32) -> Element {
+    if let Some(e) = it.exotic {
+        return e.element();
+    }
+    if let Some(k) = it.arsenal {
+        return k.element();
+    }
+    if let Some(a) = it.art {
+        return a.element();
+    }
+    if let (Rarity::Set, Some(s)) = (it.rarity, it.set) {
+        return s.element();
+    }
+    if it.rarity >= Rarity::Legendary && r % 100 < 10 {
+        return if r & 0x100 == 0 { Element::Light } else { Element::Darkness };
+    }
+    ALL_ELEMENTS[(r % 6) as usize]
+}
 
 impl Item {
     fn scale(&self) -> f32 {
         ilvl_scale(self.ilvl) * self.rarity.mult() * (1.0 + 0.06 * self.plus as f32)
+    }
+    pub fn elem_value(&self) -> f32 {
+        ELEM_ITEM * self.scale()
     }
     pub fn main_value(&self) -> Option<(Stat, f32)> {
         let st = self.slot.main_stat()?;
@@ -707,6 +794,7 @@ impl Item {
             None => self.slot.bases()[self.base as usize % self.slot.bases().len()].to_string(),
         };
         let mut n = match (self.unique, self.set) {
+            (_, Some(s)) if self.rarity == Rarity::Set => format!("{} {}", set_name(s), base),
             (Some(u), _) => format!("{} {}", u.name(), base),
             (None, Some(s)) => format!("{} {}", set_name(s), base),
             _ => base,
@@ -740,13 +828,14 @@ impl Item {
         }
         let taken: Vec<Stat> = self.affixes.iter().enumerate().filter(|(k, _)| *k != i).map(|(_, a)| a.stat).chain(self.slot.main_stat()).collect();
         let pool: Vec<Stat> = ALL_STATS.iter().copied().filter(|s| !taken.contains(s)).collect();
-        self.affixes[i] = Affix { stat: pool[(rng.next_u32() as usize) % pool.len()], quality: rng.f32() };
+        let quality = if self.rarity >= Rarity::Exotic { 0.7 + 0.3 * rng.f32() } else { rng.f32() };
+        self.affixes[i] = Affix { stat: pool[(rng.next_u32() as usize) % pool.len()], quality };
     }
 
     pub fn serialize(&self) -> String {
         let affixes: Vec<String> = self.affixes.iter().map(|a| format!("{}:{:.3}", a.stat.key(), a.quality)).collect();
         format!(
-            "{};{};{};{};{};{};{};{};{};{};{};{};{}",
+            "{};{};{};{};{};{};{};{};{};{};{};{};{};{}",
             self.id,
             self.slot.key(),
             self.rarity.index(),
@@ -760,6 +849,7 @@ impl Item {
             self.locked as u8,
             self.art.map_or("-", |a| a.key()),
             self.exotic.map_or("-", |e| e.key()),
+            self.element.key(),
         )
     }
 
@@ -777,7 +867,7 @@ impl Item {
                 Some(Affix { stat, quality: q.parse::<f32>().ok()?.clamp(0.0, 1.0) })
             })
             .collect();
-        Some(Item {
+        let mut item = Item {
             id: f[0].parse().ok()?,
             slot: Slot::from_key(f[1])?,
             rarity: *ALL_RARITIES.get(f[2].parse::<usize>().ok()?)?,
@@ -791,7 +881,10 @@ impl Item {
             locked: f[10] == "1",
             art: f.get(11).and_then(|k| ALL_ARTS.iter().copied().find(|a| a.key() == *k)),
             exotic: f.get(12).and_then(|k| Exotic::from_key(k)),
-        })
+            element: Element::Fire,
+        };
+        item.element = f.get(13).and_then(|k| Element::from_key(k)).unwrap_or_else(|| pick_element(&item, crate::stage::hash(item.id as i32, 7, 0xE1E)));
+        Some(item)
     }
 }
 
@@ -816,8 +909,8 @@ pub fn roll_rarity(rng: &mut Rng, tier: f32, find: f32, min: Rarity) -> Rarity {
     Rarity::Mythic
 }
 
-/// A fresh item. `slot` None = any slot; `set` is the world it dropped in.
-pub fn roll_item(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, ilvl: u16, set: Option<StageId>) -> Item {
+/// A fresh item. `slot` None = any slot.
+pub fn roll_item(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, ilvl: u16) -> Item {
     let slot = slot.unwrap_or(ALL_SLOTS[(rng.next_u32() as usize) % ALL_SLOTS.len()]);
     let mut item = Item {
         id: 0,
@@ -825,8 +918,7 @@ pub fn roll_item(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, ilvl: u16, s
         rarity,
         ilvl: ilvl.max(1),
         plus: 0,
-        // Only Rare and better can belong to a set (35% of them).
-        set: set.filter(|_| rarity >= Rarity::Rare && rng.f32() < 0.35),
+        set: None,
         base: (rng.next_u32() % 8) as u8,
         affixes: Vec::new(),
         unique: None,
@@ -834,6 +926,7 @@ pub fn roll_item(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, ilvl: u16, s
         art: None,
         exotic: None,
         locked: false,
+        element: Element::Fire,
     };
     if slot == Slot::Arsenal {
         // Legendary and Mythic Arsenals carry attacks found nowhere else.
@@ -852,7 +945,20 @@ pub fn roll_item(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, ilvl: u16, s
     if rarity >= Rarity::Legendary && slot != Slot::Arsenal {
         item.unique = Some(ALL_UNIQUES[(rng.next_u32() as usize) % ALL_UNIQUES.len()]);
     }
+    item.element = pick_element(&item, rng.next_u32());
     item
+}
+
+/// A random piece of a world's set, with Exotic-level rolls.
+pub fn roll_set_piece(rng: &mut Rng, s: StageId, ilvl: u16) -> Item {
+    let slot = set_pieces(s)[(rng.next_u32() % 6) as usize];
+    let mut it = roll_item(rng, Some(slot), Rarity::Set, ilvl);
+    it.set = Some(s);
+    it.element = pick_element(&it, 0);
+    for a in &mut it.affixes {
+        a.quality = 0.7 + 0.3 * a.quality;
+    }
+    it
 }
 
 /// Item level of drops for a stage, difficulty and Ascension tier.
@@ -887,6 +993,16 @@ pub fn draw_rarity(rng: &mut Rng, pity: u32) -> Rarity {
     Rarity::Mythic
 }
 
+/// (legacy tagged pieces, Set pieces) of world `s` worn. A Set ring counts only with its pair.
+pub fn set_count(items: &[&Item], s: StageId) -> (u32, u32) {
+    let mine = |it: &&&Item| it.set == Some(s);
+    let legacy = items.iter().filter(mine).filter(|it| it.rarity < Rarity::Set).count() as u32;
+    let set_items = || items.iter().filter(mine).filter(|it| it.rarity == Rarity::Set);
+    let rings = set_items().filter(|it| it.slot == Slot::Ring).count();
+    let others = set_items().filter(|it| it.slot != Slot::Ring).count() as u32;
+    (legacy, others + if rings >= 2 { 2 } else { 0 })
+}
+
 /// Everything a run needs from the hero's equipped gear.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Loadout {
@@ -895,6 +1011,10 @@ pub struct Loadout {
     pub uniques: Vec<(Unique, f32)>,
     /// Worlds whose 4-piece set bonus is active.
     pub sets4: Vec<StageId>,
+    /// Worlds whose 6-piece set bonus is active.
+    pub sets6: Vec<StageId>,
+    /// Worlds whose 5-piece bonus is active (new Set pieces only).
+    pub sets5: Vec<StageId>,
     /// The Arsenal weapon: (kind, level, awakened, damage power).
     pub arsenal: Option<(WeaponKind, u8, bool, f32)>,
     /// An exclusive Arsenal attack: (art, damage power, mythic-strength).
@@ -902,12 +1022,14 @@ pub struct Loadout {
     pub exotics: Vec<Exotic>,
     /// Sovereign's Fingers owned (counts only with one worn).
     pub fingers: u32,
+    /// Element damage and resistance from gear, indexed by `Element as usize`.
+    pub elem_damage: [f32; 8],
+    pub elem_resist: [f32; 8],
 }
 
 impl Loadout {
     pub fn from_items(items: &[&Item]) -> Loadout {
         let mut l = Loadout::default();
-        let mut sets: Vec<(StageId, u32)> = Vec::new();
         for it in items {
             if let Some((st, v)) = it.main_value() {
                 st.apply(&mut l.bonus, v);
@@ -915,14 +1037,10 @@ impl Loadout {
             for a in &it.affixes {
                 a.stat.apply(&mut l.bonus, it.affix_value(a));
             }
+            l.elem_damage[it.element as usize] += it.elem_value();
+            l.elem_resist[it.element as usize] += it.elem_value();
             if let Some(u) = it.unique {
                 l.uniques.push((u, it.unique_strength()));
-            }
-            if let Some(s) = it.set {
-                match sets.iter_mut().find(|(x, _)| *x == s) {
-                    Some((_, n)) => *n += 1,
-                    None => sets.push((s, 1)),
-                }
             }
             let power = ilvl_scale(it.ilvl) * (1.0 + 0.06 * it.plus as f32);
             if let Some(k) = it.arsenal {
@@ -950,9 +1068,19 @@ impl Loadout {
         if l.regalia() {
             l.bonus.revivals += 1;
         }
-        for (s, n) in sets {
+        for s in crate::campaign::ALL_STAGES {
+            let (legacy, new) = set_count(items, s);
+            let n = legacy + new;
             if n >= 2 {
                 set_two(s, &mut l.bonus);
+            }
+            if new >= 5 {
+                l.elem_damage[s.element() as usize] += 0.25;
+                l.elem_resist[s.element() as usize] += 0.25;
+                l.sets5.push(s);
+            }
+            if new >= 6 {
+                l.sets6.push(s);
             }
             if n >= 4 {
                 l.sets4.push(s);
@@ -965,6 +1093,10 @@ impl Loadout {
             }
         }
         l
+    }
+
+    pub fn resist(&self, e: Element) -> f32 {
+        self.elem_resist[e as usize].min(RESIST_CAP)
     }
 
     pub fn has(&self, e: Exotic) -> bool {
@@ -981,6 +1113,9 @@ impl Loadout {
     pub fn has_set(&self, s: StageId) -> bool {
         self.sets4.contains(&s)
     }
+    pub fn has_set6(&self, s: StageId) -> bool {
+        self.sets6.contains(&s)
+    }
 }
 
 #[cfg(test)]
@@ -988,12 +1123,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn set_collection_takes_about_forty_runs() {
+        const PLAYERS: u32 = 2000;
+        let chance = SET_CHANCE * exotic_mult(0, 0);
+        let mut rng = Rng::new(40);
+        let mut total_runs = 0u32;
+        for _ in 0..PLAYERS {
+            let mut owned = 0u8;
+            while owned != 0b11_1111 {
+                total_runs += 1;
+                // Measured: riku, shrine_valley, Normal, seeds 21-30 gave 3 eligible kills in 8 runs of 10, 2 in the other 2.
+                let kills = if total_runs % 10 < 2 { 2 } else { 3 };
+                for _ in 0..kills {
+                    if rng.f32() < chance {
+                        owned |= 1 << (rng.next_u32() % 6);
+                    }
+                }
+            }
+        }
+        let mean = total_runs as f32 / PLAYERS as f32;
+        assert!((35.0..=46.0).contains(&mean), "mean runs to a full set: {mean}");
+    }
+
+    #[test]
     fn rarity_sets_the_number_of_bonuses_and_items_round_trip() {
         let mut rng = Rng::new(7);
         for r in &ALL_RARITIES[..6] {
             let r = *r;
             for _ in 0..50 {
-                let mut it = roll_item(&mut rng, None, r, 30, Some(StageId::EmberLeaf));
+                let mut it = roll_item(&mut rng, None, r, 30);
                 assert_eq!(it.affixes.len(), r.affixes());
                 assert_eq!(it.unique.is_some(), r >= Rarity::Legendary && it.slot != Slot::Arsenal);
                 assert_eq!(it.arsenal.is_some(), it.slot == Slot::Arsenal && r < Rarity::Legendary);
@@ -1028,7 +1186,7 @@ mod tests {
     #[test]
     fn higher_item_levels_and_upgrades_are_stronger() {
         let mut rng = Rng::new(3);
-        let mut a = roll_item(&mut rng, Some(Slot::Gloves), Rarity::Epic, 1, None);
+        let mut a = roll_item(&mut rng, Some(Slot::Gloves), Rarity::Epic, 1);
         let lo = a.main_value().unwrap().1;
         a.ilvl = 80;
         let hi = a.main_value().unwrap().1;
@@ -1052,7 +1210,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let mut items = Vec::new();
         for s in [Slot::Hat, Slot::Top, Slot::Bottom, Slot::Shoes] {
-            let mut it = roll_item(&mut rng, Some(s), Rarity::Legendary, 20, None);
+            let mut it = roll_item(&mut rng, Some(s), Rarity::Legendary, 20);
             it.set = Some(StageId::Shatterline);
             items.push(it);
         }
@@ -1061,5 +1219,194 @@ mod tests {
         assert!(l.has_set(StageId::Shatterline));
         assert_eq!(l.uniques.len(), 4);
         assert!(l.bonus.max_hp > 0.0 && l.bonus.armor > 0.0);
+    }
+
+    fn elemental(rng: &mut Rng, slot: Option<Slot>, rarity: Rarity, e: Element) -> Item {
+        let mut it = roll_item(rng, slot, rarity, 100);
+        it.element = e;
+        it
+    }
+
+    #[test]
+    fn item_elements_follow_the_rules() {
+        let mut rng = Rng::new(11);
+        for r in &ALL_RARITIES[..6] {
+            let (mut rare, mut plain) = (0, 0);
+            for _ in 0..2000 {
+                let it = roll_item(&mut rng, None, *r, 30);
+                if let Some(k) = it.arsenal {
+                    assert_eq!(it.element, k.element());
+                } else if let Some(a) = it.art {
+                    assert_eq!(it.element, a.element());
+                } else if *r < Rarity::Legendary {
+                    assert!(!it.element.is_rare(), "{r:?} rolled {:?}", it.element);
+                } else {
+                    plain += 1;
+                    rare += it.element.is_rare() as u32;
+                }
+                assert_eq!(Item::parse(&it.serialize()).unwrap().element, it.element);
+            }
+            if *r >= Rarity::Legendary {
+                let share = rare as f32 / plain as f32;
+                assert!((0.05..=0.15).contains(&share), "{r:?} rare share {share}");
+            }
+        }
+        for e in ALL_EXOTICS {
+            let it = roll_exotic(&mut rng, e, 50);
+            assert_eq!(it.element, e.element());
+            assert_eq!(Item::parse(&it.serialize()).unwrap().element, e.element());
+        }
+    }
+
+    #[test]
+    fn old_items_get_a_stable_element() {
+        let mut rng = Rng::new(5);
+        for _ in 0..200 {
+            let mut it = roll_item(&mut rng, None, Rarity::Rare, 20);
+            it.id = rng.next_u32() % 5000;
+            let line = it.serialize();
+            let old = line.rsplitn(2, ';').nth(1).unwrap();
+            let a = Item::parse(old).unwrap();
+            let b = Item::parse(old).unwrap();
+            assert_eq!(a.element, b.element);
+            assert_eq!(a.element, pick_element(&a, crate::stage::hash(a.id as i32, 7, 0xE1E)));
+            let saved = a.serialize();
+            assert_eq!(Item::parse(&saved).unwrap().serialize(), saved);
+            let pre_art: String = line.split(';').take(11).collect::<Vec<_>>().join(";");
+            assert!(Item::parse(&pre_art).is_some());
+        }
+    }
+
+    #[test]
+    fn loadout_sums_item_elements() {
+        let mut rng = Rng::new(2);
+        let mut items: Vec<Item> = (0..3).map(|_| elemental(&mut rng, Some(Slot::Hat), Rarity::Rare, Element::Fire)).collect();
+        items.push(elemental(&mut rng, Some(Slot::Top), Rarity::Rare, Element::Ice));
+        let refs: Vec<&Item> = items.iter().collect();
+        let l = Loadout::from_items(&refs);
+        let fire: f32 = items[..3].iter().map(|i| i.elem_value()).sum();
+        assert!((l.elem_damage[Element::Fire as usize] - fire).abs() < 1e-4);
+        assert!(l.resist(Element::Ice) > 0.0);
+        assert_eq!(l.resist(Element::Water), 0.0);
+
+        let many: Vec<Item> = (0..12).map(|_| elemental(&mut rng, Some(Slot::Hat), Rarity::Mythic, Element::Fire)).collect();
+        let refs: Vec<&Item> = many.iter().collect();
+        let l = Loadout::from_items(&refs);
+        assert!(l.elem_resist[Element::Fire as usize] > RESIST_CAP);
+        assert_eq!(l.resist(Element::Fire), RESIST_CAP);
+    }
+
+    fn set_piece(rng: &mut Rng, s: StageId, slot: Slot) -> Item {
+        let mut it = roll_item(rng, Some(slot), Rarity::Set, 20);
+        it.set = Some(s);
+        it.element = s.element();
+        it
+    }
+
+    fn legacy_piece(rng: &mut Rng, s: StageId, slot: Slot) -> Item {
+        let mut it = roll_item(rng, Some(slot), Rarity::Legendary, 20);
+        it.set = Some(s);
+        it
+    }
+
+    fn items_value(items: &[Item], e: Element) -> f32 {
+        items.iter().filter(|i| i.element == e).map(|i| i.elem_value()).sum()
+    }
+
+    #[test]
+    fn set_pieces_match_the_spec() {
+        let mut rng = Rng::new(3);
+        for s in crate::campaign::ALL_STAGES {
+            let pieces = set_pieces(s);
+            assert_eq!(pieces.len(), 6);
+            assert!(!pieces.contains(&Slot::Arsenal));
+            let rings = pieces.iter().filter(|p| **p == Slot::Ring).count();
+            assert!(rings == 0 || rings == 2);
+            for _ in 0..600 {
+                let mut it = roll_set_piece(&mut rng, s, 30);
+                assert!(pieces.contains(&it.slot));
+                assert_eq!(it.rarity, Rarity::Set);
+                assert_eq!(it.set, Some(s));
+                assert_eq!(it.element, s.element());
+                assert!(it.unique.is_some());
+                assert_eq!(it.affixes.len(), 6);
+                assert!(it.affixes.iter().all(|a| a.quality >= 0.7));
+                it.id = 9;
+                let back = Item::parse(&it.serialize()).unwrap();
+                assert_eq!(back.rarity, Rarity::Set);
+                assert_eq!((back.slot, back.set, back.element, back.unique), (it.slot, it.set, it.element, it.unique));
+            }
+        }
+        let mut it = roll_item(&mut rng, None, Rarity::Epic, 10);
+        assert_eq!(it.set, None);
+        it = roll_item(&mut rng, None, Rarity::Mythic, 10);
+        assert_eq!(it.set, None);
+        assert!((0..20_000).all(|_| roll_rarity(&mut rng, 30.0, 5.0, Rarity::Common) != Rarity::Set));
+        assert!((0..20_000).all(|_| draw_rarity(&mut rng, 0) != Rarity::Set));
+    }
+
+    #[test]
+    fn set_rings_count_only_as_a_pair() {
+        let mut rng = Rng::new(4);
+        let s = StageId::ShrineValley;
+        let mut items: Vec<Item> = [Slot::Hat, Slot::Top, Slot::Necklace, Slot::Earring, Slot::Ring].iter().map(|sl| set_piece(&mut rng, s, *sl)).collect();
+        let l = Loadout::from_items(&items.iter().collect::<Vec<_>>());
+        assert!(l.has_set(s));
+        assert!(!l.has_set6(s));
+        assert!((l.elem_damage[Element::Earth as usize] - items_value(&items, Element::Earth)).abs() < 1e-4, "no 5-piece bonus");
+        items.push(set_piece(&mut rng, s, Slot::Ring));
+        let l = Loadout::from_items(&items.iter().collect::<Vec<_>>());
+        assert!(l.has_set6(s));
+        assert!((l.elem_damage[Element::Earth as usize] - items_value(&items, Element::Earth) - 0.25).abs() < 1e-4);
+        let lone = [legacy_piece(&mut rng, s, Slot::Hat), legacy_piece(&mut rng, s, Slot::Ring)];
+        let l = Loadout::from_items(&[&lone[0], &lone[1]]);
+        let bare = Loadout::from_items(&[&roll_item(&mut rng, Some(Slot::Hat), Rarity::Legendary, 20), &roll_item(&mut rng, Some(Slot::Ring), Rarity::Legendary, 20)]);
+        assert!(l.bonus.area - bare.bonus.area > 0.14, "legacy ring still counts toward the 2-piece");
+    }
+
+    #[test]
+    fn legacy_pieces_stop_at_four() {
+        let mut rng = Rng::new(5);
+        let s = StageId::Shotengai;
+        let mut items = vec![legacy_piece(&mut rng, s, Slot::Hat)];
+        items.extend([Slot::Top, Slot::Bottom, Slot::Gloves, Slot::Shoes, Slot::Charm].iter().map(|sl| set_piece(&mut rng, s, *sl)));
+        let l = Loadout::from_items(&items.iter().collect::<Vec<_>>());
+        assert!(l.has_set(s));
+        assert!(!l.has_set6(s));
+        assert!(l.sets5.contains(&s), "5 Set pieces fill sets5");
+        let fire = s.element();
+        let base = items_value(&items, fire);
+        assert!((l.elem_damage[fire as usize] - base - 0.25).abs() < 1e-4, "5 pieces add exactly +0.25 damage");
+        assert!((l.elem_resist[fire as usize] - base - 0.25).abs() < 1e-4, "5 pieces add exactly +0.25 resist");
+        let mut mixed: Vec<Item> = [Slot::Hat, Slot::Top, Slot::Bottom, Slot::Gloves].iter().map(|sl| legacy_piece(&mut rng, s, *sl)).collect();
+        mixed.extend([Slot::Shoes, Slot::Charm].iter().map(|sl| set_piece(&mut rng, s, *sl)));
+        let l = Loadout::from_items(&mixed.iter().collect::<Vec<_>>());
+        assert!(l.has_set(s));
+        assert!((l.elem_damage[fire as usize] - items_value(&mixed, fire)).abs() < 1e-4, "2 Set pieces give no 5-piece");
+        let (legacy, new) = set_count(&mixed.iter().collect::<Vec<_>>(), s);
+        assert_eq!((legacy, new), (4, 2));
+    }
+
+    #[test]
+    fn reroll_keeps_exotic_quality_floor() {
+        let mut rng = Rng::new(11);
+        for rarity in [Rarity::Exotic, Rarity::Set] {
+            let mut it = roll_item(&mut rng, Some(Slot::Hat), rarity, 30);
+            for _ in 0..200 {
+                it.reroll(0, &mut rng);
+                assert!(it.affixes[0].quality >= 0.7, "{rarity:?} reroll fell to {}", it.affixes[0].quality);
+            }
+        }
+    }
+
+    #[test]
+    fn set_prices_above_exotic() {
+        assert!(Rarity::Set.dust() > Rarity::Exotic.dust());
+        let mut rng = Rng::new(6);
+        let ex = roll_item(&mut rng, Some(Slot::Hat), Rarity::Exotic, 30);
+        let st = roll_item(&mut rng, Some(Slot::Hat), Rarity::Set, 30);
+        assert!(st.upgrade_cost() > ex.upgrade_cost());
+        assert!(st.reroll_cost() > ex.reroll_cost());
+        assert!(st.salvage() > ex.salvage());
     }
 }

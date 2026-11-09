@@ -394,9 +394,9 @@ impl Profile {
         self.items.iter().find(|i| i.id == id)
     }
 
-    /// Adds an item to the bag (or salvages it when the bag is full). Returns its id (0 if salvaged).
+    /// Adds an item to the bag (or salvages it when the bag is full; Set pieces are never salvaged). Returns its id (0 if salvaged).
     pub fn add_item(&mut self, mut it: Item) -> u32 {
-        if self.items.len() >= BAG_SIZE {
+        if self.items.len() >= BAG_SIZE && it.rarity != Rarity::Set {
             self.dust += it.salvage();
             return 0;
         }
@@ -520,7 +520,7 @@ impl Profile {
         for _ in 0..n {
             let r = gear::draw_rarity(&mut rng, self.draw_pity);
             self.draw_pity = if r >= Rarity::Legendary { 0 } else { self.draw_pity + 1 };
-            let it = gear::roll_item(&mut rng, None, r, ilvl, None);
+            let it = gear::roll_item(&mut rng, None, r, ilvl);
             out.push(self.add_item(it));
         }
         out
@@ -601,7 +601,7 @@ impl Profile {
         self.sen_earned += w.sen as u64;
         self.chests_opened += w.chests_opened;
         self.shrines_taken += w.shrines_taken.len() as u32;
-        self.awakenings += w.weapons.iter().filter(|x| x.awakened).count() as u32;
+        self.awakenings += w.weapons.iter().chain(&w.retired_weapons).filter(|x| x.awakened).count() as u32;
         self.specials_used += w.specials_used;
         let hi = w.cfg.hero.index();
         self.hero_runs[hi] += 1;
@@ -617,13 +617,13 @@ impl Profile {
                 *n += 1;
             }
         }
-        for wpn in &w.weapons {
+        for wpn in w.weapons.iter().chain(&w.retired_weapons) {
             add(&mut self.weapons_found, wpn.kind, &mut report.discovered);
             if wpn.awakened {
                 add(&mut self.awakenings_found, wpn.kind, &mut report.discovered);
             }
         }
-        for (k, _) in &w.passives {
+        for (k, _) in w.passives.iter().chain(&w.retired_passives) {
             add(&mut self.passives_found, *k, &mut report.discovered);
         }
         for ev in &w.shrines_taken {
@@ -632,7 +632,7 @@ impl Profile {
         // Each hero is unlocked by a distinct feat performed as a specific hero, so the
         // roster opens up as a chain. (Future stages can add stage-specific feats here.)
         let as_hero = w.cfg.hero;
-        let awakened = w.weapons.iter().any(|x| x.awakened);
+        let awakened = w.weapons.iter().chain(&w.retired_weapons).any(|x| x.awakened);
         for h in ALL_HEROES {
             let earned = match h {
                 HeroId::Ren => true,
@@ -872,6 +872,23 @@ mod tests {
     use crate::WorldConfig;
 
     #[test]
+    fn set_pieces_survive_a_full_bag() {
+        let mut rng = Rng::new(3);
+        let mut p = Profile::default();
+        for _ in 0..BAG_SIZE {
+            p.add_item(gear::roll_item(&mut rng, Some(Slot::Hat), Rarity::Common, 1));
+        }
+        let set = gear::roll_set_piece(&mut rng, StageId::ShrineValley, 5);
+        assert_ne!(p.add_item(set), 0);
+        assert_eq!(p.items.len(), BAG_SIZE + 1);
+        let dust = p.dust;
+        let mythic = gear::roll_item(&mut rng, Some(Slot::Hat), Rarity::Mythic, 5);
+        assert_eq!(p.add_item(mythic), 0);
+        assert_eq!(p.items.len(), BAG_SIZE + 1);
+        assert!(p.dust > dust);
+    }
+
+    #[test]
     fn profile_round_trips() {
         let mut p = Profile { sen: 1234, spent: 300, runs: 3, total_kills: 99_999, best_time: 612.5, best_level: 41, great_onis: 2, night_lords: 1, ..Default::default() };
         p.ranks[PowerUp::Greed.index()] = 4;
@@ -976,8 +993,8 @@ mod gear_tests {
         let mut p = Profile { sen: 10_000, ..Default::default() };
         let mut w = World::new(WorldConfig::default());
         let mut rng = Rng::new(5);
-        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Epic, 10, None));
-        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Legendary, 10, None));
+        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Epic, 10));
+        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Legendary, 10));
         w.state = RunState::Dead;
         let r = p.record_run(&w);
         assert_eq!(r.gear.len(), 2);
@@ -1003,9 +1020,31 @@ mod gear_tests {
     }
 
     #[test]
+    fn replaced_skills_still_bank() {
+        use crate::content::{PassiveKind, Upgrade};
+        let mut w = World::new(WorldConfig::default());
+        let fresh = *crate::content::hero_def(HeroId::Ren).weapon_pool().iter().find(|k| w.weapon_level(**k) == 0).unwrap();
+        w.weapons.truncate(1);
+        let old = w.weapons[0].kind;
+        w.weapons[0].awakened = true;
+        w.passives = vec![(PassiveKind::Might, 2)];
+        w.replacing = Some(Upgrade::Weapon(fresh));
+        w.replace_with(Some(0));
+        w.replacing = Some(Upgrade::Passive(PassiveKind::Haste));
+        w.replace_with(Some(0));
+        w.state = RunState::Dead;
+        let mut p = Profile::default();
+        p.record_run(&w);
+        assert!(p.weapons_found.contains(&old) && p.awakenings_found.contains(&old));
+        assert!(p.passives_found.contains(&PassiveKind::Might));
+        assert_eq!(p.awakenings, 1);
+        assert!(p.is_unlocked(HeroId::Kaede) || !crate::content::hero_def(HeroId::Kaede).finished);
+    }
+
+    #[test]
     fn arsenal_grants_a_slotless_weapon() {
         let mut rng = Rng::new(2);
-        let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 20, None);
+        let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 20);
         it.arsenal = Some(WeaponKind::Familiars);
         let w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
         let extra = w.weapons.iter().find(|x| x.kind == WeaponKind::Familiars).unwrap();
@@ -1053,10 +1092,11 @@ mod exotic_tests {
     fn legendary_arsenal_arts_run() {
         let mut rng = Rng::new(8);
         for art in gear::ALL_ARTS {
-            let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Legendary, 20, None);
+            let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Legendary, 20);
             it.art = Some(art);
             let mut w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
             w.time = 300.0;
+            w.round_seen = w.round();
             for _ in 0..900 {
                 let i = w.bot_input();
                 w.step(i);

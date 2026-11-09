@@ -29,6 +29,7 @@ pub enum DevAction {
     GrantExotics,
     GrantArts,
     GrantGear,
+    GrantSet,
     Sen,
     Dust,
     // In a run.
@@ -80,7 +81,7 @@ impl DevMenu {
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.6));
         let items: &[(&str, DevAction)] = if in_run {
             &[
-                ("Skip to mini-boss", SkipMini),
+                ("Skip to sub-boss", SkipMini),
                 ("Skip to second boss", SkipBoss),
                 ("Skip to final boss", SkipFinal),
                 ("Max loadout", MaxLoadout),
@@ -101,7 +102,8 @@ impl DevMenu {
                 ("Open every world + difficulty", OpenWorlds),
                 ("Grant every Exotic", GrantExotics),
                 ("Grant every Arsenal attack", GrantArts),
-                ("Grant 20 random Legendary/Mythic", GrantGear),
+                ("Grant 20 Legendary/Mythic", GrantGear),
+                ("Grant Set pieces (selected world)", GrantSet),
                 ("+10,000 Sen", Sen),
                 ("+5,000 Spirit Dust", Dust),
                 ("Show fps on/off", ToggleFps),

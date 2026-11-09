@@ -33,7 +33,8 @@ pub struct ChestAnim {
     pub cues: Vec<Sfx>,
 }
 
-fn rarity_color(n: usize, time: f32) -> Color {
+/// Rays, confetti and card borders; the top tier cycles through the spectrum.
+fn chest_color(n: usize, time: f32) -> Color {
     match n {
         0 | 1 => Color::from_rgba(200, 225, 255, 255),
         2 => Color::from_rgba(80, 165, 255, 255),
@@ -47,11 +48,23 @@ fn rarity_color(n: usize, time: f32) -> Color {
     }
 }
 
+/// The tier name's colour, the same as the gear and card chips use for that rarity.
+fn label_color(n: usize) -> Color {
+    use sim::gear::Rarity;
+    crate::armory::rarity_color(match n {
+        0 | 1 => Rarity::Common,
+        2 => Rarity::Rare,
+        3 | 4 => Rarity::Epic,
+        _ => Rarity::Legendary,
+    })
+}
+
 fn ease_out_back(x: f32) -> f32 {
     let (c1, c3) = (1.70158, 2.70158);
     1.0 + c3 * (x - 1.0).powi(3) + c1 * (x - 1.0).powi(2)
 }
 
+/// Unlike kit::centered, no drop shadow.
 fn centered(text: &str, cx: f32, y: f32, size: f32, color: Color) {
     let d = kit::measure(text, size as u16);
     kit::text(text, cx - d.width / 2.0, y, size, color);
@@ -81,9 +94,9 @@ impl ChestAnim {
             let a = rand::gen_range(0.0, std::f32::consts::TAU);
             let speed = rand::gen_range(200.0, 620.0);
             let color = if self.items.len() >= 5 {
-                rarity_color(5, k as f32 * 0.37)
+                chest_color(5, k as f32 * 0.37)
             } else {
-                [rarity_color(self.items.len(), 0.0), Color::from_rgba(255, 220, 120, 255), WHITE][k % 3]
+                [chest_color(self.items.len(), 0.0), Color::from_rgba(255, 220, 120, 255), WHITE][k % 3]
             };
             self.confetti.push(Confetti { pos: center, vel: vec2(a.cos(), a.sin()) * speed, color, spin: rand::gen_range(0.0, 6.0) });
         }
@@ -91,7 +104,7 @@ impl ChestAnim {
 
     /// Draws one frame. Returns true when the player dismisses the screen.
     pub fn update_and_draw(&mut self, assets: &Assets, dt: f32) -> bool {
-        let clicked = is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space);
+        let clicked = is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::KpEnter);
         if clicked {
             if self.finished() {
                 return true;
@@ -116,7 +129,7 @@ impl ChestAnim {
         let (w, h) = (screen_width(), screen_height());
         let center = vec2(w / 2.0, h * 0.40);
         let n = self.items.len();
-        let rc = rarity_color(n, self.t);
+        let rc = chest_color(n, self.t);
 
         draw_rectangle(0.0, 0.0, w, h, Color::new(0.02, 0.01, 0.05, 0.9));
 
@@ -191,17 +204,17 @@ impl ChestAnim {
             let size = if n >= 5 { 64.0 } else { 52.0 };
             let pop = ease_out_back(((self.t - SHAKE) / 0.3).min(1.0));
             centered(&label, center.x + 3.0, h * 0.14 + 3.0, size * pop, Color::new(0.0, 0.0, 0.0, 0.6));
-            centered(&label, center.x, h * 0.14, size * pop, rc);
+            centered(&label, center.x, h * 0.14, size * pop, label_color(n));
             centered(&format!("{} reward{}", n, if n == 1 { "" } else { "s" }), center.x, h * 0.14 + 30.0, 22.0, WHITE);
         } else {
             centered("...", center.x, h * 0.14, 52.0, Color::new(1.0, 1.0, 1.0, 0.4 + 0.6 * build));
         }
 
         // Reward cards.
-        let (card_w, card_h, gap) = (150.0, 196.0, 18.0);
+        let (card_w, card_h, gap) = (150.0, 240.0, 18.0);
         let total = n as f32 * card_w + (n as f32 - 1.0) * gap;
         let x0 = (w - total) / 2.0;
-        let y0 = h * 0.62;
+        let y0 = h * 0.585;
         for (i, item) in self.items.iter().enumerate() {
             let start = SHAKE + BURST + i as f32 * CARD_EVERY;
             if self.t < start {
@@ -239,11 +252,20 @@ impl ChestAnim {
                 kit::text_fit_centered(&title, cx, y + 132.0, card_w - 16.0, size, WHITE);
             }
             kit::text_fit_centered(&sub, cx, y + 176.0, card_w - 14.0, 20.0, if awaken { border } else { Color::new(0.8, 0.85, 1.0, 1.0) });
+            if let Upgrade::Weapon(k) = upgrade {
+                let el = k.element();
+                crate::ui::element_tag(el, cx - crate::ui::element_tag_width(el, 14.0) / 2.0, y + 198.0, 14.0);
+            }
+            let tc = crate::ui::tier_color(upgrade.tier());
+            let chip = upgrade.tier().name().to_uppercase();
+            let chip_w = kit::measure(&chip, 12).width + 16.0;
+            kit::rounded(cx - chip_w / 2.0, y + 208.0, chip_w, 20.0, 10.0, Color::new(tc.r, tc.g, tc.b, 0.22));
+            kit::text(&chip, cx - chip_w / 2.0 + 8.0, y + 223.0, 12.0, tc);
         }
 
         if self.finished() {
             let a = 0.55 + 0.45 * (self.t * 4.0).sin();
-            centered("Click or press Enter to continue", w / 2.0, h * 0.96, 22.0, Color::new(1.0, 1.0, 1.0, a));
+            centered("Click, Enter or Space to continue", w / 2.0, h - kit::MARGIN, 22.0, Color::new(1.0, 1.0, 1.0, a));
         }
         false
     }

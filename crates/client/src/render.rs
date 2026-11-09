@@ -5,7 +5,7 @@ use macroquad::prelude::*;
 use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
-use sim::content::{EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
+use sim::content::{Element, EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
 use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
@@ -373,10 +373,26 @@ fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
 }
 
 struct DamageNumber {
-    pos: Vec2,
-    amount: f32,
+    /// From the player, so numbers ride along with the camera instead of drifting off.
+    offset: Vec2,
+    txt: String,
+    size: f32,
+    /// Measured once at push so drawing never formats or measures.
+    width: f32,
     age: f32,
     crit: bool,
+    elem: Option<Element>,
+    mult: f32,
+}
+
+impl DamageNumber {
+    fn new(offset: Vec2, amount: f32, crit: bool, elem: Option<Element>, mult: f32) -> Self {
+        let base = if crit { 24.0 } else { 18.0 };
+        let size = if elem.is_some() && mult > 1.0 { if crit { 28.0 } else { 22.0 } } else { base };
+        let txt = format!("{amount:.0}");
+        let width = kit::measure(&txt, size as u16).width;
+        DamageNumber { offset, txt, size, width, age: 0.0, crit, elem, mult }
+    }
 }
 
 struct Particle {
@@ -441,7 +457,8 @@ pub struct Fx {
     pub flash: f32,
     number_tick: u32,
     /// Equipment drops: (pos, rarity, age).
-    gear_drops: Vec<(Vec2, sim::gear::Rarity, f32)>,
+    /// (world pos, rarity, age, label, label width) — label and width are cached at push.
+    gear_drops: Vec<(Vec2, sim::gear::Rarity, f32, String, f32)>,
 }
 
 const MAX_NUMBERS: usize = 40;
@@ -493,16 +510,17 @@ impl Fx {
         self.banner = Some((text, 2.8));
     }
 
-    pub fn absorb(&mut self, events: &[Event]) {
+    pub fn absorb(&mut self, events: &[Event], player: sim::Vec2) {
+        let mut round_banner = None;
         for ev in events {
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
                 // show, ordinary hits one in six.
-                Event::Hit { pos, amount, crit } if self.show_numbers && (crit || amount >= 150.0 || { self.number_tick = self.number_tick.wrapping_add(1); self.number_tick % 6 == 0 }) => {
+                Event::Hit { pos, amount, crit, elem, mult } if self.show_numbers && (crit || amount >= 150.0 || { self.number_tick = self.number_tick.wrapping_add(1); self.number_tick % 6 == 0 }) => {
                     if self.numbers.len() >= MAX_NUMBERS {
                         self.numbers.remove(0);
                     }
-                    self.numbers.push(DamageNumber { pos: vec2(pos.x, pos.y - 8.0), amount, age: 0.0, crit });
+                    self.numbers.push(DamageNumber::new(vec2(pos.x - player.x, pos.y - 8.0 - player.y), amount, crit, elem, mult));
                 }
                 Event::Kill { pos, kind } => {
                     let (n, color) = match kind {
@@ -550,6 +568,9 @@ impl Fx {
                     self.shake = self.shake.max(0.25);
                     self.say(self.lines().special);
                 }
+                Event::RoundStarted { round, headline: Some(h) } => {
+                    round_banner = Some(format!("ROUND {round} — {}", crate::ui::headline_name(h)));
+                }
                 Event::BossSpawned(kind) => {
                     let name = if kind == EnemyKind::GreatOni { "A GREAT ONI".to_string() } else { kind.name().to_uppercase() };
                     self.announce(format!("{name} APPROACHES"));
@@ -582,7 +603,9 @@ impl Fx {
                 }
                 Event::Curtain => {}
                 Event::GearDrop { pos, rarity } => {
-                    self.gear_drops.push((vec2(pos.x, pos.y), rarity, 0.0));
+                    let label = format!("{} gear", rarity.name());
+                    let width = kit::measure(&label, 15).width;
+                    self.gear_drops.push((vec2(pos.x, pos.y), rarity, 0.0, label, width));
                     if rarity >= sim::gear::Rarity::Legendary {
                         self.announce(format!("{} GEAR!", rarity.name().to_uppercase()));
                     }
@@ -670,7 +693,7 @@ impl Fx {
                     }
                 }
                 Event::PickupTaken { pos, kind } => {
-                    self.say(&format!("{}! {}", kind.name(), kind.describe()));
+                    self.say(&format!("{} ({})! {}", kind.name(), kind.tier().name(), kind.describe()));
                     if kind == PickupKind::ExorcismSeal {
                         self.bursts.push((vec2(pos.x, pos.y), sim::content::EXORCISM_RADIUS, 0.0, 1));
                         self.shake = self.shake.max(0.5);
@@ -715,6 +738,9 @@ impl Fx {
                 _ => {}
             }
         }
+        if let Some(text) = round_banner {
+            self.banner = Some((text, 2.5));
+        }
     }
 
     /// Records Rampage afterimages while Toya moves in his form.
@@ -736,7 +762,7 @@ impl Fx {
         self.gear_drops.retain(|g| g.2 < 2.2);
         for n in &mut self.numbers {
             n.age += dt;
-            n.pos.y -= 28.0 * dt;
+            n.offset.y -= 28.0 * dt;
         }
         self.numbers.retain(|n| n.age < 0.6);
         for p in &mut self.particles {
@@ -810,6 +836,13 @@ impl<'a> Sprites<'a> {
     }
 }
 
+/// Darker and greyer: marks an enemy the player's attacks cannot reach.
+fn dimmed(c: Color) -> Color {
+    let grey = 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+    let k = 0.55;
+    Color::new((grey + (c.r - grey) * 0.5) * k, (grey + (c.g - grey) * 0.5) * k, (grey + (c.b - grey) * 0.5) * k, c.a)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, flip: bool, accent: Color, time: f64, sprites: &mut Sprites<'a>, shadows: &mut Sprites<'a>, shadow: &'a Texture2D) {
     use sim::content::{enemy_def, Ai, Rank};
@@ -855,12 +888,16 @@ fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, 
     if rank >= Rank::Mini {
         let pulse = 0.16 + 0.06 * (tf * 4.0).sin();
         draw_circle(pos.x, pos.y - h * 0.3 + bob, w * 0.55, Color::new(accent.r, accent.g, accent.b, pulse * 0.6));
-        draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 4.0, 2.0, Color::new(accent.r, accent.g, accent.b, 0.35));
+        let ring = crate::ui::element_color(kind.element());
+        draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 4.0, 2.0, Color::new(ring.r, ring.g, ring.b, 0.6));
     } else if matches!(ai, Ai::Ranged { .. }) {
         draw_circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
     }
     let (sw, sh) = (w * 0.7, (w * 0.2).max(5.0));
     shadows.push(shadow, pos.x - sw / 2.0, pos.y + h * 0.25 - 1.0 - sh / 2.0, Color::new(0.0, 0.0, 0.0, 0.4), DrawTextureParams { dest_size: Some(vec2(sw, sh)), ..Default::default() });
+    if !world.in_reach(pos, e.radius[i]) {
+        tint = dimmed(tint);
+    }
     sprites.push(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
 }
 
@@ -1087,6 +1124,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             WHITE
         };
         let flip = e.kind[i] != EnemyKind::Wisp && pos.x > p.x;
+        let out_of_reach = !world.in_reach(pos, e.radius[i]);
         if e.kind[i] == EnemyKind::GreatOni {
             // Double-size oni; flashes and shows its line while winding up a charge.
             let winding = e.ai_state[i] == 1;
@@ -1101,6 +1139,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             } else {
                 Color::new(0.85, 0.7, 1.0, 1.0)
             };
+            let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
             draw_texture_ex(
                 &a.oni,
@@ -1115,6 +1154,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             // Big, bobbing lantern with a warm glow; drawn at 2x (96px).
             let bob = ((time * 2.0).sin() * 3.0) as f32;
             let glow = 0.18 + 0.06 * (time * 5.0).sin() as f32;
+            let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
             draw_ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
             draw_texture_ex(
@@ -1145,6 +1185,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             // Fading out before a blink (state 1), fading back in after it (state 2).
             let t = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
             tint.a = t.clamp(0.1, 1.0) * 0.85;
+        }
+        if out_of_reach {
+            tint = dimmed(tint);
         }
         sprites.push(tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
     }
@@ -1736,22 +1779,29 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Damage numbers are drawn in screen space so the text stays crisp.
     // Screen-space overlays use the virtual UI space so they scale with the rest of the UI.
     kit::begin_ui();
+    let player = vec2(world.player.pos.x, world.player.pos.y);
     for n in &fx.numbers {
-        let s = kit::to_ui(cam.world_to_screen(n.pos));
+        let s = kit::to_ui(cam.world_to_screen(player + n.offset));
         let alpha = 1.0 - (n.age / 0.6).powi(2);
-        let txt = format!("{:.0}", n.amount);
-        let (size, c) = if n.crit { (24.0, Color::new(1.0, 0.8, 0.25, alpha)) } else { (18.0, Color::new(1.0, 1.0, 1.0, alpha)) };
-        kit::text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, size, Color::new(0.0, 0.0, 0.0, alpha));
-        kit::text(&txt, s.x - 5.0, s.y, size, c);
+        let c = if n.crit { Color::new(1.0, 0.8, 0.25, alpha) } else { Color::new(1.0, 1.0, 1.0, alpha) };
+        let c = match n.elem {
+            Some(e) if n.mult > 1.0 => {
+                let ec = crate::ui::element_color(e);
+                Color::new(ec.r, ec.g, ec.b, alpha)
+            }
+            _ if n.mult < 1.0 => Color::new(kit::FAINT.r, kit::FAINT.g, kit::FAINT.b, alpha),
+            _ => c,
+        };
+        let x = s.x - n.width / 2.0;
+        kit::text(&n.txt, x + 1.0, s.y + 1.0, n.size, Color::new(0.0, 0.0, 0.0, alpha));
+        kit::text(&n.txt, x, s.y, n.size, c);
     }
-    for (pos, r, age) in &fx.gear_drops {
+    for (pos, r, age, label, width) in &fx.gear_drops {
         let sp = kit::to_ui(cam.world_to_screen(vec2(pos.x, pos.y - 30.0 - age * 14.0)));
         let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
         let c = crate::armory::rarity_color(*r);
-        let label = format!("{} gear", r.name());
-        let d = kit::measure(&label, 15);
-        kit::text(&label, sp.x - d.width / 2.0 + 1.0, sp.y + 1.0, 15.0, Color::new(0.0, 0.0, 0.0, a));
-        kit::text(&label, sp.x - d.width / 2.0, sp.y, 15.0, Color::new(c.r, c.g, c.b, a));
+        kit::text(label, sp.x - width / 2.0 + 1.0, sp.y + 1.0, 15.0, Color::new(0.0, 0.0, 0.0, a));
+        kit::text(label, sp.x - width / 2.0, sp.y, 15.0, Color::new(c.r, c.g, c.b, a));
     }
     if let Some(s) = world.shrine {
         let sp = kit::to_ui(cam.world_to_screen(vec2(s.x, s.y)));
@@ -1909,7 +1959,7 @@ fn draw_hannya_aura(world: &World, t: f32) {
     // Hannya's Wrath charging: a ring of dread collapsing inward.
     if world.player.form <= sim::content::HANNYA_FINALE_CHARGE {
         let k = 1.0 - world.player.form / sim::content::HANNYA_FINALE_CHARGE;
-        let rr = sim::content::HANNYA_FINALE_RADIUS * (1.0 - k * 0.8);
+        let rr = world.reach_cap(sim::content::HANNYA_FINALE_RADIUS) * (1.0 - k * 0.8);
         draw_circle_lines(p.x, p.y - 6.0, rr, 4.0, Color::new(1.0, 0.1, 0.15, 0.4 + 0.5 * k));
         draw_circle(p.x, p.y - 30.0, 6.0 + 16.0 * k, Color::new(0.1, 0.0, 0.03, 0.9));
         draw_circle_lines(p.x, p.y - 30.0, 6.0 + 16.0 * k, 2.0, Color::new(1.0, 0.2, 0.25, 1.0));
@@ -2139,7 +2189,7 @@ fn draw_drops(world: &World, a: &Assets, fx: &Fx, view: &Rect, time: f64) {
             DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
         );
     }
-    for (pos, r, age) in &fx.gear_drops {
+    for (pos, r, age, ..) in &fx.gear_drops {
         let c = crate::armory::rarity_color(*r);
         let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
         let h = 70.0 + 30.0 * r.index() as f32;
@@ -2191,6 +2241,8 @@ fn draw_pickup(a: &Assets, c: Vec2, k: PickupKind, t: f32) {
     draw_rectangle(c.x - 2.0, c.y - 140.0, 4.0, 140.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
     draw_ellipse(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, Color::new(col.r, col.g, col.b, 0.25));
     draw_ellipse_lines(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.8));
+    let tier = crate::ui::tier_color(k.tier());
+    draw_ellipse_lines(c.x, c.y + 4.0, 21.0 + 4.0 * pulse, 8.0 + 1.5 * pulse, 0.0, 1.0, Color::new(tier.r, tier.g, tier.b, 0.9));
     let bob = (t * 3.0 + c.y * 0.1).sin() * 2.5;
     backing(vec2(c.x, c.y - 10.0 + bob), 13.0, col, 0.6 + 0.4 * pulse);
     draw_texture_ex(a.pickup(k), (c.x - 10.0).round(), (c.y - 20.0 + bob).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
