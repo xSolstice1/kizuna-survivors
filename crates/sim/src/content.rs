@@ -1099,6 +1099,10 @@ pub const SOAK_ELECTRIC: f32 = 1.3;
 pub const CHAIN_RANGE: f32 = 90.0;
 pub const CHAIN_SHARE: f32 = 0.5;
 pub const STAGGER_SECONDS: f32 = 0.4;
+/// 6-piece signatures: stagger damage multiplier, Pale Gate shatter share of max HP and radius.
+pub const SET6_STAGGER: f32 = 1.3;
+pub const SET6_SHATTER: f32 = 0.5;
+pub const SET6_SHATTER_R: f32 = 60.0;
 pub const KNOCK_EXTRA: f32 = 220.0;
 pub const SLOW_SECONDS: f32 = 2.0;
 pub const SLOW_FACTOR: f32 = 0.65;
@@ -1117,6 +1121,23 @@ impl Element {
             Element::Light => "Light",
             Element::Darkness => "Darkness",
         }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Element::Fire => "fire",
+            Element::Water => "water",
+            Element::Electric => "electric",
+            Element::Earth => "earth",
+            Element::Wind => "wind",
+            Element::Ice => "ice",
+            Element::Light => "light",
+            Element::Darkness => "darkness",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Element> {
+        ALL_ELEMENTS.iter().copied().find(|e| e.key() == k)
     }
 
     pub fn is_rare(self) -> bool {
@@ -1215,6 +1236,8 @@ pub enum Upgrade {
 
 /// Chance an offer carries a replacement card when one is possible.
 pub const REPLACE_CHANCE: f32 = 0.15;
+/// Same, once every owned skill is maxed and only fallback cards remain.
+pub const MAXED_REPLACE_CHANCE: f32 = 0.25;
 
 pub const MAXED_FALLBACKS: [Upgrade; 3] = [Upgrade::Heal, Upgrade::Sen, Upgrade::Blessing];
 

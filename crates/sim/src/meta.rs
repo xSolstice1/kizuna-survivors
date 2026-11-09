@@ -394,9 +394,9 @@ impl Profile {
         self.items.iter().find(|i| i.id == id)
     }
 
-    /// Adds an item to the bag (or salvages it when the bag is full). Returns its id (0 if salvaged).
+    /// Adds an item to the bag (or salvages it when the bag is full; Set pieces are never salvaged). Returns its id (0 if salvaged).
     pub fn add_item(&mut self, mut it: Item) -> u32 {
-        if self.items.len() >= BAG_SIZE {
+        if self.items.len() >= BAG_SIZE && it.rarity != Rarity::Set {
             self.dust += it.salvage();
             return 0;
         }
@@ -520,7 +520,7 @@ impl Profile {
         for _ in 0..n {
             let r = gear::draw_rarity(&mut rng, self.draw_pity);
             self.draw_pity = if r >= Rarity::Legendary { 0 } else { self.draw_pity + 1 };
-            let it = gear::roll_item(&mut rng, None, r, ilvl, None);
+            let it = gear::roll_item(&mut rng, None, r, ilvl);
             out.push(self.add_item(it));
         }
         out
@@ -872,6 +872,23 @@ mod tests {
     use crate::WorldConfig;
 
     #[test]
+    fn set_pieces_survive_a_full_bag() {
+        let mut rng = Rng::new(3);
+        let mut p = Profile::default();
+        for _ in 0..BAG_SIZE {
+            p.add_item(gear::roll_item(&mut rng, Some(Slot::Hat), Rarity::Common, 1));
+        }
+        let set = gear::roll_set_piece(&mut rng, StageId::ShrineValley, 5);
+        assert_ne!(p.add_item(set), 0);
+        assert_eq!(p.items.len(), BAG_SIZE + 1);
+        let dust = p.dust;
+        let mythic = gear::roll_item(&mut rng, Some(Slot::Hat), Rarity::Mythic, 5);
+        assert_eq!(p.add_item(mythic), 0);
+        assert_eq!(p.items.len(), BAG_SIZE + 1);
+        assert!(p.dust > dust);
+    }
+
+    #[test]
     fn profile_round_trips() {
         let mut p = Profile { sen: 1234, spent: 300, runs: 3, total_kills: 99_999, best_time: 612.5, best_level: 41, great_onis: 2, night_lords: 1, ..Default::default() };
         p.ranks[PowerUp::Greed.index()] = 4;
@@ -976,8 +993,8 @@ mod gear_tests {
         let mut p = Profile { sen: 10_000, ..Default::default() };
         let mut w = World::new(WorldConfig::default());
         let mut rng = Rng::new(5);
-        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Epic, 10, None));
-        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Legendary, 10, None));
+        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Epic, 10));
+        w.loot.push(gear::roll_item(&mut rng, Some(Slot::Ring), Rarity::Legendary, 10));
         w.state = RunState::Dead;
         let r = p.record_run(&w);
         assert_eq!(r.gear.len(), 2);
@@ -1027,7 +1044,7 @@ mod gear_tests {
     #[test]
     fn arsenal_grants_a_slotless_weapon() {
         let mut rng = Rng::new(2);
-        let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 20, None);
+        let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 20);
         it.arsenal = Some(WeaponKind::Familiars);
         let w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
         let extra = w.weapons.iter().find(|x| x.kind == WeaponKind::Familiars).unwrap();
@@ -1075,7 +1092,7 @@ mod exotic_tests {
     fn legendary_arsenal_arts_run() {
         let mut rng = Rng::new(8);
         for art in gear::ALL_ARTS {
-            let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Legendary, 20, None);
+            let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Legendary, 20);
             it.art = Some(art);
             let mut w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
             w.time = 300.0;

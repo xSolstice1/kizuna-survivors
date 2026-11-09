@@ -256,6 +256,8 @@ Bonus tiers:
   distinct pieces takes ~14.7 drops on average (6 × H₆), so Normal needs ~0.37 pieces per run, i.e.
   `SET_CHANCE ≈ 0.12`. Higher difficulty and Ascension shorten it through `exotic_mult`.
 - The builder verifies the target with a headless simulation and adjusts `SET_CHANCE`.
+  **Built (phase 5): `SET_CHANCE` 0.13.** The bot measured 2.8 eligible kills per won Normal run (Riku,
+  Shrine Valley, seeds 21–30: 3 kills in 8 runs, 2 in 2), which put 0.12 at ~45 runs; 0.13 gives ~40.5.
 - Duplicate pieces still drop (salvage them for more Dust than Exotics).
 
 ## 8. Screen spacing
@@ -435,3 +437,39 @@ None.
   aura), lever is a drain cooldown; Ice slow applies at full strength to bosses, lever is a weaker boss slow.
 - Client duplications: the element name is measured twice in the replace picker; the Affinity text format is
   duplicated between the armory and the menu.
+
+## Carried into phase 6
+
+- Phase 5 final values: `ELEM_ITEM` 0.02 (user, 2026-11-09: halved from 0.04; × item scale: ilvl × rarity mult × plus), `RESIST_CAP` 0.60,
+  `Rarity::Set` index 7 (mult 1.75, dust 800, 6 affixes at `0.7 + 0.3 q`), `SET_CHANCE` 0.13,
+  `SET6_STAGGER` 1.3, `SET6_SHATTER` 0.5 (capped at 200 × gear power), `SET6_SHATTER_R` 60, Lantern burn-pass
+  range `CHAIN_RANGE` 90. Item element is save field 13; old items derive it from `hash(id, 7, 0xE1E)`.
+- Element tables as built: Arsenal arts and Exotics in the phase 5 plan, "Element tables and rulings".
+- The six 6-piece effects: Lantern Street burns pass on at death; Moonveil staggered enemies take +30%;
+  Ember Leaf Wind procs at 2× chance; Pale Gate slowed enemies shatter; Rainward every Water hit soaks;
+  Shatterline chains jump twice. An enemy killed by a shatter neither shatters nor passes its burn in the
+  same pass (bounds cascades); the copy "shatter when they fall" slightly overpromises.
+- Mid-phase user changes (2026-11-09):
+  - Awakening fix: once every owned skill is maxed and slots are full, an offer carries one replace card at
+    `MAXED_REPLACE_CHANCE` 0.25 (user's pick; `REPLACE_CHANCE` stays 0.15), preferring the missing complement
+    passive of a maxed, un-awakened weapon, plus 2 distinct fallbacks; else Heal / Sen / Blessing. Measured
+    maxed offers per run (Shrine Valley, seeds 21–30): Riku 3 / 13 / 24 (first ~18:30), Ren 7 / 24.5 / 45
+    (first ~15:40) → ~3.3 / ~6.1 replace cards per run.
+  - Off-screen hits: instrumented sim and real-client probes found no damage outside the screen except
+    Exorcism Seal / ThousandCounter killing enemies whose centre was off screen (fixed: `in_view` is centre
+    only). The rest was presentation. User choices: all circle visuals capped at `reach_half().x`, line
+    visuals clipped to the reach box (`clip_to_reach`), damage numbers move with the player. Moonfall and
+    Skeleton Hand now target in reach; off-view bursts are silent. The cap removes hits in the reach-box
+    corners (192–220 from the player) for capped circles.
+- Gear element damage stays uncapped (endless chase); the user halved `ELEM_ITEM` to 0.02 instead. A
+  single-element endgame stack (11 pieces Set +10 ilvl 95, plus the 5-piece) now gives ~×3.4 that element
+  (was ~×5.9). The bot plays without gear, so balance runs never see it.
+- Still drawn past reach (disclosed, not capped): Regalia burst 300, special flourishes (Fox 230,
+  Mukade 220, Domain 360 / 220, Hannya onset 160), travelling projectiles. The Divine and Hannya finales
+  are capped visually; their pushes still reach 380 / 340 (push only, no damage).
+- Save risk: an older build (e.g. a stale cached PWA) rejects rarity 7 and drops Set items on its next save.
+- Phase 6 reconcile (from phase 4): Shrine Valley's drafted new enemies are Wind while the world is Earth;
+  Ember Leaf's are Earth / Fire / Water while the world is Wind.
+- Rechecks still open: Kuon 10/10 on seeds 41–50; Haru, Kaede, Mika, Nanami, Yuzu unmeasured; `BOSS_HP`
+  `shortcut:` until human playtests; Darkness drain and Ice slow on bosses (phase 4 watch items).
+- Balance vs `5f82b71` (Normal, seeds 21–30 / 41–50): see the phase 5 plan, "Measured".

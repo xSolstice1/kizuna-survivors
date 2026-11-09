@@ -19,6 +19,7 @@ pub fn rarity_color(r: Rarity) -> Color {
         Rarity::Epic => Color::new(0.75, 0.45, 1.0, 1.0),
         Rarity::Legendary => Color::new(1.0, 0.65, 0.2, 1.0),
         Rarity::Mythic => Color::new(1.0, 0.3, 0.45, 1.0),
+        Rarity::Set => Color::new(0.2, 0.85, 0.75, 1.0),
         // Exotic shimmers through the spectrum.
         Rarity::Exotic => {
             let h = (get_time() as f32 * 0.35).fract();
@@ -57,21 +58,27 @@ pub fn item_cell(assets: &Assets, it: &Item, x: f32, y: f32, s: f32, selected: b
         kit::rounded(x + 2.0, y + 2.0, s - 4.0, s - 4.0, 6.0, Color::new(c.r, c.g, c.b, pulse * 0.35));
     }
     kit::rounded_outline(x, y, s, s, 7.0, if selected { 3.0 } else { 1.5 }, if selected { INK } else { c });
+    if it.rarity == Rarity::Set {
+        kit::rounded_outline(x + 3.5, y + 3.5, s - 7.0, s - 7.0, 5.0, 1.0, c);
+    }
     let pad = s * 0.16;
     draw_texture_ex(item_icon(assets, it), x + pad, y + pad, WHITE, DrawTextureParams { dest_size: Some(vec2(s - 2.0 * pad, s - 2.0 * pad)), ..Default::default() });
     if it.plus > 0 {
         kit::text(&format!("+{}", it.plus), x + 3.0, y + 12.0, 11.0, GOLD);
     }
+    let pip_r = (s * 0.09).clamp(4.0, 6.5);
+    crate::ui::element_pip(it.element, x + s - pip_r - 4.0, y + pip_r + 4.0, pip_r);
     if worn {
-        kit::rounded(x + s - 14.0, y + 2.0, 12.0, 12.0, 4.0, JADE);
-        kit::text("E", x + s - 11.5, y + 12.0, 10.0, Color::new(0.05, 0.1, 0.05, 1.0));
+        kit::rounded(x + s - 15.0, y + s - 15.0, 12.0, 12.0, 4.0, JADE);
+        kit::text("E", x + s - 12.5, y + s - 5.0, 10.0, Color::new(0.05, 0.1, 0.05, 1.0));
     }
     if it.locked {
-        draw_rectangle(x + s - 11.0, y + s - 11.0, 8.0, 6.0, GOLD);
-        draw_circle_lines(x + s - 7.0, y + s - 12.0, 3.0, 1.5, GOLD);
+        let lx = if worn { x + s - 28.0 } else { x + s - 11.0 };
+        draw_rectangle(lx, y + s - 11.0, 8.0, 6.0, GOLD);
+        draw_circle_lines(lx + 4.0, y + s - 12.0, 3.0, 1.5, GOLD);
     }
-    if it.set.is_some() {
-        draw_poly(x + 7.0, y + s - 7.0, 4, 4.0, 45.0, SKY);
+    if it.set.is_some() && it.rarity != Rarity::Set {
+        draw_poly_lines(x + 8.0, y + s - 8.0, 4, 4.5, 0.0, 1.5, SKY);
     }
 }
 
@@ -133,6 +140,10 @@ pub fn item_detail(profile: &Profile, assets: &Assets, it: &Item, hero: HeroId, 
         }
     }
     ly += 10.0;
+    let tag_w = crate::ui::element_tag(it.element, x + 14.0, ly + 4.0, 15.0);
+    let pct = it.elem_value() * 100.0;
+    kit::text_fit(&format!("+{pct:.0}% damage · +{pct:.0}% resist"), x + 14.0 + tag_w + 10.0, ly + 4.0, line_w - tag_w - 10.0, 14.0, INK);
+    ly += 26.0;
     let mut action = None;
     let reroll_cost = it.reroll_cost();
     for (i, a) in it.affixes.iter().enumerate() {
@@ -158,15 +169,24 @@ pub fn item_detail(profile: &Profile, assets: &Assets, it: &Item, hero: HeroId, 
     }
     if let Some(s) = it.set {
         ly += 6.0;
-        let worn = profile.loadouts[hero.index()].iter().filter_map(|id| profile.item(*id)).filter(|x| x.set == Some(s)).count();
-        kit::text(&format!("{} set  ({worn}/4 worn)", set_name(s)), x + 14.0, ly, 15.0, SKY);
-        ly += 17.0;
-        let (two, four) = set_text(s);
-        for (n, t) in [(2, two), (4, four)] {
-            let on = worn >= n;
+        let worn_items: Vec<&Item> = profile.loadouts[hero.index()].iter().filter_map(|id| profile.item(*id)).collect();
+        let (legacy, new) = gear::set_count(&worn_items, s);
+        let is_set = it.rarity == Rarity::Set;
+        let set_tag_w = crate::ui::element_tag_width(s.element(), 15.0);
+        let label = format!("{} set", set_name(s));
+        let label_size = kit::fit(&label, line_w - set_tag_w - 12.0, 15.0);
+        kit::text(&label, x + 14.0, ly, label_size, INK);
+        crate::ui::element_tag(s.element(), x + 14.0 + kit::measure(&label, label_size as u16).width + 12.0, ly, 15.0);
+        ly += 16.0;
+        let rule = if is_set { format!("({new}/6 Set pieces, rings count as a pair)") } else { format!("({new} Set pieces + {legacy} legacy worn; legacy counts toward 2 and 4)") };
+        kit::text_fit(&rule, x + 14.0, ly, line_w, 13.0, DIM);
+        ly += 15.0;
+        let text = set_text(s);
+        for (n, t) in [(2, text[0]), (4, text[1]), (5, text[2]), (6, text[3])] {
+            let on = if n >= 5 { new } else { legacy + new } >= n;
             for l in kit::wrap(&format!("{n}: {t}"), line_w, 13) {
                 kit::text(&l, x + 14.0, ly, 13.0, if on { JADE } else { FAINT });
-                ly += 15.0;
+                ly += 14.0;
             }
         }
     }
@@ -216,14 +236,47 @@ fn dust_badge(assets: &Assets, dust: u32, x: f32, y: f32) {
     let _ = w;
 }
 
+const STAT_ROW: f32 = 16.0;
+
+/// `Stat::format` with a shorter name, so the 3-column totals stay at 13.
+fn short_stat(stat: gear::Stat, v: f32) -> String {
+    use gear::Stat;
+    let name = match stat {
+        Stat::MaxHp => "Health",
+        Stat::Cooldown => "Cooldown",
+        Stat::MoveSpeed => "Speed",
+        Stat::Growth => "Exp",
+        Stat::Greed => "Sen Gain",
+        Stat::CritDamage => "Crit Dmg",
+        Stat::BossDamage => "Boss Dmg",
+        Stat::SpecialCharge => "Special",
+        _ => return stat.format(v),
+    };
+    format!("+{:.1}% {name}", v * 100.0)
+}
+
+/// The bag in display order, one pass with no id lookups.
+fn bag_items(profile: &Profile, filter: Option<Slot>, sort: usize) -> Vec<&Item> {
+    let mut items: Vec<&Item> = profile.items.iter().filter(|i| filter.is_none_or(|f| i.slot == f)).collect();
+    match sort % 3 {
+        0 => items.sort_by_cached_key(|i| std::cmp::Reverse(i.score())),
+        1 => items.sort_by_cached_key(|i| std::cmp::Reverse(i.rarity.index() * 10_000 + i.score() as usize)),
+        _ => items.sort_by_key(|i| std::cmp::Reverse(i.id)),
+    }
+    items
+}
+
 pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time: f64) -> Option<ArmoryAction> {
     crate::menu::backdrop(time);
     let w = screen_width();
     let mouse: Vec2 = mouse_position().into();
     crate::menu::centered("ARMORY", 52.0, 40.0, crate::menu::ACCENT);
     let sen = format!("{}", profile.sen);
-    kit::chip(w - kit::MARGIN - kit::measure(&sen, 20).width - kit::measure("SEN", 14).width - 28.0, kit::MARGIN, "SEN", &sen, GOLD);
-    dust_badge(assets, profile.dust, w - 330.0, kit::MARGIN);
+    let sen_x = w - kit::MARGIN - kit::measure(&sen, 20).width - kit::measure("SEN", 14).width - 28.0;
+    kit::chip(sen_x, kit::MARGIN, "SEN", &sen, GOLD);
+    let dust = profile.dust.to_string();
+    let dust_w = kit::measure(&dust, 20).width + kit::measure("DUST", 14).width + 28.0;
+    dust_badge(assets, profile.dust, sen_x - 12.0 - dust_w, kit::MARGIN);
     let mut changed = false;
 
     // Heroes: pick one to view, equip it to make it the active hero.
@@ -276,29 +329,41 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     let colx = dx + 16.0 + 50.0 + 64.0;
     let colw = dw - 2.0 * (16.0 + 50.0 + 64.0) + 8.0;
     let mut ty2 = dy + 214.0;
-    let lines: Vec<(String, Color, u16)> = if open {
-        vec![
-            (def.archetype.to_string(), crate::menu::ACCENT, 13),
-            (format!("Starts with {}", Upgrade::Weapon(def.signature).name()), INK, 12),
-            (format!("Innate: {}", def.innate_text), JADE, 12),
-            (format!("Affinity: {} +10%", def.element.name()), crate::ui::element_color(def.element), 12),
-            (crate::menu::special_text(&def), GOLD, 12),
-        ]
+    let (before, after): (Vec<(String, Color, u16)>, Vec<(String, Color, u16)>) = if open {
+        (
+            vec![
+                (def.archetype.to_string(), crate::menu::ACCENT, 13),
+                (format!("Starts with {}", Upgrade::Weapon(def.signature).name()), INK, 12),
+                (format!("Innate: {}", def.innate_text), JADE, 12),
+            ],
+            vec![(crate::menu::special_text(&def), GOLD, 12)],
+        )
     } else if soon {
-        vec![("COMING SOON".to_string(), GOLD, 15), ("A new hero is on the way.".to_string(), DIM, 12)]
+        (vec![("COMING SOON".to_string(), GOLD, 15), ("A new hero is on the way.".to_string(), DIM, 12)], vec![])
     } else {
-        vec![("LOCKED".to_string(), DIM, 14), (format!("Unlock: {}", sim::meta::unlock_text(hero)), GOLD, 12)]
+        (vec![("LOCKED".to_string(), DIM, 14), (format!("Unlock: {}", sim::meta::unlock_text(hero)), GOLD, 12)], vec![])
     };
-    for (t, c, sz) in lines {
-        for l in kit::wrap(&t, colw, sz) {
-            if ty2 > dy + dh - 10.0 {
-                break;
+    let draw_lines = |lines: &[(String, Color, u16)], ty2: &mut f32| {
+        for (t, c, sz) in lines {
+            for l in kit::wrap(t, colw, *sz) {
+                if *ty2 > dy + dh - 10.0 {
+                    break;
+                }
+                kit::text_fit_centered(&l, colx + colw / 2.0, *ty2, colw, *sz as f32, *c);
+                *ty2 += *sz as f32 + 3.0;
             }
-            kit::text_fit_centered(&l, colx + colw / 2.0, ty2, colw, sz as f32, c);
-            ty2 += sz as f32 + 3.0;
+            *ty2 += 4.0;
         }
-        ty2 += 4.0;
+    };
+    draw_lines(&before, &mut ty2);
+    if open {
+        let tag_w = crate::ui::element_tag_width(def.element, 14.0);
+        crate::ui::element_tag(def.element, colx + (colw - tag_w) / 2.0, ty2, 14.0);
+        ty2 += 17.0;
+        kit::text_fit_centered(&crate::ui::affinity_bonus_text(), colx + colw / 2.0, ty2, colw, 14.0, crate::ui::element_color(def.element));
+        ty2 += 21.0;
     }
+    draw_lines(&after, &mut ty2);
     let cs = 50.0;
     let loadout = profile.loadouts[hero.index()];
     for (pos, slot) in LOADOUT.iter().enumerate() {
@@ -335,7 +400,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     ];
     for (stt, v) in ALL_STATS.iter().zip(vals) {
         if v > 0.0 {
-            lines.push(stt.format(v));
+            lines.push(short_stat(*stt, v));
         }
     }
     if lines.is_empty() {
@@ -345,24 +410,63 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
     let colw = (tw - 28.0) / 3.0;
     for (i, t) in lines.iter().enumerate() {
         let (c, r) = (i % 3, i / 3);
-        kit::text_fit(t, tx + 14.0 + c as f32 * colw, ty + 20.0 + r as f32 * 15.0, colw - 6.0, 12.5, INK);
+        kit::text_fit(t, tx + 14.0 + c as f32 * colw, ty + 20.0 + r as f32 * STAT_ROW, colw - 6.0, 13.0, INK);
     }
-    let extra: Vec<String> = l.exotics.iter().map(|e| e.name().to_string()).chain(l.uniques.iter().map(|(u, _)| u.name().to_string())).chain(l.sets4.iter().map(|s| format!("{} set", set_name(*s)))).collect();
+    let mut next_y = ty + 20.0 + lines.len().div_ceil(3) as f32 * STAT_ROW + 6.0;
+    // Resistances: label, then pip + name + percent per element, wrapping to a new row.
+    let right = tx + tw - 14.0;
+    let mut rx = tx + 14.0;
+    let mut first = true;
+    for e in sim::content::ALL_ELEMENTS.iter().filter(|e| l.elem_resist[**e as usize] > 0.0) {
+        if first {
+            next_y += 12.0;
+            kit::text("Resist", rx, next_y, 13.0, DIM);
+            rx += kit::measure("Resist", 13).width + 10.0;
+            first = false;
+        }
+        let r = l.resist(*e);
+        let pct = if r >= gear::RESIST_CAP { format!("{:.0}% max", r * 100.0) } else { format!("{:.0}%", r * 100.0) };
+        let item_w = crate::ui::element_tag_width(*e, 14.0) + 6.0 + kit::measure(&pct, 14).width;
+        if rx + item_w > right && rx > tx + 14.0 {
+            rx = tx + 14.0;
+            next_y += 17.0;
+        }
+        let tag_w = crate::ui::element_tag(*e, rx, next_y, 14.0);
+        kit::text(&pct, rx + tag_w + 6.0, next_y, 14.0, INK);
+        rx += item_w + 14.0;
+    }
+    if !first {
+        next_y += 6.0;
+    }
+    let mut extra: Vec<(String, usize)> = Vec::new();
+    let mut add = |name: String| match extra.iter_mut().find(|(n, _)| *n == name) {
+        Some(e) => e.1 += 1,
+        None => extra.push((name, 1)),
+    };
+    for s in &l.sets4 {
+        let tier = if l.sets6.contains(s) { 6 } else if l.sets5.contains(s) { 5 } else { 4 };
+        add(format!("{} set ({tier})", set_name(*s)));
+    }
+    for e in &l.exotics {
+        add(e.name().to_string());
+    }
+    for (u, _) in &l.uniques {
+        add(u.name().to_string());
+    }
+    let extra: Vec<String> = extra.into_iter().map(|(n, c)| if c > 1 { format!("{n} x{c}") } else { n }).collect();
     if !extra.is_empty() {
         // Exotics, uniques and sets wrap onto as many rows as they need, under the stats;
         // anything that still doesn't fit is summarised as "+N more".
-        let rows = lines.len().div_ceil(3) as f32;
-        let top = ty + 20.0 + rows * 15.0 + 4.0;
-        let room = (((ty + th - 6.0) - top) / 13.0).floor().max(1.0) as usize;
+        let room = (((ty + th - 6.0) - next_y) / 15.0).floor().max(1.0) as usize;
         let mut shown = extra.len();
-        let mut wrapped = kit::wrap(&extra.join("  ·  "), tw - 28.0, 11);
+        let mut wrapped = kit::wrap(&extra.join("  ·  "), tw - 28.0, 13);
         while wrapped.len() > room && shown > 1 {
             shown -= 1;
             let t = format!("{}  ·  +{} more", extra[..shown].join("  ·  "), extra.len() - shown);
-            wrapped = kit::wrap(&t, tw - 28.0, 11);
+            wrapped = kit::wrap(&t, tw - 28.0, 13);
         }
-        for (k, l) in wrapped.iter().take(room).enumerate() {
-            kit::text(l, tx + 14.0, top + 10.0 + k as f32 * 13.0, 11.0, GOLD);
+        for (k, row) in wrapped.iter().take(room).enumerate() {
+            kit::text(row, tx + 14.0, next_y + 12.0 + k as f32 * 15.0, 13.0, GOLD);
         }
     }
 
@@ -388,15 +492,10 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
         fx += fs + 3.0;
     }
     let sort_label = ["Sort: Score", "Sort: Rarity", "Sort: Newest"][st.sort as usize % 3];
-    let mut ids: Vec<u32> = profile.items.iter().filter(|i| st.filter.is_none_or(|f| i.slot == f)).map(|i| i.id).collect();
-    match st.sort % 3 {
-        0 => ids.sort_by_key(|id| std::cmp::Reverse(profile.item(*id).map_or(0, |i| i.score()))),
-        1 => ids.sort_by_key(|id| std::cmp::Reverse(profile.item(*id).map_or(0, |i| i.rarity.index() * 10_000 + i.score() as usize))),
-        _ => ids.sort_by_key(|id| std::cmp::Reverse(*id)),
-    }
+    let items = bag_items(profile, st.filter, st.sort as usize);
     let (gs, gap, cols, rows) = (52.0, 6.0, 7usize, 8usize);
     let per = cols * rows;
-    let pages = ids.len().div_ceil(per).max(1);
+    let pages = items.len().div_ceil(per).max(1);
     st.page = st.page.min(pages - 1);
     let wheel = mouse_wheel().1;
     let gy = by + fs + 10.0;
@@ -408,8 +507,8 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
             st.page -= 1;
         }
     }
-    for (k, id) in ids.iter().skip(st.page * per).take(per).enumerate() {
-        let Some(it) = profile.item(*id) else { continue };
+    for (k, it) in items.iter().skip(st.page * per).take(per).enumerate() {
+        let id = &it.id;
         let x = bx + (k % cols) as f32 * (gs + gap);
         let y = gy + (k / cols) as f32 * (gs + gap);
         let worn = profile.loadouts[hero.index()].contains(id);
@@ -418,7 +517,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
             st.selected = Some(*id);
         }
     }
-    if ids.is_empty() {
+    if items.is_empty() {
         kit::text("The bag is empty.", bx + 10.0, gy + 30.0, 16.0, FAINT);
     }
     let fy = gy + grid.h + 4.0;
@@ -477,6 +576,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
         None => {
             kit::panel(ix, iy, iw, ih);
             kit::text("Select an item.", ix + 16.0, iy + 34.0, 18.0, DIM);
+            let resist_cap = format!("Resistance from gear caps at {:.0}%.", gear::RESIST_CAP * 100.0);
             for (k, l) in [
                 "Common has 1 bonus roll, Uncommon 2, Rare 3,",
                 "Epic 4, Legendary 5 and Mythic 6.",
@@ -485,6 +585,9 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
                 "Higher difficulties and Ascension drop",
                 "higher item levels. Salvage into Spirit Dust",
                 "to upgrade (+10) or reroll a bonus.",
+                "Set pieces: a world's set, bonuses at 2/4/5/6.",
+                "Every item adds element damage and resistance.",
+                resist_cap.as_str(),
             ]
             .iter()
             .enumerate()
@@ -569,8 +672,12 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
         }
     }
 
-    for (k, l) in kit::wrap("Exotics can't be drawn: only a world's final boss drops them, rarely.", ow, 13).iter().enumerate() {
-        kit::text(l, ox, oy + oh + 148.0 + k as f32 * 16.0, 13.0, rarity_color(Rarity::Exotic));
+    let mut note_y = oy + oh + 148.0;
+    for (text, color) in [("Exotics can't be drawn: only a world's final boss drops them, rarely.", GOLD), ("Set pieces drop only in their world.", DIM)] {
+        for l in kit::wrap(text, ow, 13) {
+            kit::text(&l, ox, note_y, 13.0, color);
+            note_y += 16.0;
+        }
     }
 
     // Results with a staggered reveal.
@@ -605,7 +712,7 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
     let (ix, iw) = (rx + rw + 14.0, w - (rx + rw + 14.0) - kit::MARGIN);
     if let Some(it) = st.selected.and_then(|id| profile.item(id)).cloned() {
         let hero = profile.selected;
-        if let Some(DetailAction::Lock) = item_detail(profile, assets, &it, hero, ix, 80.0, iw, 520.0, false) {
+        if let Some(DetailAction::Lock) = item_detail(profile, assets, &it, hero, ix, 80.0, iw, kit::screen_height() - 66.0 - 8.0 - 80.0, false) {
             action = Some(DrawAction::Changed);
         }
     }
@@ -613,4 +720,50 @@ pub fn shrine_draw(profile: &mut Profile, assets: &Assets, st: &mut DrawState, t
         action = Some(DrawAction::Back);
     }
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sim::campaign::ALL_STAGES;
+    use sim::rng::Rng;
+
+    fn big_profile() -> Profile {
+        let mut rng = Rng::new(11);
+        let mut p = Profile::default();
+        for n in 0..320u32 {
+            let mut it = if n % 4 == 0 {
+                gear::roll_set_piece(&mut rng, ALL_STAGES[(n as usize / 4) % ALL_STAGES.len()], 1 + (n % 40) as u16)
+            } else {
+                let rar = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic][n as usize % 6];
+                gear::roll_item(&mut rng, None, rar, 1 + (n % 60) as u16)
+            };
+            it.plus = (n % 11) as u8;
+            p.add_item(it);
+        }
+        p
+    }
+
+    fn old_order(profile: &Profile, filter: Option<Slot>, sort: usize) -> Vec<u32> {
+        let mut ids: Vec<u32> = profile.items.iter().filter(|i| filter.is_none_or(|f| i.slot == f)).map(|i| i.id).collect();
+        match sort % 3 {
+            0 => ids.sort_by_key(|id| std::cmp::Reverse(profile.item(*id).map_or(0, |i| i.score()))),
+            1 => ids.sort_by_key(|id| std::cmp::Reverse(profile.item(*id).map_or(0, |i| i.rarity.index() * 10_000 + i.score() as usize))),
+            _ => ids.sort_by_key(|id| std::cmp::Reverse(*id)),
+        }
+        ids
+    }
+
+    #[test]
+    fn bag_order_matches_old_sort() {
+        let p = big_profile();
+        assert!(p.items.len() >= 300, "{}", p.items.len());
+        assert!(p.items.iter().any(|i| i.rarity == Rarity::Set));
+        for filter in std::iter::once(None).chain(ALL_SLOTS.into_iter().map(Some)) {
+            for sort in 0..3 {
+                let new: Vec<u32> = bag_items(&p, filter, sort).iter().map(|i| i.id).collect();
+                assert_eq!(new, old_order(&p, filter, sort), "filter {filter:?} sort {sort}");
+            }
+        }
+    }
 }

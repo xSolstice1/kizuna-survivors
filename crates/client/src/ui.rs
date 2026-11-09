@@ -27,38 +27,74 @@ pub fn tier_color(t: Tier) -> Color {
 pub fn element_color(e: Element) -> Color {
     match e {
         Element::Fire => Color::new(1.0, 0.45, 0.2, 1.0),
-        Element::Water => Color::new(0.3, 0.6, 1.0, 1.0),
+        Element::Water => Color::new(0.2, 0.45, 0.95, 1.0),
         Element::Electric => Color::new(1.0, 0.9, 0.3, 1.0),
         Element::Earth => Color::new(0.75, 0.55, 0.3, 1.0),
-        Element::Wind => Color::new(0.45, 0.9, 0.6, 1.0),
+        Element::Wind => Color::new(0.7, 0.95, 0.3, 1.0),
         Element::Ice => Color::new(0.7, 0.95, 1.0, 1.0),
-        Element::Light => Color::new(1.0, 0.95, 0.75, 1.0),
-        Element::Darkness => Color::new(0.7, 0.4, 0.95, 1.0),
+        Element::Light => Color::new(1.0, 0.88, 0.55, 1.0),
+        Element::Darkness => Color::new(0.55, 0.35, 0.85, 1.0),
     }
 }
 
-fn matchup_text(e: Element) -> String {
+const MIN_ELEMENT_SIZE: f32 = 14.0;
+
+fn matchups(e: Element) -> (Option<Element>, Option<Element>) {
     let strong = match e {
         Element::Light => Some(Element::Darkness),
         Element::Darkness => Some(Element::Light),
         _ => e.beats(),
     };
-    let weak = sim::content::ALL_ELEMENTS.into_iter().find(|w| w.beats() == Some(e));
-    match (strong, weak) {
-        (Some(s), Some(w)) => format!("Strong vs {} · Weak vs {}", s.name(), w.name()),
-        (Some(s), None) => format!("Strong vs {}", s.name()),
-        _ => String::new(),
-    }
+    (strong, sim::content::ALL_ELEMENTS.into_iter().find(|w| w.beats() == Some(e)))
 }
 
-/// Filled element chip with its name; returns the chip width.
-fn element_chip(e: Element, x: f32, y: f32, size: u16) -> f32 {
-    let c = element_color(e);
-    let name = e.name().to_uppercase();
-    let w = kit::measure(&name, size).width + 14.0;
-    kit::rounded(x, y, w, 20.0, 10.0, Color::new(c.r, c.g, c.b, 0.22));
-    kit::text(&name, x + 7.0, y + 15.0, size as f32, c);
-    w
+/// Diamond marker in the element colour, centred on (x, y).
+pub fn element_pip(e: Element, x: f32, y: f32, r: f32) {
+    draw_poly(x, y, 4, r, 0.0, element_color(e));
+}
+
+pub fn element_tag_width(e: Element, size: f32) -> f32 {
+    let size = size.max(MIN_ELEMENT_SIZE);
+    size * 0.6 + 6.0 + kit::measure(e.name(), size as u16).width
+}
+
+/// Pip then name in the element colour; `y` is the text baseline. Returns the width drawn.
+pub fn element_tag(e: Element, x: f32, y: f32, size: f32) -> f32 {
+    let size = size.max(MIN_ELEMENT_SIZE);
+    element_tag_at(e, x, y, size);
+    element_tag_width(e, size)
+}
+
+fn element_tag_at(e: Element, x: f32, y: f32, size: f32) {
+    let r = size * 0.3;
+    element_pip(e, x + r, y - size * 0.32, r);
+    kit::text(e.name(), x + size * 0.6 + 6.0, y, size, element_color(e));
+}
+
+fn affinity_percent() -> f32 {
+    ((sim::content::AFFINITY_DAMAGE - 1.0) * 100.0).round()
+}
+
+pub fn affinity_bonus_text() -> String {
+    format!("+{}% damage", affinity_percent())
+}
+
+/// "Strong vs ◆Earth · Weak vs ◆Ice", each name behind its pip. Returns the width drawn.
+fn matchup_line(e: Element, x: f32, y: f32, size: f32) -> f32 {
+    let (strong, weak) = matchups(e);
+    let mut cx = x;
+    let mut part = |label: &str, el: Element| {
+        kit::text(label, cx, y, size, DIM);
+        cx += kit::measure(label, size as u16).width + 5.0;
+        cx += element_tag(el, cx, y, size) + 2.0;
+    };
+    if let Some(st) = strong {
+        part("Strong vs", st);
+    }
+    if let Some(w) = weak {
+        part(if strong.is_some() { "·  Weak vs" } else { "Weak vs" }, w);
+    }
+    cx - x
 }
 
 pub fn special_color(kind: SpecialKind) -> Color {
@@ -123,29 +159,43 @@ pub fn ult_alert(alert: &UltAlert, color: Color, touch: bool, ready: bool) {
         let fade = if t > 1.6 { (2.0 - t) / 0.4 } else { 1.0 };
         let (w, y) = (screen_width(), screen_height() * 0.30);
         let c = Color::new(color.r, color.g, color.b, fade);
-        kit::text_fit_centered("ALERT! — ULTIMATE READY", w / 2.0, y, w - 40.0, 34.0, c);
-        let sub = if touch { "Tap SPECIAL" } else { "Press SPACE" };
-        kit::text_fit_centered(sub, w / 2.0, y + 32.0, w - 40.0, 22.0, Color::new(INK.r, INK.g, INK.b, fade));
+        kit::text_fit_centered("ALERT! — ULTIMATE READY", w / 2.0, y, w - 2.0 * kit::MARGIN, 34.0, c);
+        if touch {
+            kit::text_fit_centered("Tap SPECIAL", w / 2.0, y + 32.0, w - 2.0 * kit::MARGIN, 22.0, Color::new(INK.r, INK.g, INK.b, fade));
+        }
     }
+}
+
+/// Portrait screens scale the canvas to a sliver; ask for landscape. Draws over everything; a run in progress is paused by the main loop, which also draws no widgets under it.
+pub fn rotate_prompt() {
+    let (w, h) = (screen_width(), screen_height());
+    if h <= w {
+        return;
+    }
+    dim_screen(0.92);
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    // A phone outline turning from upright to sideways.
+    let k = ((get_time() as f32 * 1.2).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+    let rot = -k * std::f32::consts::FRAC_PI_2;
+    let (hw, hh) = (60.0, 100.0);
+    let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].map(|(x, y)| vec2(cx + x * rot.cos() - y * rot.sin(), cy - 220.0 + x * rot.sin() + y * rot.cos()));
+    for i in 0..4 {
+        let (a, b) = (corners[i], corners[(i + 1) % 4]);
+        draw_line(a.x, a.y, b.x, b.y, 6.0, INK);
+    }
+    let width = w - 2.0 * kit::MARGIN;
+    kit::text_fit_centered("Rotate your device", cx, cy + 30.0, width, 72.0, INK);
+    kit::text_fit_centered("Kizuna Survivors plays in landscape", cx, cy + 90.0, width, 40.0, DIM);
 }
 
 fn mouse_moved() -> bool {
     mouse_delta_position() != Vec2::ZERO
 }
 
+/// Always mm:ss; menu::fmt_time switches to hours.
 fn fmt_time(t: f32) -> String {
     let s = t.max(0.0) as u32;
     format!("{:02}:{:02}", s / 60, s % 60)
-}
-
-/// Largest size up to `max` at which `text` fits in `width`.
-fn fit_size(text: &str, width: f32, max: f32) -> f32 {
-    let w = kit::measure(text, max as u16).width;
-    if w <= width {
-        max
-    } else {
-        (max * width / w).floor().max(9.0)
-    }
 }
 
 fn centered(text: &str, y: f32, size: f32, color: Color) {
@@ -154,25 +204,6 @@ fn centered(text: &str, y: f32, size: f32, color: Color) {
 
 fn dim_screen(a: f32) {
     draw_rectangle(0.0, 0.0, screen_width(), screen_height(), Color::new(0.02, 0.01, 0.05, a));
-}
-
-/// Word-wraps `text` into lines that fit `width`.
-fn wrap(text: &str, width: f32, size: u16) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        let candidate = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
-        if kit::measure(&candidate, size).width > width && !line.is_empty() {
-            out.push(std::mem::take(&mut line));
-            line = word.to_string();
-        } else {
-            line = candidate;
-        }
-    }
-    if !line.is_empty() {
-        out.push(line);
-    }
-    out
 }
 
 /// Hero head in a round frame (the top of the idle sprite).
@@ -198,21 +229,23 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let p = &world.player;
     let hero = hero_def(world.cfg.hero);
     let t = get_time() as f32;
+    // Everything sits at least MARGIN from the edges; the XP bar is the outermost piece.
+    let (ox, oy) = (kit::MARGIN - 8.0, kit::MARGIN - 6.0);
 
     // XP bar across the top with a level badge.
     let frac = world.player.xp as f32 / world.xp_to_next() as f32;
-    kit::bar(8.0, 6.0, w - 16.0, 10.0, frac, SKY, Color::new(0.05, 0.04, 0.10, 0.9));
+    kit::bar(kit::MARGIN, kit::MARGIN, w - 2.0 * kit::MARGIN, 10.0, frac, SKY, Color::new(0.05, 0.04, 0.10, 0.9));
 
     // Hero card, top-left: portrait, HP, special meter.
-    kit::panel(12.0, 24.0, 300.0, 78.0);
-    portrait(assets, world, 50.0, 63.0, 30.0);
-    draw_circle(72.0, 88.0, 13.0, Color::new(0.08, 0.06, 0.14, 1.0));
-    draw_circle_lines(72.0, 88.0, 13.0, 2.0, SKY);
+    kit::panel(12.0 + ox, 24.0 + oy, 300.0, 78.0);
+    portrait(assets, world, 50.0 + ox, 63.0 + oy, 30.0);
+    draw_circle(72.0 + ox, 88.0 + oy, 13.0, Color::new(0.08, 0.06, 0.14, 1.0));
+    draw_circle_lines(72.0 + ox, 88.0 + oy, 13.0, 2.0, SKY);
     let lv = format!("{}", p.level);
     let d = kit::measure(&lv, 15);
-    kit::text(&lv, 72.0 - d.width / 2.0, 93.0, 15.0, INK);
-    kit::bar(92.0, 38.0, 206.0, 16.0, p.hp / p.max_hp, Color::new(0.95, 0.30, 0.42, 1.0), Color::new(0.18, 0.06, 0.10, 0.95));
-    kit::text(&format!("{:.0} / {:.0}", p.hp, p.max_hp), 100.0, 51.0, 13.0, INK);
+    kit::text(&lv, 72.0 + ox - d.width / 2.0, 93.0 + oy, 15.0, INK);
+    kit::bar(92.0 + ox, 38.0 + oy, 206.0, 16.0, p.hp / p.max_hp, Color::new(0.95, 0.30, 0.42, 1.0), Color::new(0.18, 0.06, 0.10, 0.95));
+    kit::text(&format!("{:.0} / {:.0}", p.hp, p.max_hp), 100.0 + ox, 51.0 + oy, 13.0, INK);
     match world.form_kind() {
         Some(kind) => {
             let f = p.form / kind.duration();
@@ -222,21 +255,24 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
                 SpecialKind::Hannya | SpecialKind::Mukade => Color::new(base.r * flick, base.g, base.b, 1.0),
                 _ => Color::new(base.r, base.g * flick, base.b, 1.0),
             };
-            kit::bar(92.0, 62.0, 206.0, 10.0, f, c, Color::new(0.1, 0.08, 0.16, 0.95));
+            kit::bar(92.0 + ox, 62.0 + oy, 206.0, 10.0, f, c, Color::new(0.1, 0.08, 0.16, 0.95));
             let label = format!("{}  {:.0}s", hero.special_name.to_uppercase(), p.form.ceil());
-            kit::text(&label, 94.0, 90.0, fit_size(&label, 210.0, 14.0), c);
+            kit::text(&label, 94.0 + ox, 90.0 + oy, kit::fit(&label, 210.0, 14.0), c);
         }
         None => {
             let full = p.special >= 1.0;
             let glow = if full { 0.75 + 0.25 * (t * 6.0).sin() } else { 1.0 };
-            kit::bar(92.0, 62.0, 206.0, 10.0, p.special, Color::new(glow, 0.85 * glow, 0.45 * glow, 1.0), Color::new(0.1, 0.08, 0.16, 0.95));
+            kit::bar(92.0 + ox, 62.0 + oy, 206.0, 10.0, p.special, Color::new(glow, 0.85 * glow, 0.45 * glow, 1.0), Color::new(0.1, 0.08, 0.16, 0.95));
             let label = hero.special_name.to_uppercase();
             let ready = Color::new(1.0, 0.9, 0.5, glow);
-            let room = if touch { 210.0 } else { 210.0 - keycap(298.0, 78.0, full, glow) - 6.0 };
-            kit::text(&label, 94.0, 90.0, fit_size(&label, room, 14.0), if full { ready } else { FAINT });
+            let room = if touch { 210.0 } else { 210.0 - keycap(298.0 + ox, 78.0 + oy, full, glow) - 6.0 };
+            kit::text(&label, 94.0 + ox, 90.0 + oy, kit::fit(&label, room, 14.0), if full { ready } else { FAINT });
             if full && !touch {
                 let prompt = format!("Press SPACE: {}", hero.special_name);
-                kit::text_fit_centered(&prompt, w / 2.0, screen_height() - kit::MARGIN - ROUND_STRIP_H - 34.0, w - 40.0, 20.0, ready);
+                let py = screen_height() - kit::MARGIN - ROUND_STRIP_H - 34.0;
+                let pw = kit::measure(&prompt, 20).width.min(w - 2.0 * kit::MARGIN - 24.0) + 24.0;
+                kit::rounded(w / 2.0 - pw / 2.0, py - 20.0, pw, 28.0, 14.0, Color::new(0.06, 0.05, 0.11, 0.7));
+                kit::text_fit_centered(&prompt, w / 2.0, py, pw - 24.0, 20.0, ready);
             }
         }
     }
@@ -244,33 +280,38 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     // Loadout: weapon and passive slots (VS-style), under the hero card.
     let s = 34.0;
     let slotted: Vec<_> = world.weapons.iter().filter(|w| !w.extra).collect();
+    let (lx, ly) = (14.0 + ox, 110.0 + oy);
     for k in 0..hero.weapon_slots {
-        let x = 14.0 + k as f32 * (s + 6.0);
+        let x = lx + k as f32 * (s + 6.0);
         match slotted.get(k) {
-            Some(wp) => kit::icon_slot(x, 110.0, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened),
-            None => kit::icon_slot(x, 110.0, s, None, 0, 0, false),
+            Some(wp) => {
+                kit::icon_slot(x, ly, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
+                weapon_pip(wp.kind, x, ly, s);
+            }
+            None => kit::icon_slot(x, ly, s, None, 0, 0, false),
         }
     }
     // The Arsenal weapon sits apart: it takes no slot.
-    let ax = 14.0 + hero.weapon_slots as f32 * (s + 6.0) + 8.0;
+    let ax = lx + hero.weapon_slots as f32 * (s + 6.0) + 8.0;
     if let Some(wp) = world.weapons.iter().find(|w| w.extra) {
-        kit::rounded_outline(ax - 3.0, 107.0, s + 6.0, s + 6.0, 8.0, 1.5, SKY);
-        kit::icon_slot(ax, 110.0, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
+        kit::rounded_outline(ax - 3.0, ly - 3.0, s + 6.0, s + 6.0, 8.0, 1.5, SKY);
+        kit::icon_slot(ax, ly, s, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
+        weapon_pip(wp.kind, ax, ly, s);
     } else if let Some(a) = &world.art {
-        kit::rounded_outline(ax - 3.0, 107.0, s + 6.0, s + 6.0, 8.0, 1.5, GOLD);
-        kit::icon_slot(ax, 110.0, s, Some(assets.gear_icon_named(a.art.key())), 0, 0, true);
+        kit::rounded_outline(ax - 3.0, ly - 3.0, s + 6.0, s + 6.0, 8.0, 1.5, GOLD);
+        kit::icon_slot(ax, ly, s, Some(assets.gear_icon_named(a.art.key())), 0, 0, true);
     }
     let ps = 26.0;
     for k in 0..hero.passive_slots {
-        let x = 14.0 + k as f32 * (ps + 5.0);
+        let x = lx + k as f32 * (ps + 5.0);
         match world.passives.get(k) {
-            Some((pk, l)) => kit::icon_slot(x, 156.0, ps, Some(assets.icon(Upgrade::Passive(*pk))), *l, passive_max(*pk), false),
-            None => kit::icon_slot(x, 156.0, ps, None, 0, 0, false),
+            Some((pk, l)) => kit::icon_slot(x, 156.0 + oy, ps, Some(assets.icon(Upgrade::Passive(*pk))), *l, passive_max(*pk), false),
+            None => kit::icon_slot(x, 156.0 + oy, ps, None, 0, 0, false),
         }
     }
 
     // Active pickup buffs: icon + countdown bar.
-    let mut bx = 14.0;
+    let mut bx = lx;
     for (kind, left, total) in [
         (sim::content::PickupKind::SwiftGeta, world.speed_buff, sim::content::BUFF_SECONDS),
         (sim::content::PickupKind::OniSake, world.damage_buff, sim::content::BUFF_SECONDS),
@@ -279,35 +320,40 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     ] {
         if left > 0.0 {
             let col = crate::render::pickup_color(kind);
-            kit::rounded(bx, 192.0, 46.0, 40.0, 8.0, Color::new(0.06, 0.05, 0.11, 0.88));
-            kit::rounded_outline(bx, 192.0, 46.0, 40.0, 8.0, 1.5, col);
-            draw_texture_ex(assets.pickup(kind), bx + 4.0, 196.0, WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
-            kit::text(&format!("{:.0}", left.ceil()), bx + 27.0, 212.0, 14.0, INK);
-            kit::bar(bx + 4.0, 222.0, 38.0, 5.0, left / total, col, Color::new(1.0, 1.0, 1.0, 0.1));
+            kit::rounded(bx, 192.0 + oy, 46.0, 40.0, 8.0, Color::new(0.06, 0.05, 0.11, 0.88));
+            kit::rounded_outline(bx, 192.0 + oy, 46.0, 40.0, 8.0, 1.5, col);
+            draw_texture_ex(assets.pickup(kind), bx + 4.0, 196.0 + oy, WHITE, DrawTextureParams { dest_size: Some(vec2(20.0, 20.0)), ..Default::default() });
+            kit::text(&format!("{:.0}", left.ceil()), bx + 27.0, 212.0 + oy, 14.0, INK);
+            kit::bar(bx + 4.0, 222.0 + oy, 38.0, 5.0, left / total, col, Color::new(1.0, 1.0, 1.0, 0.1));
             bx += 52.0;
         }
     }
 
     // Timer card, top-centre.
     let (tw, tx) = (220.0, (w - 220.0) / 2.0);
-    kit::panel(tx, 22.0, tw, 62.0);
+    kit::panel(tx, 22.0 + oy, tw, 62.0);
     let st = world.stage();
     let night = world.time >= st.final_at;
-    centered(&fmt_time(world.time), 60.0, 36.0, if night { Color::new(1.0, 0.55, 0.45, 1.0) } else { INK });
+    centered(&fmt_time(world.time), 60.0 + oy, 36.0, if night { Color::new(1.0, 0.55, 0.45, 1.0) } else { INK });
     let sub = if !night { format!("{} in {}", st.final_boss.short_name(), fmt_time(st.final_at - world.time)) } else { format!("dawn in {}", fmt_time(st.limit - world.time)) };
-    kit::text_fit_centered(&sub, w / 2.0, 77.0, tw - 16.0, 13.0, if night { Color::new(1.0, 0.6, 0.5, 0.8 + 0.2 * (t * 4.0).sin()) } else { DIM });
+    kit::text_fit_centered(&sub, w / 2.0, 77.0 + oy, tw - 16.0, 13.0, if night { Color::new(1.0, 0.6, 0.5, 0.8 + 0.2 * (t * 4.0).sin()) } else { DIM });
     stage_progress(world, w / 2.0);
 
     // Boss bar, below the timer.
     if let Some((_, frac, kind)) = world.boss() {
         let (bw, bx) = (460.0, (w - 460.0) / 2.0);
-        let by = 14.0;
+        let by = 14.0 + oy;
         let name = match kind {
             EnemyKind::NightLord => "NIGHT LORD  ·  CHOCHIN DAIMYO".to_string(),
             k => k.name().to_uppercase(),
         };
         kit::panel_ex(bx - 10.0, 90.0 + by, bw + 20.0, BOSS_PANEL_BOTTOM - 90.0 - by, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
-        kit::text_fit_centered(&name, w / 2.0, 106.0 + by, bw, 14.0, Color::new(1.0, 0.75, 0.75, 1.0));
+        let name_c = Color::new(1.0, 0.75, 0.75, 1.0);
+        let tag_w = element_tag_width(kind.element(), 14.0) + 10.0;
+        let name_w = kit::measure(&name, 14).width.min(bw - tag_w);
+        let nx = w / 2.0 - (name_w + tag_w) / 2.0;
+        kit::text_fit(&name, nx, 106.0 + by, name_w, 14.0, name_c);
+        element_tag(kind.element(), nx + name_w + 10.0, 106.0 + by, 14.0);
         // Phase pips for bosses that fight in phases.
         let phases = sim::content::boss_phases(kind, world.cfg.difficulty.extra_phases());
         if kind != EnemyKind::NightLord && kind != EnemyKind::GreatOni && phases > 1 {
@@ -324,10 +370,15 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let kills = format!("{}", world.kills);
     let cw = kit::measure(&sen, 20).width + kit::measure("SEN", 14).width + 28.0;
     let kw = kit::measure(&kills, 20).width + kit::measure("KILLS", 14).width + 28.0;
-    kit::chip(w - 14.0 - kw, 24.0, "KILLS", &kills, INK);
-    let x = w - 14.0 - cw;
-    kit::chip(x, 60.0, "SEN", &sen, GOLD);
-    draw_texture_ex(&assets.coin, x - 22.0, 66.0, WHITE, DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() });
+    kit::chip(w - kit::MARGIN - kw, 24.0 + oy, "KILLS", &kills, INK);
+    let x = w - kit::MARGIN - cw;
+    kit::chip(x, 60.0 + oy, "SEN", &sen, GOLD);
+    draw_texture_ex(&assets.coin, x - 22.0, 66.0 + oy, WHITE, DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() });
+}
+
+/// Element pip at a weapon slot's top-right corner; the full tag shows in the pause menu.
+fn weapon_pip(kind: sim::content::WeaponKind, x: f32, y: f32, s: f32) {
+    element_pip(kind.element(), x + s - 7.0, y + 7.0, 4.5);
 }
 
 /// A SPACE key badge ending at `right`; dim while charging, pulsing gold when ready. Returns its width.
@@ -361,7 +412,7 @@ pub fn headline_name(h: Headline) -> &'static str {
     }
 }
 
-const BOSS_PANEL_BOTTOM: f32 = 144.0;
+const BOSS_PANEL_BOTTOM: f32 = 144.0 + 18.0;
 /// Height of the round strip, so the HUD above it can stay clear.
 const ROUND_STRIP_H: f32 = 30.0;
 
@@ -374,7 +425,9 @@ fn stage_progress(world: &World, cx: f32) {
     let y = screen_height() - kit::MARGIN - ROUND_STRIP_H;
     kit::panel(x0, y, bw, ROUND_STRIP_H);
 
-    kit::text(&format!("Round {round} / {ROUNDS}"), x0 + 2.0, y - 7.0, 14.0, INK);
+    let label = format!("Round {round} / {ROUNDS}");
+    label_backing(x0, y - 7.0, kit::measure(&label, 14).width);
+    kit::text(&label, x0 + 2.0, y - 7.0, 14.0, INK);
     let next = (round..=ROUNDS).find_map(|r| StageDef::headline(r).map(|h| (r, h)));
     let (note, note_color) = match next {
         _ if round == ROUNDS => (format!("dawn in {}", fmt_time((st.limit - world.time).max(0.0))), Color::new(1.0, 0.6, 0.5, 1.0)),
@@ -386,6 +439,9 @@ fn stage_progress(world: &World, cx: f32) {
         None => (String::new(), DIM),
     };
     let nw = kit::measure(&note, 14).width;
+    if !note.is_empty() {
+        label_backing(x0 + bw - nw - 4.0, y - 7.0, nw);
+    }
     kit::text(&note, x0 + bw - nw - 2.0, y - 7.0, 14.0, note_color);
 
     let (pad, gap) = (8.0, 2.0);
@@ -413,6 +469,11 @@ fn stage_progress(world: &World, cx: f32) {
             draw_circle(sx + sw / 2.0, y + 25.0, 2.0, GOLD);
         }
     }
+}
+
+/// Translucent chip behind a 14 px label whose baseline is `baseline`, so world art does not run through the text.
+fn label_backing(x: f32, baseline: f32, text_w: f32) {
+    kit::rounded(x - 4.0, baseline - 15.0, text_w + 12.0, 20.0, 8.0, Color::new(0.06, 0.05, 0.11, 0.7));
 }
 
 fn title_case(s: &str) -> String {
@@ -484,11 +545,11 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
         let mut ly = y + 116.0;
         if let Upgrade::Weapon(k) = u {
             let e = k.element();
-            element_chip(e, x + 16.0, y + 88.0, 12);
-            kit::text_fit(&matchup_text(e), x + 16.0, y + 126.0, cw - 32.0, 13.0, DIM);
+            element_tag(e, x + 90.0, y + 102.0, 14.0);
+            matchup_line(e, x + 16.0, y + 126.0, 14.0);
             ly = y + 148.0;
         }
-        for line in wrap(&world.describe_upgrade(u, lvl), cw - 32.0, 16) {
+        for line in kit::wrap(&world.describe_upgrade(u, lvl), cw - 32.0, 16) {
             kit::text(&line, x + 16.0, ly, 16.0, Color::new(0.9, 0.9, 0.96, 1.0));
             ly += 21.0;
         }
@@ -546,7 +607,11 @@ pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: 
         let chip = u.tier().name().to_uppercase();
         let cwid = kit::measure(&chip, 12).width + 14.0;
         let elem_w = match u {
-            Upgrade::Weapon(k) => element_chip(k.element(), r.x + r.w - cwid - 18.0 - kit::measure(&k.element().name().to_uppercase(), 12).width - 14.0, r.y + dy + 15.0, 12) + 6.0,
+            Upgrade::Weapon(k) => {
+                let tag_w = element_tag_width(k.element(), 14.0);
+                element_tag_at(k.element(), r.x + r.w - cwid - 18.0 - tag_w, r.y + dy + 30.0, 14.0);
+                tag_w + 6.0
+            }
             _ => 0.0,
         };
         kit::text_fit(&format!("{}  Lv {lvl}", u.name()), r.x + 58.0, r.y + dy + 21.0, r.w - 58.0 - cwid - 52.0 - elem_w, 18.0, INK);
@@ -559,7 +624,18 @@ pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: 
         Some(&(_, lvl)) => format!("{} joins at Lv {}", new.name(), sim::content::inherit_level(new, lvl)),
         None => format!("{} stays in the offer", new.name()),
     };
-    kit::text_fit_centered(&joins, w / 2.0, py + 66.0, pw - 40.0, 16.0, DIM);
+    let new_tag_w = match new {
+        Upgrade::Weapon(k) => element_tag_width(k.element(), 14.0) + 10.0,
+        _ => 0.0,
+    };
+    let joins_w = pw - 40.0 - new_tag_w;
+    let joins_size = kit::fit(&joins, joins_w, 16.0);
+    let joins_text_w = kit::measure(&joins, joins_size as u16).width;
+    let joins_x = w / 2.0 - (joins_text_w + new_tag_w) / 2.0;
+    kit::text(&joins, joins_x, py + 66.0, joins_size, DIM);
+    if let Upgrade::Weapon(k) = new {
+        element_tag_at(k.element(), joins_x + joins_text_w + 10.0, py + 66.0, 14.0);
+    }
     let cancel = row(n);
     if *focus == n {
         kit::focus_ring(cancel.x - 3.0, cancel.y - 3.0, cancel.w + 6.0, cancel.h + 6.0, GOLD);
@@ -676,6 +752,32 @@ fn mini_slider(label: &str, x: f32, y: f32, w: f32, v: &mut f32) -> bool {
     (*v - before).abs() > 1e-6
 }
 
+/// "<Set> set (n) · Resist ◆Earth 60% ◆Fire 20%": the worn Set bonus and the three best resistances. Nothing without gear.
+fn gear_line(g: &sim::gear::Loadout, x: f32, y: f32, width: f32) {
+    let set = g.sets6.first().map(|s| (*s, 6)).or_else(|| g.sets5.first().map(|s| (*s, 5))).or_else(|| g.sets4.first().map(|s| (*s, 4)));
+    let mut res: Vec<(Element, f32)> = sim::content::ALL_ELEMENTS.into_iter().map(|e| (e, g.resist(e))).filter(|r| r.1 > 0.0).collect();
+    res.sort_by(|a, b| b.1.total_cmp(&a.1));
+    res.truncate(3);
+    if set.is_none() && res.is_empty() {
+        return;
+    }
+    let mut cx = x;
+    if let Some((stage, n)) = set {
+        let label = format!("{} set ({n}) · {}", sim::gear::set_name(stage), if res.is_empty() { "" } else { "Resist " });
+        kit::text_fit(&label, cx, y, width, 14.0, GOLD);
+        cx += kit::measure(&label, 14).width;
+    }
+    for (e, v) in res {
+        let pct = format!("{:.0}%", v * 100.0);
+        if cx + element_tag_width(e, 14.0) + kit::measure(&pct, 14).width > x + width {
+            break;
+        }
+        cx += element_tag(e, cx, y, 14.0) + 4.0;
+        kit::text(&pct, cx, y, 14.0, INK);
+        cx += kit::measure(&pct, 14).width + 12.0;
+    }
+}
+
 /// `auto_special` is `None` until Auto Special is bought, then whether it's on.
 pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev: bool, auto_special: Option<bool>) -> Option<PauseAction> {
     dim_screen(0.7);
@@ -691,13 +793,18 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev
     portrait(assets, world, lx + 44.0, top + 46.0, 28.0);
     kit::text(hero.name, lx + 84.0, top + 42.0, 24.0, INK);
     kit::text(&format!("{}  ·  Level {}", hero.archetype, world.player.level), lx + 84.0, top + 64.0, 15.0, DIM);
+    let aw = element_tag(hero.element, lx + 84.0, top + 84.0, 14.0);
+    kit::text_fit(&affinity_bonus_text(), lx + 84.0 + aw + 8.0, top + 84.0, lw - 120.0 - aw, 14.0, element_color(hero.element));
     kit::panel_title(&format!("WEAPONS  {}/{}", world.weapons.iter().filter(|w| !w.extra).count(), hero.weapon_slots), lx + 18.0, top + 104.0, 16.0, GOLD);
     let mut y = top + 116.0;
     for wp in &world.weapons {
         kit::icon_slot(lx + 18.0, y, 40.0, Some(assets.icon(Upgrade::Weapon(wp.kind))), wp.level, MAX_LEVEL, wp.awakened);
         let (name, c) = if wp.awakened { (awakened_name(wp.kind).to_string(), GOLD) } else { (Upgrade::Weapon(wp.kind).name().to_string(), INK) };
         let name = if wp.extra { format!("{name}  (Arsenal)") } else { name };
-        kit::text_fit(&name, lx + 70.0, y + 18.0, lw - 90.0, 18.0, c);
+        let el = wp.kind.element();
+        let tw = element_tag_width(el, 14.0);
+        kit::text_fit(&name, lx + 70.0, y + 18.0, lw - 90.0 - tw - 12.0, 18.0, c);
+        element_tag(el, lx + lw - 18.0 - tw, y + 18.0, 14.0);
         let (pk, need) = complement(wp.kind);
         if wp.awakened {
             kit::text(&format!("AWAKENED  ·  {}", sim::content::signature_name(wp.kind)), lx + 70.0, y + 38.0, 13.0, GOLD);
@@ -711,7 +818,7 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev
                 MAX_LEVEL,
                 Upgrade::Passive(pk).name(),
                 if has { " (owned)" } else { "" },
-                if lvl_ok && has && world.time < AWAKEN_FROM { " · chest after 8:00" } else if lvl_ok && has { " · open a chest!" } else { "" }
+                if lvl_ok && has && world.time < AWAKEN_FROM { format!(" · chest after {}", fmt_time(AWAKEN_FROM)) } else if lvl_ok && has { " · open a chest!".to_string() } else { String::new() }
             );
             kit::text_fit(&hint, lx + 92.0, y + 38.0, lw - 110.0, 13.0, if has && lvl_ok { JADE } else { FAINT });
         }
@@ -727,11 +834,12 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev
         kit::text(Upgrade::Passive(*pk).name(), px + 42.0, py + 15.0, 16.0, INK);
         kit::text(&format!("Lv {}/{}", l, passive_max(*pk)), px + 42.0, py + 32.0, 13.0, DIM);
     }
+    let sy = top + panel_h - 46.0;
+    gear_line(&world.cfg.gear, lx + 18.0, if world.shrines_taken.is_empty() { sy + 18.0 } else { sy - 12.0 }, lw - 36.0);
     if !world.shrines_taken.is_empty() {
-        let sy = top + panel_h - 46.0;
         kit::text("Shrine blessings:", lx + 18.0, sy + 18.0, 14.0, DIM);
         let names: Vec<&str> = world.shrines_taken.iter().map(|e| e.name()).collect();
-        kit::text(&names.join(" · "), lx + 140.0, sy + 18.0, 14.0, GOLD);
+        kit::text_fit(&names.join(" · "), lx + 140.0, sy + 18.0, lw - 160.0, 14.0, GOLD);
     }
 
     // ── Right: night progress, stats, actions ──
@@ -867,11 +975,11 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
         let n = world.loot.len().min(16);
         let mut gx = (w - (n as f32 * (s + 6.0) - 6.0)) / 2.0;
         for it in world.loot.iter().take(n) {
-            crate::armory::item_cell(assets, it, gx, py + ph - 124.0, s, false, false);
+            crate::armory::item_cell(assets, it, gx, py + ph - 116.0, s, false, false);
             gx += s + 6.0;
         }
         let more = if world.loot.len() > n { format!("  (+{} more)", world.loot.len() - n) } else { String::new() };
-        centered(&format!("{} gear found{more}", world.loot.len()), py + ph - 132.0, 14.0, DIM);
+        centered(&format!("{} gear found{more}", world.loot.len()), py + ph - 124.0, 14.0, DIM);
     }
     // Rewards.
     if let Some(r) = report {
@@ -880,31 +988,38 @@ pub fn results(world: &World, won: bool, report: Option<&sim::meta::RunReport>, 
         let x = (w - d.width) / 2.0 + 16.0;
         draw_texture_ex(&assets.coin, x - 36.0, py + 252.0, WHITE, DrawTextureParams { dest_size: Some(vec2(28.0, 28.0)), ..Default::default() });
         kit::text_shadow(&txt, x, py + 276.0, 34.0, GOLD);
-        let mut y = py + 316.0;
-        if r.discovered > 0 {
-            centered(&format!("{} new Collection entr{}", r.discovered, if r.discovered == 1 { "y" } else { "ies" }), y, 17.0, SKY);
-            y += 28.0;
-        }
-        if let Some(d) = r.first_clear {
-            centered(&format!("FIRST {} CLEAR  ·  +{} Sen bonus", d.name().to_uppercase(), d.first_clear_sen()), y, 20.0, GOLD);
-            y += 28.0;
-        }
-        if let Some(rel) = r.relic {
-            centered(&format!("RELIC EARNED: {} ({})", rel.name(), rel.describe()), y, 18.0, Color::new(0.75, 0.9, 1.0, 1.0));
-            y += 26.0;
-        }
-        if let Some(n) = r.ascension_opened {
-            centered(&format!("NIGHTMARE+{n} OPEN"), y, 18.0, Color::new(1.0, 0.5, 0.6, 1.0));
-            y += 26.0;
-        }
-        if let Some(stg) = r.stage_unlocked {
-            centered(&format!("NEW WORLD OPEN: {}", stg.def().name), y, 20.0, JADE);
-            y += 28.0;
-        }
+        let mut y = py + 308.0;
+        // Reward lines stop above the loot label, or just above the buttons when there is none.
+        let limit = if world.loot.is_empty() { py + ph - 96.0 } else { py + ph - 136.0 };
+        let line = |t: &str, y: f32, size: f32, c: Color| {
+            if y <= limit {
+                centered(t, y, size, c);
+            }
+        };
+        const STEP: f32 = 24.0;
         for hero in &r.unlocked {
             let pulse = 0.75 + 0.25 * (get_time() * 4.0).sin() as f32;
-            centered(&format!("NEW HERO UNLOCKED: {}", hero_def(*hero).name), y, 22.0, Color::new(1.0, 0.6, 0.85, pulse));
-            y += 30.0;
+            line(&format!("NEW HERO UNLOCKED: {}", hero_def(*hero).name), y, 22.0, Color::new(1.0, 0.6, 0.85, pulse));
+            y += STEP;
+        }
+        if let Some(stg) = r.stage_unlocked {
+            line(&format!("NEW WORLD OPEN: {}", stg.def().name), y, 20.0, JADE);
+            y += STEP;
+        }
+        if let Some(d) = r.first_clear {
+            line(&format!("FIRST {} CLEAR  ·  +{} Sen bonus", d.name().to_uppercase(), d.first_clear_sen()), y, 20.0, GOLD);
+            y += STEP;
+        }
+        if let Some(rel) = r.relic {
+            line(&format!("RELIC EARNED: {} ({})", rel.name(), rel.describe()), y, 18.0, Color::new(0.75, 0.9, 1.0, 1.0));
+            y += STEP;
+        }
+        if let Some(n) = r.ascension_opened {
+            line(&format!("NIGHTMARE+{n} OPEN"), y, 18.0, Color::new(1.0, 0.5, 0.6, 1.0));
+            y += STEP;
+        }
+        if r.discovered > 0 {
+            line(&format!("{} new Collection entr{}", r.discovered, if r.discovered == 1 { "y" } else { "ies" }), y, 17.0, SKY);
         }
     }
 
@@ -939,7 +1054,7 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
         let size = (h - 140.0).min(w - 80.0).min(620.0);
         (size, (w - size) / 2.0, 90.0, 900.0)
     } else {
-        (150.0, w - 164.0, 98.0, 650.0)
+        (150.0, w - kit::MARGIN - 150.0, 116.0, 650.0)
     };
     if big {
         dim_screen(0.6);
@@ -1098,6 +1213,10 @@ mod tests {
     use super::*;
     use sim::content::ALL_ELEMENTS;
 
+    fn distance(a: Color, b: Color) -> f32 {
+        ((a.r - b.r).powi(2) + (a.g - b.g).powi(2) + (a.b - b.b).powi(2)).sqrt()
+    }
+
     #[test]
     fn element_colors_are_distinct() {
         for (i, a) in ALL_ELEMENTS.iter().enumerate() {
@@ -1109,6 +1228,28 @@ mod tests {
                 assert!(gap > 0.15, "{} and {} too close", a.name(), b.name());
             }
         }
+    }
+
+    #[test]
+    fn element_colors_differ_from_rarity_and_theme() {
+        use sim::gear::{Rarity, ALL_RARITIES};
+        let mut others: Vec<(String, Color)> = ALL_RARITIES
+            .iter()
+            .filter(|&&r| r != Rarity::Exotic)
+            .map(|&r| (format!("{r:?}"), crate::armory::rarity_color(r)))
+            .collect();
+        others.extend([("GOLD".into(), GOLD), ("JADE".into(), JADE), ("INK".into(), INK)]);
+        for e in ALL_ELEMENTS {
+            for (name, c) in &others {
+                let d = distance(element_color(e), *c);
+                assert!(d >= 0.12, "{} vs {name}: {d:.3}", e.name());
+            }
+        }
+    }
+
+    #[test]
+    fn affinity_bonus_text_shows_percent() {
+        assert_eq!(affinity_bonus_text(), "+10% damage");
     }
 
     #[test]

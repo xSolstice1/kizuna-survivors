@@ -373,12 +373,26 @@ fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
 }
 
 struct DamageNumber {
-    pos: Vec2,
-    amount: f32,
+    /// From the player, so numbers ride along with the camera instead of drifting off.
+    offset: Vec2,
+    txt: String,
+    size: f32,
+    /// Measured once at push so drawing never formats or measures.
+    width: f32,
     age: f32,
     crit: bool,
     elem: Option<Element>,
     mult: f32,
+}
+
+impl DamageNumber {
+    fn new(offset: Vec2, amount: f32, crit: bool, elem: Option<Element>, mult: f32) -> Self {
+        let base = if crit { 24.0 } else { 18.0 };
+        let size = if elem.is_some() && mult > 1.0 { if crit { 28.0 } else { 22.0 } } else { base };
+        let txt = format!("{amount:.0}");
+        let width = kit::measure(&txt, size as u16).width;
+        DamageNumber { offset, txt, size, width, age: 0.0, crit, elem, mult }
+    }
 }
 
 struct Particle {
@@ -443,7 +457,8 @@ pub struct Fx {
     pub flash: f32,
     number_tick: u32,
     /// Equipment drops: (pos, rarity, age).
-    gear_drops: Vec<(Vec2, sim::gear::Rarity, f32)>,
+    /// (world pos, rarity, age, label, label width) — label and width are cached at push.
+    gear_drops: Vec<(Vec2, sim::gear::Rarity, f32, String, f32)>,
 }
 
 const MAX_NUMBERS: usize = 40;
@@ -495,7 +510,7 @@ impl Fx {
         self.banner = Some((text, 2.8));
     }
 
-    pub fn absorb(&mut self, events: &[Event]) {
+    pub fn absorb(&mut self, events: &[Event], player: sim::Vec2) {
         let mut round_banner = None;
         for ev in events {
             match *ev {
@@ -505,7 +520,7 @@ impl Fx {
                     if self.numbers.len() >= MAX_NUMBERS {
                         self.numbers.remove(0);
                     }
-                    self.numbers.push(DamageNumber { pos: vec2(pos.x, pos.y - 8.0), amount, age: 0.0, crit, elem, mult });
+                    self.numbers.push(DamageNumber::new(vec2(pos.x - player.x, pos.y - 8.0 - player.y), amount, crit, elem, mult));
                 }
                 Event::Kill { pos, kind } => {
                     let (n, color) = match kind {
@@ -588,7 +603,9 @@ impl Fx {
                 }
                 Event::Curtain => {}
                 Event::GearDrop { pos, rarity } => {
-                    self.gear_drops.push((vec2(pos.x, pos.y), rarity, 0.0));
+                    let label = format!("{} gear", rarity.name());
+                    let width = kit::measure(&label, 15).width;
+                    self.gear_drops.push((vec2(pos.x, pos.y), rarity, 0.0, label, width));
                     if rarity >= sim::gear::Rarity::Legendary {
                         self.announce(format!("{} GEAR!", rarity.name().to_uppercase()));
                     }
@@ -745,7 +762,7 @@ impl Fx {
         self.gear_drops.retain(|g| g.2 < 2.2);
         for n in &mut self.numbers {
             n.age += dt;
-            n.pos.y -= 28.0 * dt;
+            n.offset.y -= 28.0 * dt;
         }
         self.numbers.retain(|n| n.age < 0.6);
         for p in &mut self.particles {
@@ -871,7 +888,8 @@ fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, 
     if rank >= Rank::Mini {
         let pulse = 0.16 + 0.06 * (tf * 4.0).sin();
         draw_circle(pos.x, pos.y - h * 0.3 + bob, w * 0.55, Color::new(accent.r, accent.g, accent.b, pulse * 0.6));
-        draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 4.0, 2.0, Color::new(accent.r, accent.g, accent.b, 0.35));
+        let ring = crate::ui::element_color(kind.element());
+        draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 4.0, 2.0, Color::new(ring.r, ring.g, ring.b, 0.6));
     } else if matches!(ai, Ai::Ranged { .. }) {
         draw_circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
     }
@@ -1761,30 +1779,29 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Damage numbers are drawn in screen space so the text stays crisp.
     // Screen-space overlays use the virtual UI space so they scale with the rest of the UI.
     kit::begin_ui();
+    let player = vec2(world.player.pos.x, world.player.pos.y);
     for n in &fx.numbers {
-        let s = kit::to_ui(cam.world_to_screen(n.pos));
+        let s = kit::to_ui(cam.world_to_screen(player + n.offset));
         let alpha = 1.0 - (n.age / 0.6).powi(2);
-        let txt = format!("{:.0}", n.amount);
-        let (size, c) = if n.crit { (24.0, Color::new(1.0, 0.8, 0.25, alpha)) } else { (18.0, Color::new(1.0, 1.0, 1.0, alpha)) };
-        let (size, c) = match n.elem {
+        let c = if n.crit { Color::new(1.0, 0.8, 0.25, alpha) } else { Color::new(1.0, 1.0, 1.0, alpha) };
+        let c = match n.elem {
             Some(e) if n.mult > 1.0 => {
                 let ec = crate::ui::element_color(e);
-                (size * 1.2, Color::new(ec.r, ec.g, ec.b, alpha))
+                Color::new(ec.r, ec.g, ec.b, alpha)
             }
-            _ if n.mult < 1.0 => (size, Color::new(kit::FAINT.r, kit::FAINT.g, kit::FAINT.b, alpha)),
-            _ => (size, c),
+            _ if n.mult < 1.0 => Color::new(kit::FAINT.r, kit::FAINT.g, kit::FAINT.b, alpha),
+            _ => c,
         };
-        kit::text(&txt, s.x - 5.0 + 1.0, s.y + 1.0, size, Color::new(0.0, 0.0, 0.0, alpha));
-        kit::text(&txt, s.x - 5.0, s.y, size, c);
+        let x = s.x - n.width / 2.0;
+        kit::text(&n.txt, x + 1.0, s.y + 1.0, n.size, Color::new(0.0, 0.0, 0.0, alpha));
+        kit::text(&n.txt, x, s.y, n.size, c);
     }
-    for (pos, r, age) in &fx.gear_drops {
+    for (pos, r, age, label, width) in &fx.gear_drops {
         let sp = kit::to_ui(cam.world_to_screen(vec2(pos.x, pos.y - 30.0 - age * 14.0)));
         let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
         let c = crate::armory::rarity_color(*r);
-        let label = format!("{} gear", r.name());
-        let d = kit::measure(&label, 15);
-        kit::text(&label, sp.x - d.width / 2.0 + 1.0, sp.y + 1.0, 15.0, Color::new(0.0, 0.0, 0.0, a));
-        kit::text(&label, sp.x - d.width / 2.0, sp.y, 15.0, Color::new(c.r, c.g, c.b, a));
+        kit::text(label, sp.x - width / 2.0 + 1.0, sp.y + 1.0, 15.0, Color::new(0.0, 0.0, 0.0, a));
+        kit::text(label, sp.x - width / 2.0, sp.y, 15.0, Color::new(c.r, c.g, c.b, a));
     }
     if let Some(s) = world.shrine {
         let sp = kit::to_ui(cam.world_to_screen(vec2(s.x, s.y)));
@@ -1942,7 +1959,7 @@ fn draw_hannya_aura(world: &World, t: f32) {
     // Hannya's Wrath charging: a ring of dread collapsing inward.
     if world.player.form <= sim::content::HANNYA_FINALE_CHARGE {
         let k = 1.0 - world.player.form / sim::content::HANNYA_FINALE_CHARGE;
-        let rr = sim::content::HANNYA_FINALE_RADIUS * (1.0 - k * 0.8);
+        let rr = world.reach_cap(sim::content::HANNYA_FINALE_RADIUS) * (1.0 - k * 0.8);
         draw_circle_lines(p.x, p.y - 6.0, rr, 4.0, Color::new(1.0, 0.1, 0.15, 0.4 + 0.5 * k));
         draw_circle(p.x, p.y - 30.0, 6.0 + 16.0 * k, Color::new(0.1, 0.0, 0.03, 0.9));
         draw_circle_lines(p.x, p.y - 30.0, 6.0 + 16.0 * k, 2.0, Color::new(1.0, 0.2, 0.25, 1.0));
@@ -2172,7 +2189,7 @@ fn draw_drops(world: &World, a: &Assets, fx: &Fx, view: &Rect, time: f64) {
             DrawTextureParams { dest_size: Some(vec2(14.0 * size, 12.0 * size)), ..Default::default() },
         );
     }
-    for (pos, r, age) in &fx.gear_drops {
+    for (pos, r, age, ..) in &fx.gear_drops {
         let c = crate::armory::rarity_color(*r);
         let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
         let h = 70.0 + 30.0 * r.index() as f32;

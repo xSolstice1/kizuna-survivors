@@ -76,10 +76,21 @@ More heroes are on the way. Heroes unlock by clearing worlds with a specific her
 - **Common → Uncommon → Rare → Epic → Legendary → Mythic**: one to six rolled bonuses, each with a
   roll quality to chase. Legendary and Mythic items carry a unique effect; Legendary+ Arsenals grant
   attacks you can't get anywhere else (thunder drums, a fox procession, a sky dragon, moonfall …).
+- **Every item has an element**: it adds damage of that element and resistance to enemies of it
+  (shown by name on the item card). Resistance stacks across gear and a set, capped at 60%, and
+  only applies to hits from enemies of that element. Legendary+ gear can roll Light or Darkness.
 - **Exotics** — fourteen hand-made artefacts (a sovereign's severed finger, a hollow mask shard,
-  the Three Sacred Treasures …) that drop only from a world's final boss, very rarely.
-- **World sets**, **Spirit Dust** crafting (salvage, upgrade to +10, reroll a bonus) and a
-  **Shrine Draw** with published odds and pity.
+  the Three Sacred Treasures …) that drop only from a world's final boss, very rarely. Each has a
+  fixed element.
+- **Set** — the top tier. Each world has a six-piece set (the rings count only as a pair) that
+  drops only from that world's mini-boss, boss and final boss, with a small chance per kill that
+  grows with difficulty and Gear Find. Set pieces roll Exotic-quality bonuses, carry a unique, and
+  take the world's element. Wearing pieces unlocks **2, 4, 5 and 6-piece bonuses**: the first two
+  are the old world-set bonuses, the 5-piece adds +25% damage and +25% resistance of the set's
+  element, and the 6-piece is a signature effect per set. Old set-tagged gear still counts toward
+  the 2 and 4-piece bonuses only. Set pieces are never auto-salvaged on a full bag.
+- **Spirit Dust** crafting (salvage, upgrade to +10, reroll a bonus) and a **Shrine Draw** with
+  published odds and pity (the Draw never gives Set).
 
 ![Shrine Draw](docs/screenshots/shrine_draw.png)
 

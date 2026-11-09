@@ -202,7 +202,8 @@ async fn main() {
         kit::begin_ui();
         let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
         touch.update(in_run && !map_open);
-        if touch.pause && in_run {
+        let portrait = screen_height() > screen_width();
+        if (touch.pause || portrait) && in_run {
             screen = Screen::Paused;
         }
         let now = get_time();
@@ -231,6 +232,7 @@ async fn main() {
                 save::store(&profile);
                 audio.play(synth::Sfx::Buy);
             }
+            ui::rotate_prompt();
             next_frame().await;
             continue;
         }
@@ -322,6 +324,7 @@ async fn main() {
             Screen::Playing | Screen::Paused => {}
         }
         if !matches!(screen, Screen::Playing | Screen::Paused) {
+            ui::rotate_prompt();
             next_frame().await;
             continue;
         }
@@ -454,7 +457,7 @@ async fn main() {
                 let t_s = get_time();
                 world.step(input);
                 perf_parts[0] += (get_time() - t_s) * 1000.0;
-                fx.absorb(&world.events);
+                fx.absorb(&world.events, world.player.pos);
                 audio.absorb(&world.events);
                 // Delivered exactly once, even if the sim steps several times this frame.
                 input.special = false;
@@ -534,7 +537,9 @@ async fn main() {
         }
         let mut overlay_picked = false;
         let focus_overlay_open = world.chest_result.is_none() && (world.shrine_offer.is_some() || world.offer.is_some());
-        if let Some(items) = world.chest_result.clone() {
+        if portrait {
+            // The rotate prompt covers the screen; draw no widgets so taps reach nothing.
+        } else if let Some(items) = world.chest_result.clone() {
             let anim = chest_anim.get_or_insert_with(|| chest_ui::ChestAnim::new(items));
             let done = anim.update_and_draw(&assets, dt);
             for cue in anim.cues.drain(..) {
@@ -650,6 +655,7 @@ async fn main() {
                 get_screen_data().export_png(&path);
             }
         }
+        ui::rotate_prompt();
         next_frame().await
     }
 }
@@ -680,7 +686,7 @@ fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
         }
         GrantArts => {
             for art in gear::LEGENDARY_ARTS {
-                let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 40, None);
+                let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Mythic, 40);
                 it.art = Some(art);
                 profile.add_item(it);
             }
@@ -689,7 +695,16 @@ fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
             for k in 0..20 {
                 let r = if k % 3 == 0 { Rarity::Mythic } else { Rarity::Legendary };
                 let set = sim::campaign::ALL_STAGES[(rng.next_u32() as usize) % 6];
-                profile.add_item(gear::roll_item(&mut rng, None, r, 40, Some(set)));
+                let mut it = gear::roll_item(&mut rng, None, r, 40);
+                it.set = Some(set);
+                profile.add_item(it);
+            }
+        }
+        GrantSet => {
+            let world = profile.stage;
+            for slot in gear::set_pieces(world) {
+                let piece = (0..500).map(|_| gear::roll_set_piece(&mut rng, world, 40)).find(|it| it.slot == slot);
+                profile.add_item(piece.expect("a Set piece for every slot"));
             }
         }
         Sen => profile.sen += 10_000,

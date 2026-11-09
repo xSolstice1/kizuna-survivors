@@ -178,12 +178,12 @@ pub fn rounded(x: f32, y: f32, w: f32, h: f32, r: f32, c: Color) {
     // One triangle fan around the perimeter, so translucent fills don't double-blend at overlaps.
     let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
     let centre = vec2(x + w / 2.0, y + h / 2.0);
-    let seg = 5;
-    let mut pts: Vec<Vec2> = Vec::with_capacity(4 * (seg + 1));
-    for (cx, cy, a0) in [(x + w - r, y + r, 270.0f32), (x + w - r, y + h - r, 0.0), (x + r, y + h - r, 90.0), (x + r, y + r, 180.0)] {
-        for k in 0..=seg {
-            let t = (a0 + 90.0 * k as f32 / seg as f32).to_radians();
-            pts.push(vec2(cx + t.cos() * r, cy + t.sin() * r));
+    const SEG: usize = 5;
+    let mut pts = [Vec2::ZERO; 4 * (SEG + 1)];
+    for (q, (cx, cy, a0)) in [(x + w - r, y + r, 270.0f32), (x + w - r, y + h - r, 0.0), (x + r, y + h - r, 90.0), (x + r, y + r, 180.0)].into_iter().enumerate() {
+        for k in 0..=SEG {
+            let t = (a0 + 90.0 * k as f32 / SEG as f32).to_radians();
+            pts[q * (SEG + 1) + k] = vec2(cx + t.cos() * r, cy + t.sin() * r);
         }
     }
     for i in 0..pts.len() {
