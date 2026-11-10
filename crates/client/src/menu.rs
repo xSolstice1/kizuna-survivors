@@ -1022,7 +1022,7 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
             if !st.create {
                 kit::text("Welcome back", fx, y + 6.0, 26.0, kit::INK);
                 y += 48.0;
-                ti::field(1, Kind::Email, Rect::new(fx, y, fw, field_h), "Email", "you@example.com");
+                ti::field(1, Kind::Text, Rect::new(fx, y, fw, field_h), "Username or email", "KuonFan or you@example.com");
                 y += field_h + 30.0;
                 ti::field(2, Kind::Password, Rect::new(fx, y, fw, field_h), "Password", "Your password");
                 let forgot = link("Forgot password?", fx + fw, y + field_h + 20.0, 13.0, true);
