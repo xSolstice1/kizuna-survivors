@@ -21,43 +21,30 @@
     <h1>KIZUNA SURVIVORS</h1>
     <h2 id="title">Signing you in…</h2>
     <p id="text"></p>
-    <a class="btn" id="go" href="./" style="display:none">Open the game</a>
   </div>
   <script>
-    // Where Google sign-in and every emailed link (confirm, sign-in, password reset) land.
-    // Hands the session to the game tab through localStorage (web/cloud.js listens for it),
-    // then closes itself if it was opened as a sign-in window.
+    // The Google sign-in popup returns here: hand the session to the game tab (web/cloud.js
+    // listens for it) and close. Opened any other way (e.g. a link from an older email), go
+    // straight into the game, which signs in from the same URL.
     (function () {
+      if (!window.opener) { location.replace("./" + location.search + location.hash); return; }
       var q = new URLSearchParams(location.hash.replace(/^#/, "") || location.search.replace(/^\?/, ""));
-      var title = document.getElementById("title"), text = document.getElementById("text"), go = document.getElementById("go");
-      function show(t, body, error) {
-        title.textContent = t;
-        text.textContent = body;
-        go.style.display = "inline-block";
-        if (error) document.getElementById("card").className = "card err";
-      }
-      if (q.get("error_description") || q.get("error")) {
-        show("Sign-in didn't work", (q.get("error_description") || q.get("error")).replace(/\+/g, " ") + ". Go back to the game and try again.", true);
-        return;
-      }
       var token = q.get("access_token");
-      if (!token) { show("Nothing to do here", "Open the game to sign in.", true); return; }
-      var type = q.get("type");
       try {
-        localStorage.setItem("kz_cloud_recovery", type === "recovery" ? "1" : "0");
-        localStorage.setItem("kz_cloud_session", JSON.stringify({
-          access_token: token,
-          refresh_token: q.get("refresh_token"),
-          expires_at: Date.now() / 1000 + Number(q.get("expires_in") || 3600),
-          user: null,
-        }));
+        if (token) {
+          localStorage.setItem("kz_cloud_recovery", "0");
+          localStorage.setItem("kz_cloud_session", JSON.stringify({
+            access_token: token,
+            refresh_token: q.get("refresh_token"),
+            expires_at: Date.now() / 1000 + Number(q.get("expires_in") || 3600),
+            user: null,
+          }));
+        }
       } catch (e) {}
       history.replaceState(null, "", location.pathname);
-      if (type === "recovery") show("Reset link accepted", "Go back to the game tab to choose your new password.");
-      else if (type === "signup") show("Email confirmed", "You're signed in. Head back to the game.");
-      else show("You're signed in", "Head back to the game; it has signed you in already.");
-      // A sign-in window closes itself; a tab opened from an email offers the game instead.
-      if (window.opener) setTimeout(function () { window.close(); }, 900);
+      document.getElementById("title").textContent = token ? "You're signed in" : "Couldn't sign you in";
+      document.getElementById("text").textContent = token ? "You can close this window." : "Please close this window and try again from the game.";
+      window.close();
     })();
   </script>
 </body>

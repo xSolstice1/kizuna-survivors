@@ -24,8 +24,9 @@ game keeps saving to the browser only.
   game's field boxes so mobile keyboards and password managers work. Sync is local-first: the game hands over its state on every save, the plugin
   sends only the difference (debounced), keeps a queue of runs while offline, and on sign-in
   reconciles: upload a new account, take the cloud copy if only the cloud changed, or ask the
-  player (on the sign-in screen) when both changed. Google sign-in opens in a popup window; the
-  game tab picks the session up through a `storage` event and carries on by itself.
+  player (on the sign-in screen) when both changed. Google sign-in opens in a popup window that
+  closes itself; the game tab picks the session up through a `storage` event. Emailed links
+  (confirm, sign-in, password reset) open the game directly, already signed in.
 - **Game** (`crates/client/src/cloud.rs`): converts the save to and from the database shape;
   Settings → Account shows username, email, sign-in method, member-since date, sync status and
   Sign out; the main menu has an account chip that opens it.
@@ -37,8 +38,9 @@ game keeps saving to the browser only.
    `supabase/migrations/` and run it (or `supabase db push` with the Supabase CLI).
    `…_usernames.sql` adds unique usernames for email + password accounts.
 3. Authentication → URL Configuration: set **Site URL** to `https://kizuna-survivors.vercel.app`
-   and add to **Redirect URLs** (path wildcards matter: Google sign-in and every emailed link
-   return to `auth-callback.html`, which hands the session to the game tab):
+   and add to **Redirect URLs** (path wildcards matter: emailed links open the game itself,
+   and the Google popup returns to `auth-callback.html`, which hands the session to the game
+   tab and closes):
    - `https://kizuna-survivors.vercel.app/**`
    - `https://kizuna-survivors-git-*-xsolstice1s-projects.vercel.app/**` (preview deploys)
    - `http://localhost:8000/**` (local testing)
