@@ -24,6 +24,44 @@
   var server = null;         // last fetched cloud state (for conflicts)
   var incoming = null;       // state the game should load (string), when it should adopt the cloud
   var pushTimer = null, retryTimer = null, busy = false;
+  // In-game feedback for the sign-in screen: text and kind (0 info, 1 error, 2 success).
+  var message = "", messageKind = 0, pending = false, recovery = false, username = "";
+  function say(text, kind) { message = text || ""; messageKind = kind || 0; }
+  // Turns Supabase Auth errors into player-facing sentences.
+  function friendly(body, status) {
+    var code = (body && (body.error_code || body.code || body.error)) || "";
+    var msg = (body && (body.msg || body.message || body.error_description)) || "";
+    var map = {
+      invalid_credentials: "Wrong email or password.",
+      invalid_grant: "Wrong email or password.",
+      email_not_confirmed: "Confirm your email first: check your inbox for the link.",
+      user_already_exists: "That email already has an account. Sign in instead.",
+      email_exists: "That email already has an account. Sign in instead.",
+      weak_password: "Choose a longer password (at least 8 characters).",
+      over_email_send_rate_limit: "Too many emails sent. Try again in a few minutes.",
+      over_request_rate_limit: "Too many attempts. Wait a moment and try again.",
+      email_address_invalid: "That email address doesn't look right.",
+      validation_failed: "Check the email address and password.",
+    };
+    if (map[code]) return map[code];
+    if (/invalid login/i.test(msg)) return map.invalid_credentials;
+    if (/already registered/i.test(msg)) return map.user_already_exists;
+    if (/password/i.test(msg) && /6|8|short|weak/i.test(msg)) return map.weak_password;
+    return msg ? msg.charAt(0).toUpperCase() + msg.slice(1) : "Something went wrong (" + status + "). Try again.";
+  }
+  function authPost(path, body) {
+    pending = true;
+    return fetch(URL_ + path, { method: "POST", headers: headers(true), body: JSON.stringify(body) })
+      .then(function (r) { return r.text().then(function (t) { var j = t ? JSON.parse(t) : {}; pending = false; if (!r.ok) throw { body: j, status: r.status }; return j; }); })
+      .catch(function (e) { pending = false; if (e && e.body !== undefined) throw e; throw { body: { msg: "Can't reach the server. Check your connection." }, status: 0 }; });
+  }
+  function startSession(j) {
+    saveSession({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() / 1000 + (j.expires_in || 3600), user: j.user ? { id: j.user.id, email: j.user.email || "" } : null });
+    say("", 0);
+    status = 2;
+    if (local) reconcile();
+  }
+  function back() { return location.origin + location.pathname; }
 
   function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
@@ -48,8 +86,15 @@
   }
   function fromHash() {
     var h = location.hash.replace(/^#/, "");
+    if (h.indexOf("error_description=") >= 0) {
+      var eq = new URLSearchParams(h);
+      say(friendly({ msg: eq.get("error_description") }, 0), 1);
+      history.replaceState(null, "", location.pathname + location.search);
+      return false;
+    }
     if (h.indexOf("access_token=") < 0) return false;
     var q = new URLSearchParams(h);
+    recovery = q.get("type") === "recovery";
     saveSession({ access_token: q.get("access_token"), refresh_token: q.get("refresh_token"), expires_at: Date.now() / 1000 + Number(q.get("expires_in") || 3600) });
     history.replaceState(null, "", location.pathname + location.search);
     return true;
@@ -96,8 +141,10 @@
     p.then(function () { return rpc("get_state"); }).then(function (st) {
       busy = false;
       var mine = pick(local);
-      if (!st.exists) return push(true, 0, null);
+      username = st.username || username;
+      if (!st.exists) return push(true, Number(st.version || 0), null);
       server = st;
+      username = st.username || "";
       var theirs = pick(st);
       var sameUser = get(LS.user) === session.user.id;
       var base = syncedState();
@@ -173,7 +220,7 @@
   }
 
   // ───────────── Bridge to the game ─────────────
-  var outText = new Uint8Array(0), outUser = new Uint8Array(0);
+  var outText = new Uint8Array(0), outUser = new Uint8Array(0), outMsg = new Uint8Array(0);
   function readStr(ptr, len) { return new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len)); }
   miniquad_add_plugin({
     name: "kz_cloud",
@@ -201,18 +248,69 @@
         if (!status) return;
         var provider = readStr(ptr, len);
         var back = location.origin + location.pathname;
-        if (provider === "email") {
-          var email = window.prompt("Email address for your sign-in link:");
-          if (!email) return;
-          fetch(URL_ + "/auth/v1/otp?redirect_to=" + encodeURIComponent(back), { method: "POST", headers: headers(true), body: JSON.stringify({ email: email, create_user: true }) })
-            .then(function (r) { window.alert(r.ok ? "Check your inbox for the sign-in link." : "Couldn't send the link (" + r.status + ")."); });
-          return;
-        }
         location.href = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back);
       };
+      env.kz_cloud_password_sign_in = function (ep, el, pp, pl) {
+        if (!status || pending) return;
+        authPost("/auth/v1/token?grant_type=password", { email: readStr(ep, el).trim(), password: readStr(pp, pl) })
+          .then(startSession).catch(function (e) { say(friendly(e.body, e.status), 1); });
+      };
+      env.kz_cloud_sign_up = function (up, ul, ep, el, pp, pl) {
+        if (!status || pending) return;
+        var name = readStr(up, ul).trim(), email = readStr(ep, el).trim(), pw = readStr(pp, pl);
+        if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return say("Usernames are 3 to 16 letters, numbers or underscores.", 1);
+        if (pw.length < 8) return say("Choose a longer password (at least 8 characters).", 1);
+        pending = true;
+        fetch(URL_ + "/rest/v1/rpc/username_available", { method: "POST", headers: { apikey: KEY, "Content-Type": "application/json" }, body: JSON.stringify({ p_username: name }) })
+          .then(function (r) { return r.json(); })
+          .then(function (free) {
+            pending = false;
+            if (free !== true) return say("That username is taken. Try another.", 1);
+            return authPost("/auth/v1/signup?redirect_to=" + encodeURIComponent(back()), { email: email, password: pw, data: { username: name } }).then(function (j) {
+              if (j.access_token) return startSession(j);
+              say("Almost there: we sent a confirmation link to " + email + ". Open it, then sign in.", 2);
+            });
+          })
+          .catch(function (e) { pending = false; say(friendly(e && e.body, e && e.status), 1); });
+      };
+      env.kz_cloud_magic_link = function (ep, el) {
+        if (!status || pending) return;
+        var email = readStr(ep, el).trim();
+        if (!email) return say("Enter your email address first.", 1);
+        authPost("/auth/v1/otp?redirect_to=" + encodeURIComponent(back()), { email: email, create_user: true })
+          .then(function () { say("Sign-in link sent to " + email + ". Open it on this device.", 2); })
+          .catch(function (e) { say(friendly(e.body, e.status), 1); });
+      };
+      env.kz_cloud_reset = function (ep, el) {
+        if (!status || pending) return;
+        var email = readStr(ep, el).trim();
+        if (!email) return say("Enter your email address first.", 1);
+        authPost("/auth/v1/recover?redirect_to=" + encodeURIComponent(back()), { email: email })
+          .then(function () { say("If that email has an account, a reset link is on its way.", 2); })
+          .catch(function (e) { say(friendly(e.body, e.status), 1); });
+      };
+      env.kz_cloud_set_password = function (pp, pl) {
+        if (!session || pending) return;
+        var pw = readStr(pp, pl);
+        if (pw.length < 8) return say("Choose a longer password (at least 8 characters).", 1);
+        pending = true;
+        refresh().then(function () {
+          return fetch(URL_ + "/auth/v1/user", { method: "PUT", headers: headers(true), body: JSON.stringify({ password: pw }) });
+        }).then(function (r) { return r.json().then(function (j) { pending = false; if (!r.ok) throw { body: j, status: r.status }; }); })
+          .then(function () { recovery = false; say("Password updated.", 2); })
+          .catch(function (e) { pending = false; say(friendly(e && e.body, e && e.status), 1); });
+      };
+      env.kz_cloud_recovery = function () { return recovery ? 1 : 0; };
+      env.kz_cloud_pending = function () { return pending || busy ? 1 : 0; };
+      env.kz_cloud_message_kind = function () { return messageKind; };
+      env.kz_cloud_message_len = function () { outMsg = new TextEncoder().encode(message); return outMsg.length; };
+      env.kz_cloud_message = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outMsg.subarray(0, len)); };
+      env.kz_cloud_clear_message = function () { say("", 0); };
       env.kz_cloud_sign_out = function () {
         if (session) fetch(URL_ + "/auth/v1/logout", { method: "POST", headers: headers() }).catch(function () {});
         saveSession(null);
+        username = "";
+        recovery = false;
         [LS.synced, LS.version, LS.user].forEach(function (k) { set(k, null); });
         status = status ? 1 : 0;
       };
@@ -230,7 +328,7 @@
       };
       env.kz_cloud_incoming = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outText.subarray(0, len)); };
       env.kz_cloud_user_len = function () {
-        outUser = new TextEncoder().encode(session && session.user ? session.user.email || "" : "");
+        outUser = new TextEncoder().encode(username || (session && session.user ? session.user.email || "" : ""));
         return outUser.length;
       };
       env.kz_cloud_user = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outUser.subarray(0, len)); };

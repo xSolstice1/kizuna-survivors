@@ -42,6 +42,47 @@ mod backend {
         fn kz_cloud_incoming(ptr: *mut u8, len: u32);
         fn kz_cloud_user_len() -> u32;
         fn kz_cloud_user(ptr: *mut u8, len: u32);
+        fn kz_cloud_password_sign_in(e: *const u8, el: u32, p: *const u8, pl: u32);
+        fn kz_cloud_sign_up(u: *const u8, ul: u32, e: *const u8, el: u32, p: *const u8, pl: u32);
+        fn kz_cloud_magic_link(e: *const u8, el: u32);
+        fn kz_cloud_reset(e: *const u8, el: u32);
+        fn kz_cloud_set_password(p: *const u8, pl: u32);
+        fn kz_cloud_recovery() -> u32;
+        fn kz_cloud_pending() -> u32;
+        fn kz_cloud_message_kind() -> u32;
+        fn kz_cloud_message_len() -> u32;
+        fn kz_cloud_message(ptr: *mut u8, len: u32);
+        fn kz_cloud_clear_message();
+    }
+
+    pub fn password_sign_in(e: &str, p: &str) {
+        unsafe { kz_cloud_password_sign_in(e.as_ptr(), e.len() as u32, p.as_ptr(), p.len() as u32) }
+    }
+    pub fn sign_up(u: &str, e: &str, p: &str) {
+        unsafe { kz_cloud_sign_up(u.as_ptr(), u.len() as u32, e.as_ptr(), e.len() as u32, p.as_ptr(), p.len() as u32) }
+    }
+    pub fn magic_link(e: &str) {
+        unsafe { kz_cloud_magic_link(e.as_ptr(), e.len() as u32) }
+    }
+    pub fn reset(e: &str) {
+        unsafe { kz_cloud_reset(e.as_ptr(), e.len() as u32) }
+    }
+    pub fn set_password(p: &str) {
+        unsafe { kz_cloud_set_password(p.as_ptr(), p.len() as u32) }
+    }
+    pub fn recovery() -> bool {
+        unsafe { kz_cloud_recovery() != 0 }
+    }
+    pub fn pending() -> bool {
+        unsafe { kz_cloud_pending() != 0 }
+    }
+    pub fn message() -> (String, u32) {
+        let n = unsafe { kz_cloud_message_len() };
+        let text = if n == 0 { String::new() } else { take(n, kz_cloud_message) };
+        (text, unsafe { kz_cloud_message_kind() })
+    }
+    pub fn clear_message() {
+        unsafe { kz_cloud_clear_message() }
     }
 
     /// Plugin version check (see miniquad's plugin system).
@@ -109,6 +150,21 @@ mod backend {
     pub fn user() -> String {
         String::new()
     }
+    pub fn password_sign_in(_: &str, _: &str) {}
+    pub fn sign_up(_: &str, _: &str, _: &str) {}
+    pub fn magic_link(_: &str) {}
+    pub fn reset(_: &str) {}
+    pub fn set_password(_: &str) {}
+    pub fn recovery() -> bool {
+        false
+    }
+    pub fn pending() -> bool {
+        false
+    }
+    pub fn message() -> (String, u32) {
+        (String::new(), 0)
+    }
+    pub fn clear_message() {}
 }
 
 pub fn status() -> Status {
@@ -139,7 +195,41 @@ pub fn sign_out() {
 pub fn resolve(keep_cloud: bool) {
     backend::resolve(if keep_cloud { 0 } else { 1 });
 }
-/// The signed-in account's email (or name).
+pub fn password_sign_in(email: &str, password: &str) {
+    backend::password_sign_in(email, password);
+}
+/// Creates an account (username, email, password).
+pub fn sign_up(username: &str, email: &str, password: &str) {
+    backend::sign_up(username, email, password);
+}
+pub fn magic_link(email: &str) {
+    backend::magic_link(email);
+}
+/// Emails a password-reset link.
+pub fn reset_password(email: &str) {
+    backend::reset(email);
+}
+/// After opening a reset link: sets the new password.
+pub fn set_password(password: &str) {
+    backend::set_password(password);
+}
+/// Opened from a password-reset link (show "set a new password").
+pub fn recovery() -> bool {
+    backend::recovery()
+}
+/// A sign-in request is in flight.
+pub fn pending() -> bool {
+    backend::pending()
+}
+/// Feedback for the sign-in screen: (text, kind) with kind 0 info, 1 error, 2 success.
+pub fn message() -> (String, u32) {
+    backend::message()
+}
+pub fn clear_message() {
+    backend::clear_message();
+}
+
+/// The signed-in account's username (or email).
 pub fn user() -> String {
     backend::user()
 }

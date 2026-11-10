@@ -17,6 +17,7 @@ mod save;
 mod sprites;
 mod stage;
 mod synth;
+mod textinput;
 mod touch;
 mod ui;
 mod voice;
@@ -133,6 +134,7 @@ async fn main() {
     let mut draw_state = armory::DrawState::default();
     let mut dev = devmenu::DevMenu::default();
     let mut stats_scroll = menu::StripScroll::default();
+    let mut login_state = menu::LoginState::default();
     let mut world_rt: Option<RenderTarget> = None;
     let mut dev_pending: Option<devmenu::DevAction> = None;
     // The big map view is open (the run pauses meanwhile).
@@ -257,7 +259,7 @@ async fn main() {
         // --- Out-of-run screens ---
         match screen {
             Screen::Login => {
-                if menu::login(now) {
+                if menu::login(&mut login_state, &assets, now) {
                     screen = Screen::Menu;
                 }
             }

@@ -9,7 +9,7 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 RUSTFLAGS="-C target-feature=+simd128 -C link-arg=--allow-undefined" cargo build -p client --release --target wasm32-unknown-unknown
 
 rm -rf dist && mkdir -p dist
-cp web/index.html web/perf.js web/config.js web/cloud.js web/manifest.webmanifest web/icon-192.png web/icon-512.png dist/
+cp web/index.html web/perf.js web/config.js web/cloud.js web/input.js assets/fonts/Nunito-Bold.ttf web/manifest.webmanifest web/icon-192.png web/icon-512.png dist/
 cp "$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/macroquad-0.4.*/js | tail -1)/mq_js_bundle.js" dist/
 WASM="$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/client.wasm"
 if command -v wasm-opt >/dev/null; then

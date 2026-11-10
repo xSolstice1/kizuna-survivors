@@ -18,8 +18,10 @@ game keeps saving to the browser only.
     `sync_state(...)` (one transaction: profile, item upserts and deletions, loadout) and
     `record_run(...)`. They trust the client today; add validation inside them later
     (server-rolled loot, run replay, trades) without changing the client or the data.
-- **Browser** (`web/cloud.js`): sign-in through Supabase Auth's REST API (Google, Discord or an
-  email link), and local-first sync: the game hands over its state on every save, the plugin
+- **Browser** (`web/cloud.js`): sign-in through Supabase Auth's REST API: email + password
+  (sign-up takes a unique username), password reset, Google, Discord or an email link. All
+  forms and messages are drawn in the game; `web/input.js` places real `<input>`s over the
+  game's field boxes so mobile keyboards and password managers work. Then and local-first sync: the game hands over its state on every save, the plugin
   sends only the difference (debounced), keeps a queue of runs while offline, and on sign-in
   reconciles: upload a new account, take the cloud copy if only the cloud changed, or ask the
   player (Settings → Account) when both changed.
@@ -29,8 +31,9 @@ game keeps saving to the browser only.
 ## Setting it up
 
 1. Create a Supabase project.
-2. Run the migration: Supabase dashboard → SQL Editor → paste the file and run it (or
-   `supabase db push` with the Supabase CLI linked to the project).
+2. Run the migrations in order: Supabase dashboard → SQL Editor → paste each file in
+   `supabase/migrations/` and run it (or `supabase db push` with the Supabase CLI).
+   `…_usernames.sql` adds unique usernames for email + password accounts.
 3. Authentication → URL Configuration: set **Site URL** to `https://kizuna-survivors.vercel.app`
    and add it (plus `http://localhost:8000` for local testing) to **Redirect URLs**.
 4. Authentication → Providers: enable the ones you want.

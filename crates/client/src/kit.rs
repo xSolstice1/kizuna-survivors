@@ -65,7 +65,7 @@ pub fn draw_circle_lines(x: f32, y: f32, r: f32, thickness: f32, c: Color) {
 }
 
 fn circle_sides(r: f32) -> u8 {
-    (r * 0.25).clamp(8.0, 40.0) as u8
+    (r * 0.4).clamp(10.0, 48.0) as u8
 }
 
 /// Clips drawing to a rectangle in virtual UI coordinates (None = no clip).
