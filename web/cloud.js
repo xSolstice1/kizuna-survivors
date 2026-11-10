@@ -61,7 +61,9 @@
     status = 2;
     if (local) reconcile();
   }
-  function back() { return location.origin + location.pathname; }
+  // Google sign-in and every emailed link land on auth-callback.html, which hands the session
+  // back to this tab (see the storage listener below).
+  function back() { return location.origin + location.pathname.replace(/[^/]*$/, "") + "auth-callback.html"; }
 
   function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
@@ -108,7 +110,10 @@
   }
   function loadUser() {
     return fetch(URL_ + "/auth/v1/user", { headers: headers() }).then(function (r) { if (!r.ok) throw new Error("user " + r.status); return r.json(); })
-      .then(function (u) { session.user = { id: u.id, email: u.email || (u.user_metadata && u.user_metadata.name) || "" }; saveSession(session); });
+      .then(function (u) {
+        session.user = { id: u.id, email: u.email || "", provider: (u.app_metadata && u.app_metadata.provider) || "email", since: u.created_at || "" };
+        saveSession(session);
+      });
   }
   function rpc(name, args) {
     return refresh().then(function () {
@@ -216,11 +221,22 @@
     if (!session && s) { try { session = JSON.parse(s); } catch (e) {} }
     if (hadHash) session.user = null;
     if (session) status = 2;
+    recovery = recovery || get("kz_cloud_recovery") === "1";
     window.addEventListener("online", function () { if (status === 5) reconcile(); });
+    // A sign-in finished in another tab or window (Google popup, an emailed link).
+    window.addEventListener("storage", function (e) {
+      if (e.key !== LS.session || !e.newValue) return;
+      try { session = JSON.parse(e.newValue); } catch (err) { return; }
+      session.user = null;
+      recovery = get("kz_cloud_recovery") === "1";
+      say("", 0);
+      status = 2;
+      if (local) reconcile();
+    });
   }
 
   // ───────────── Bridge to the game ─────────────
-  var outText = new Uint8Array(0), outUser = new Uint8Array(0), outMsg = new Uint8Array(0);
+  var outText = new Uint8Array(0), outUser = new Uint8Array(0), outMsg = new Uint8Array(0), outAcct = new Uint8Array(0);
   function readStr(ptr, len) { return new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len)); }
   miniquad_add_plugin({
     name: "kz_cloud",
@@ -247,8 +263,13 @@
       env.kz_cloud_sign_in = function (ptr, len) {
         if (!status) return;
         var provider = readStr(ptr, len);
-        var back = location.origin + location.pathname;
-        location.href = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back);
+        var url = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back());
+        // A sign-in window; this tab signs in by itself when it finishes. Blocked popups fall back
+        // to signing in in this tab.
+        var w = 480, h = 640, x = (screen.width - w) / 2, y = (screen.height - h) / 2;
+        var popup = window.open(url, "kz_sign_in", "popup,width=" + w + ",height=" + h + ",left=" + x + ",top=" + y);
+        if (!popup) { location.href = url; return; }
+        say("Finish signing in with Google in the window that opened.", 0);
       };
       env.kz_cloud_password_sign_in = function (ep, el, pp, pl) {
         if (!status || pending) return;
@@ -297,10 +318,17 @@
         refresh().then(function () {
           return fetch(URL_ + "/auth/v1/user", { method: "PUT", headers: headers(true), body: JSON.stringify({ password: pw }) });
         }).then(function (r) { return r.json().then(function (j) { pending = false; if (!r.ok) throw { body: j, status: r.status }; }); })
-          .then(function () { recovery = false; say("Password updated.", 2); })
+          .then(function () { recovery = false; set("kz_cloud_recovery", null); say("Password updated.", 2); })
           .catch(function (e) { pending = false; say(friendly(e && e.body, e && e.status), 1); });
       };
       env.kz_cloud_recovery = function () { return recovery ? 1 : 0; };
+      // Account details for the Account panel: "username\nemail\nprovider\nmember since".
+      env.kz_cloud_account_len = function () {
+        var u = (session && session.user) || {};
+        outAcct = new TextEncoder().encode([username, u.email || "", u.provider || "", (u.since || "").slice(0, 10)].join("\n"));
+        return outAcct.length;
+      };
+      env.kz_cloud_account = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outAcct.subarray(0, len)); };
       env.kz_cloud_pending = function () { return pending || busy ? 1 : 0; };
       env.kz_cloud_message_kind = function () { return messageKind; };
       env.kz_cloud_message_len = function () { outMsg = new TextEncoder().encode(message); return outMsg.length; };
@@ -311,6 +339,7 @@
         saveSession(null);
         username = "";
         recovery = false;
+        set("kz_cloud_recovery", null);
         [LS.synced, LS.version, LS.user].forEach(function (k) { set(k, null); });
         status = status ? 1 : 0;
       };

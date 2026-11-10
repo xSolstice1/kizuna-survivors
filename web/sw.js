@@ -16,7 +16,8 @@ self.addEventListener("activate", function (e) {
 
 self.addEventListener("fetch", function (e) {
   if (e.request.method !== "GET") return;
-  var key = e.request.mode === "navigate" ? "./" : e.request;
+  // Pages open the game, except the sign-in return page, which must load as itself.
+  var key = e.request.mode === "navigate" && e.request.url.indexOf("auth-callback") < 0 ? "./" : e.request;
   e.respondWith(caches.open(CACHE).then(function (c) {
     return c.match(key, { ignoreSearch: true }).then(function (hit) { return hit || fetch(e.request); });
   }));
