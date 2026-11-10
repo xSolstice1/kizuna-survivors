@@ -1,0 +1,239 @@
+// Cloud saves (Supabase): sign-in and sync for crates/client/src/cloud.rs.
+//
+// The game stays local-first. localStorage keeps working offline; this plugin mirrors the save
+// to the database through the server functions in supabase/migrations (get_state, sync_state,
+// record_run). Configure it in config.js; with no URL it stays off and the game is unchanged.
+//
+// Sync model:
+//   - The game hands us its whole state as JSON whenever it saves (kz_cloud_push).
+//   - We remember the last state the server accepted ("synced") and its version.
+//   - A sync sends only the difference (changed items, deleted item ids, the profile row and the
+//     loadout) with the version it was based on; a stale version means another device saved
+//     first, so we pull and reconcile.
+//   - If this device and the cloud both changed, we ask the player which one to keep.
+(function () {
+  var cfg = window.KZ_CLOUD || {};
+  var URL_ = (cfg.url || "").replace(/\/+$/, "");
+  var KEY = cfg.anonKey || "";
+  var LS = { session: "kz_cloud_session", synced: "kz_cloud_synced", version: "kz_cloud_version", user: "kz_cloud_user", runs: "kz_cloud_runs" };
+
+  // 0 off, 1 signed out, 2 connecting, 3 synced, 4 syncing, 5 offline/error, 6 conflict
+  var status = URL_ && KEY ? 1 : 0;
+  var session = null;
+  var local = null;          // latest state from the game (object)
+  var server = null;         // last fetched cloud state (for conflicts)
+  var incoming = null;       // state the game should load (string), when it should adopt the cloud
+  var pushTimer = null, retryTimer = null, busy = false;
+
+  function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+
+  // Stable JSON (sorted keys) so states compare by content.
+  function canon(v) {
+    if (v === null || typeof v !== "object") return JSON.stringify(v === undefined ? null : v);
+    if (Array.isArray(v)) return "[" + v.map(canon).join(",") + "]";
+    return "{" + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ":" + canon(v[k]); }).join(",") + "}";
+  }
+  function pick(s) {
+    return { profile: s.profile, items: (s.items || []).slice().sort(function (a, b) { return a.item_id - b.item_id; }), loadouts: s.loadouts || [] };
+  }
+
+  // ───────────── Auth (GoTrue REST) ─────────────
+  function saveSession(s) { session = s; set(LS.session, s ? JSON.stringify(s) : null); }
+  function headers(json) {
+    var h = { apikey: KEY };
+    if (session) h.Authorization = "Bearer " + session.access_token;
+    if (json) h["Content-Type"] = "application/json";
+    return h;
+  }
+  function fromHash() {
+    var h = location.hash.replace(/^#/, "");
+    if (h.indexOf("access_token=") < 0) return false;
+    var q = new URLSearchParams(h);
+    saveSession({ access_token: q.get("access_token"), refresh_token: q.get("refresh_token"), expires_at: Date.now() / 1000 + Number(q.get("expires_in") || 3600) });
+    history.replaceState(null, "", location.pathname + location.search);
+    return true;
+  }
+  function refresh() {
+    if (!session || !session.refresh_token) return Promise.reject(new Error("no session"));
+    if (session.expires_at - 60 > Date.now() / 1000) return Promise.resolve();
+    return fetch(URL_ + "/auth/v1/token?grant_type=refresh_token", { method: "POST", headers: headers(true), body: JSON.stringify({ refresh_token: session.refresh_token }) })
+      .then(function (r) { if (!r.ok) throw new Error("refresh " + r.status); return r.json(); })
+      .then(function (j) { saveSession({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() / 1000 + (j.expires_in || 3600), user: j.user }); });
+  }
+  function loadUser() {
+    return fetch(URL_ + "/auth/v1/user", { headers: headers() }).then(function (r) { if (!r.ok) throw new Error("user " + r.status); return r.json(); })
+      .then(function (u) { session.user = { id: u.id, email: u.email || (u.user_metadata && u.user_metadata.name) || "" }; saveSession(session); });
+  }
+  function rpc(name, args) {
+    return refresh().then(function () {
+      return fetch(URL_ + "/rest/v1/rpc/" + name, { method: "POST", headers: headers(true), body: JSON.stringify(args || {}) });
+    }).then(function (r) {
+      return r.text().then(function (t) {
+        var body = t ? JSON.parse(t) : null;
+        if (!r.ok) { var e = new Error((body && body.message) || ("rpc " + r.status)); e.code = body && body.code; throw e; }
+        return body;
+      });
+    });
+  }
+
+  // ───────────── Sync ─────────────
+  function syncedState() { var s = get(LS.synced); return s ? JSON.parse(s) : null; }
+  function markSynced(state, version) { set(LS.synced, canon(state)); set(LS.version, String(version)); set(LS.user, session && session.user ? session.user.id : null); }
+
+  function fail(e) {
+    console.warn("cloud:", e && e.message);
+    status = 5;
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(reconcile, 15000);
+  }
+
+  function reconcile() {
+    if (!session || !local || busy) return;
+    busy = true;
+    status = 2;
+    var p = session.user ? Promise.resolve() : loadUser();
+    p.then(function () { return rpc("get_state"); }).then(function (st) {
+      busy = false;
+      var mine = pick(local);
+      if (!st.exists) return push(true, 0, null);
+      server = st;
+      var theirs = pick(st);
+      var sameUser = get(LS.user) === session.user.id;
+      var base = syncedState();
+      if (canon(mine) === canon(theirs)) { markSynced(theirs, st.version); status = 3; return flushRuns(); }
+      if (sameUser && base && Number(get(LS.version)) === st.version) return push(false, st.version, base);   // only we changed
+      var untouched = sameUser && base && canon(mine) === canon(base);
+      var fresh = !sameUser && Number((mine.profile.doc || {}).runs || 0) === 0;
+      if (untouched || fresh) return adopt(st);                                                       // only the cloud changed
+      status = 6;                                                                                      // both changed: ask
+    }).catch(function (e) { busy = false; fail(e); });
+  }
+
+  function adopt(st) {
+    var theirs = pick(st);
+    markSynced(theirs, st.version);
+    incoming = JSON.stringify(theirs);
+    status = 3;
+    return flushRuns();
+  }
+
+  // Sends the difference between `base` (null = everything) and the current local state.
+  function push(full, version, base) {
+    if (!session || !local) return;
+    busy = true;
+    status = 4;
+    var mine = pick(local);
+    var before = {};
+    if (base && !full) base.items.forEach(function (i) { before[i.item_id] = canon(i); });
+    var upsert = mine.items.filter(function (i) { return before[i.item_id] !== canon(i); });
+    var keep = {};
+    mine.items.forEach(function (i) { keep[i.item_id] = true; });
+    var gone = [];
+    var old = full ? (server ? server.items : []) : (base ? base.items : []);
+    (old || []).forEach(function (i) { if (!keep[i.item_id]) gone.push(i.item_id); });
+    return rpc("sync_state", { p_base_version: version, p_profile: mine.profile, p_upsert: upsert, p_delete: gone, p_loadouts: mine.loadouts, p_reason: "sync" })
+      .then(function (v) { busy = false; markSynced(mine, v); status = 3; return flushRuns(); })
+      .catch(function (e) {
+        busy = false;
+        if (e.code === "P0409") return reconcile();   // another device saved first
+        fail(e);
+      });
+  }
+
+  function schedulePush() {
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(function () {
+      if (status !== 3 && status !== 5) return;
+      var base = syncedState();
+      if (base && canon(pick(local)) === canon(base)) return;
+      if (status === 5) return reconcile();
+      push(false, Number(get(LS.version) || 0), base);
+    }, 2000);
+  }
+
+  function flushRuns() {
+    var q = JSON.parse(get(LS.runs) || "[]");
+    if (!q.length || !session) return;
+    rpc("record_run", { p_run: q[0] }).then(function () {
+      q.shift();
+      set(LS.runs, JSON.stringify(q));
+      if (q.length) flushRuns();
+    }).catch(function (e) { console.warn("cloud run:", e.message); });
+  }
+
+  // ───────────── Start-up ─────────────
+  if (status) {
+    var hadHash = fromHash();
+    var s = get(LS.session);
+    if (!session && s) { try { session = JSON.parse(s); } catch (e) {} }
+    if (hadHash) session.user = null;
+    if (session) status = 2;
+    window.addEventListener("online", function () { if (status === 5) reconcile(); });
+  }
+
+  // ───────────── Bridge to the game ─────────────
+  var outText = new Uint8Array(0), outUser = new Uint8Array(0);
+  function readStr(ptr, len) { return new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len)); }
+  miniquad_add_plugin({
+    name: "kz_cloud",
+    version: 1,
+    register_plugin: function (importObject) {
+      var env = importObject.env;
+      env.kz_cloud_status = function () { return status; };
+      // Sign-in options to offer: 1 Google, 2 Discord, 4 email link.
+      env.kz_cloud_providers = function () {
+        var p = cfg.providers || ["google", "discord", "email"];
+        return (p.indexOf("google") >= 0 ? 1 : 0) | (p.indexOf("discord") >= 0 ? 2 : 0) | (p.indexOf("email") >= 0 ? 4 : 0);
+      };
+      env.kz_cloud_push = function (ptr, len) {
+        try { local = JSON.parse(readStr(ptr, len)); } catch (e) { return; }
+        if (status === 2 && !busy) reconcile();
+        else schedulePush();
+      };
+      env.kz_cloud_run = function (ptr, len) {
+        var q = JSON.parse(get(LS.runs) || "[]");
+        q.push(JSON.parse(readStr(ptr, len)));
+        set(LS.runs, JSON.stringify(q.slice(-200)));
+        if (status === 3) flushRuns();
+      };
+      env.kz_cloud_sign_in = function (ptr, len) {
+        if (!status) return;
+        var provider = readStr(ptr, len);
+        var back = location.origin + location.pathname;
+        if (provider === "email") {
+          var email = window.prompt("Email address for your sign-in link:");
+          if (!email) return;
+          fetch(URL_ + "/auth/v1/otp?redirect_to=" + encodeURIComponent(back), { method: "POST", headers: headers(true), body: JSON.stringify({ email: email, create_user: true }) })
+            .then(function (r) { window.alert(r.ok ? "Check your inbox for the sign-in link." : "Couldn't send the link (" + r.status + ")."); });
+          return;
+        }
+        location.href = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back);
+      };
+      env.kz_cloud_sign_out = function () {
+        if (session) fetch(URL_ + "/auth/v1/logout", { method: "POST", headers: headers() }).catch(function () {});
+        saveSession(null);
+        [LS.synced, LS.version, LS.user].forEach(function (k) { set(k, null); });
+        status = status ? 1 : 0;
+      };
+      // 0 = keep the cloud save, 1 = keep this device's save.
+      env.kz_cloud_resolve = function (choice) {
+        if (status !== 6 || !server) return;
+        if (choice === 0) adopt(server);
+        else push(true, server.version, null);
+      };
+      env.kz_cloud_incoming_len = function () {
+        if (!incoming) return 0;
+        outText = new TextEncoder().encode(incoming);
+        incoming = null;
+        return outText.length;
+      };
+      env.kz_cloud_incoming = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outText.subarray(0, len)); };
+      env.kz_cloud_user_len = function () {
+        outUser = new TextEncoder().encode(session && session.user ? session.user.email || "" : "");
+        return outUser.length;
+      };
+      env.kz_cloud_user = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outUser.subarray(0, len)); };
+    },
+  });
+})();

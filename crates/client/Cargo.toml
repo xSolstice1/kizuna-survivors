@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 sim = { path = "../sim" }
 macroquad = "0.4"
+serde_json = "1"
 
 # Audio is always on in the browser. Natively it needs libasound, so it's opt-in:
 # `cargo run -p client --features native-audio`.
