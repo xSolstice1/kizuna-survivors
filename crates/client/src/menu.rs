@@ -865,6 +865,16 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
 pub struct LoginState {
     /// false = sign in, true = create account.
     pub create: bool,
+    /// The "Forgot password?" form is open.
+    pub forgot: bool,
+    /// The reset link was sent (the form shows "Check your inbox").
+    pub forgot_sent: bool,
+    /// Where the reset link went.
+    sent_to: String,
+    /// Copies the sign-in box's email into the reset form once it exists.
+    prefill: Option<String>,
+    /// A problem found before asking the server (e.g. passwords that don't match).
+    error: String,
 }
 
 /// A clickable text link; returns true when clicked.
@@ -911,7 +921,10 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
     let status = cloud::status();
     let recovery = cloud::recovery();
     if matches!(status, Status::Off | Status::Synced | Status::Syncing | Status::Error) && !recovery {
-        // Leaving the login screen: hide its text fields.
+        // Leaving the login screen: hide its text fields; next time it opens on Sign in.
+        st.forgot = false;
+        st.forgot_sent = false;
+        st.error.clear();
         ti::begin();
         ti::end();
         return true;
@@ -955,7 +968,7 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
     let mut y = cy + 56.0;
     ti::begin();
     let pending = cloud::pending();
-    let (msg, kind) = cloud::message();
+    let (msg, kind) = if st.error.is_empty() { cloud::message() } else { (st.error.clone(), 1) };
     let show_msg = |y: f32| {
         if !msg.is_empty() {
             let c = match kind {
@@ -970,14 +983,30 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
     };
     match (status, recovery) {
         (_, true) => {
-            kit::text("Set a new password", fx, y, 28.0, kit::INK);
-            kit::text("Choose a new password for your account.", fx, y + 28.0, 15.0, DIM);
-            y += 92.0;
-            ti::field(6, Kind::NewPassword, Rect::new(fx, y, fw, 46.0), "New password", "At least 8 characters");
-            show_msg(y + 74.0);
-            let go = kit::button(Rect::new(fx, y + 104.0, fw, 48.0), if pending { "Saving..." } else { "Save password" }, !pending, kit::Style::Primary);
-            if go || matches!(ti::key(), Key::Enter(6)) {
-                cloud::set_password(&ti::value(6));
+            kit::text("Set a new password", fx, y + 6.0, 28.0, kit::INK);
+            kit::text("Your reset link worked. Choose a new password for", fx, y + 36.0, 15.0, DIM);
+            kit::text_fit(&format!("{}.", cloud::account().email), fx, y + 56.0, fw, 15.0, kit::INK);
+            y += 104.0;
+            ti::field(6, Kind::NewPassword, Rect::new(fx, y, fw, 44.0), "New password", "At least 8 characters");
+            y += 44.0 + 30.0;
+            ti::field(8, Kind::NewPassword, Rect::new(fx, y, fw, 44.0), "Confirm new password", "Type it again");
+            show_msg(y + 64.0);
+            y += 44.0 + 48.0;
+            let key = ti::key();
+            if let Key::Tab(6) = key {
+                ti::focus(8);
+            }
+            let go = kit::button(Rect::new(fx, y, fw, 48.0), if pending { "Saving..." } else { "Save password" }, !pending, kit::Style::Primary);
+            if (go || matches!(key, Key::Enter(6) | Key::Enter(8))) && !pending {
+                let (a, b) = (ti::value(6), ti::value(8));
+                st.error.clear();
+                if a.chars().count() < 8 {
+                    st.error = "Choose a longer password (at least 8 characters).".into();
+                } else if a != b {
+                    st.error = "The two passwords don't match.".into();
+                } else {
+                    cloud::set_password(&a);
+                }
             }
         }
         (Status::Connecting, _) => {
@@ -1001,6 +1030,62 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
                 cloud::resolve(false);
             }
         }
+        _ if st.forgot => {
+            if link("< Back to sign in", fx, y - 14.0, 14.0, false) {
+                st.forgot = false;
+                st.forgot_sent = false;
+                cloud::clear_message();
+            }
+            y += 30.0;
+            if kind == 2 && !msg.is_empty() {
+                st.forgot_sent = true;
+            }
+            if !st.forgot_sent {
+                kit::text("Reset your password", fx, y + 6.0, 28.0, kit::INK);
+                for (k, l) in kit::wrap("Enter the email on your account and we'll send you a link to choose a new password.", fw, 15).iter().enumerate() {
+                    kit::text(l, fx, y + 38.0 + k as f32 * 20.0, 15.0, DIM);
+                }
+                y += 112.0;
+                ti::field(7, Kind::Email, Rect::new(fx, y, fw, 44.0), "Email", "you@example.com");
+                if let Some(v) = st.prefill.take() {
+                    ti::set(7, &v);
+                    ti::focus(7);
+                }
+                show_msg(y + 64.0);
+                y += 44.0 + 48.0;
+                let go = kit::button(Rect::new(fx, y, fw, 48.0), if pending { "Sending..." } else { "Send reset link" }, !pending, kit::Style::Primary);
+                if (go || matches!(ti::key(), Key::Enter(7))) && !pending {
+                    st.sent_to = ti::value(7).trim().to_string();
+                    cloud::reset_password(&st.sent_to);
+                }
+            } else {
+                // Sent: an envelope, what happens next, and a way to send it again.
+                let (ex, ey) = (fx + 26.0, y + 30.0);
+                kit::rounded(ex - 26.0, ey - 26.0, 52.0, 52.0, 26.0, Color::new(0.2, 0.75, 0.55, 0.18));
+                kit::rounded_outline(ex - 15.0, ey - 10.0, 30.0, 21.0, 3.0, 2.0, kit::JADE);
+                draw_line(ex - 14.0, ey - 9.0, ex, ey + 2.0, 2.0, kit::JADE);
+                draw_line(ex + 14.0, ey - 9.0, ex, ey + 2.0, 2.0, kit::JADE);
+                kit::text("Check your inbox", fx + 68.0, ey + 9.0, 28.0, kit::INK);
+                y += 86.0;
+                let email = st.sent_to.clone();
+                let body = format!(
+                    "If {} has an account, a reset link is on its way. Open it on this device, then come back to this tab to choose a new password. Check spam if it hasn't arrived in a few minutes.",
+                    email
+                );
+                for (k, l) in kit::wrap(&body, fw, 15).iter().enumerate() {
+                    kit::text(l, fx, y + k as f32 * 21.0, 15.0, DIM);
+                }
+                y += 112.0;
+                if kit::button(Rect::new(fx, y, fw, 46.0), if pending { "Sending..." } else { "Resend link" }, !pending, kit::Style::Secondary) {
+                    cloud::reset_password(&email);
+                }
+                if kit::button(Rect::new(fx, y + 58.0, fw, 46.0), "Back to sign in", true, kit::Style::Primary) {
+                    st.forgot = false;
+                    st.forgot_sent = false;
+                    cloud::clear_message();
+                }
+            }
+        }
         _ => {
             // Segmented tabs.
             let tw = fw / 2.0;
@@ -1014,6 +1099,7 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
                 kit::text_fit_centered(label, r.x + r.w / 2.0, r.y + 22.0, r.w - 10.0, 15.0, if on { kit::INK } else { DIM });
                 if r.contains(mouse_position().into()) && is_mouse_button_pressed(MouseButton::Left) && !on {
                     st.create = k == 1;
+                    st.error.clear();
                     cloud::clear_message();
                 }
             }
@@ -1027,7 +1113,12 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
                 ti::field(2, Kind::Password, Rect::new(fx, y, fw, field_h), "Password", "Your password");
                 let forgot = link("Forgot password?", fx + fw, y + field_h + 20.0, 13.0, true);
                 if forgot {
-                    cloud::reset_password(&ti::value(1));
+                    st.forgot = true;
+                    st.forgot_sent = false;
+                    let v = ti::value(1);
+                    st.prefill = Some(if v.contains('@') { v } else { String::new() });
+                    st.error.clear();
+                    cloud::clear_message();
                 }
                 show_msg(y + field_h + 20.0);
                 y += field_h + 44.0;
