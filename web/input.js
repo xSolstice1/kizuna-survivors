@@ -38,7 +38,16 @@
     el.setAttribute("autocorrect", "off");
     el.addEventListener("keydown", function (e) {
       if (e.key === "Enter") { submitted = id; e.preventDefault(); }
-      if (e.key === "Tab") { submitted = -2 - id; e.preventDefault(); }   // -2 - id: Tab out of `id`
+      if (e.key === "Tab") {
+        // Move focus now, not on the game's next frame, so fast typing lands in the right box.
+        e.preventDefault();
+        var shown = Object.keys(fields).map(function (k) { return fields[k]; })
+          .filter(function (f) { return f.el.style.display !== "none"; })
+          .sort(function (a, b) { return (parseFloat(a.el.style.top) - parseFloat(b.el.style.top)) || (parseFloat(a.el.style.left) - parseFloat(b.el.style.left)); });
+        var i = shown.indexOf(fields[id]);
+        var next = shown[(i + (e.shiftKey ? shown.length - 1 : 1)) % shown.length];
+        if (next) next.el.focus();
+      }
       e.stopPropagation();
     });
     // miniquad swallows paste on window; keep it inside the field.
