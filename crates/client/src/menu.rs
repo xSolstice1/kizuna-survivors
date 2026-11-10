@@ -842,6 +842,63 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
     changed.then_some(SettingsAction::Changed)
 }
 
+/// The login screen (accounts are mandatory). Returns true once the player is signed in and
+/// their save is loaded.
+pub fn login(time: f64) -> bool {
+    use crate::cloud::{self, Status};
+    scenery(time, Color::new(1.0, 0.45, 0.65, 1.0));
+    let (w, h) = (screen_width(), screen_height());
+    let t = time as f32;
+    centered("KIZUNA SURVIVORS", h * 0.27, 64.0, ACCENT);
+    centered("Heroes of many stories. Five worlds. One night each.", h * 0.27 + 34.0, 18.0, DIM);
+    let (pw, ph) = (520.0f32.min(w - 40.0), 200.0);
+    let (px, py) = ((w - pw) / 2.0, h * 0.42);
+    kit::panel(px, py, pw, ph);
+    let status = cloud::status();
+    match status {
+        Status::Off | Status::Synced | Status::Syncing | Status::Error => return true,
+        Status::Connecting => {
+            centered("Signing in", py + 70.0, 26.0, kit::INK);
+            centered("Loading your save...", py + 104.0, 16.0, DIM);
+            for k in 0..8 {
+                let a = t * 4.0 + k as f32 * std::f32::consts::TAU / 8.0;
+                let alpha = 0.2 + 0.8 * ((k as f32 / 8.0 + t * 0.6).fract());
+                draw_circle(w / 2.0 + a.cos() * 16.0, py + 150.0 + a.sin() * 16.0, 3.5, Color::new(1.0, 0.82, 0.42, alpha));
+            }
+        }
+        Status::Conflict => {
+            centered("Two saves found", py + 48.0, 26.0, GOLD);
+            for (k, l) in kit::wrap("This device and your account both have progress that the other doesn't. Which one do you want to keep?", pw - 50.0, 15).iter().enumerate() {
+                centered(l, py + 80.0 + k as f32 * 20.0, 15.0, DIM);
+            }
+            let bw = (pw - 60.0) / 2.0;
+            if kit::button(Rect::new(px + 20.0, py + ph - 64.0, bw, 44.0), "Keep account save", true, kit::Style::Primary) {
+                cloud::resolve(true);
+            }
+            if kit::button(Rect::new(px + 40.0 + bw, py + ph - 64.0, bw, 44.0), "Keep this device", true, kit::Style::Secondary) {
+                cloud::resolve(false);
+            }
+        }
+        Status::SignedOut => {
+            centered("Sign in to play", py + 48.0, 26.0, kit::INK);
+            centered("Your progress is saved to your account and follows you to any device.", py + 76.0, 14.0, DIM);
+            let (g, _, e) = cloud::providers();
+            let mut by = py + 96.0;
+            if g && kit::button(Rect::new(px + 40.0, by, pw - 80.0, 42.0), "Continue with Google", true, kit::Style::Primary) {
+                cloud::sign_in("google");
+            }
+            if g {
+                by += 50.0;
+            }
+            if e && kit::button(Rect::new(px + 40.0, by, pw - 80.0, 42.0), "Email me a sign-in link", true, kit::Style::Secondary) {
+                cloud::sign_in("email");
+            }
+        }
+    }
+    centered("(c) 2026 xSolstice1", h - 16.0, 12.0, Color::new(1.0, 1.0, 1.0, 0.35));
+    false
+}
+
 /// Cloud saves: sign in, sync status, sign out, and settling a conflict between devices.
 fn account_panel(y: f32) {
     use crate::cloud::{self, Status};
