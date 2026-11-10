@@ -3,8 +3,8 @@
 // ship: row-level security only lets a signed-in player read their own rows, and every write
 // goes through the server functions in supabase/migrations.
 window.KZ_CLOUD = {
-  url: "",
-  anonKey: "",
+  url: "https://chqizemfgygihjbvgcyw.supabase.co",
+  anonKey: "sb_publishable_kws0Roy6yRE7GmqCvCgH3g_yLqsPVx2",
   // Sign-in buttons to show (each must be enabled in Supabase → Authentication → Providers).
-  providers: ["google", "discord", "email"],
+  providers: ["google", "email"],
 };
