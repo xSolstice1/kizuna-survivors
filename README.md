@@ -23,6 +23,10 @@ Every weapon and passive has a rarity tier, Common to Unique, shown on its level
 skills you don't own yet are offered less often. With all slots full, a card may offer to replace
 one of your skills; the newcomer starts at half the old skill's level (minimum 1).
 
+Attacks only land inside a reach box around your hero (wider for ranged heroes, tighter for melee).
+Nothing a weapon does, damage, knockback, pulls or slows, reaches past it, and area bonuses grow an
+effect only inside it.
+
 There are eight elements: Fire, Water, Electric, Earth, Wind, Ice, and the rare Light and Darkness.
 They form a cycle: Water douses Fire, Fire melts Ice, Ice stills Wind, Wind erodes Earth, Earth
 grounds Electric, Electric shocks Water. A hit on the element it beats deals x1.5; a hit on the one
@@ -60,7 +64,10 @@ More heroes are on the way. Heroes unlock by clearing worlds with a specific her
   spirit pressure, a blinding downpour, hostile domains).
 - **65 Otherworlders in all, in rarity tiers**: Common, Uncommon, Elite, Leader, Sub-boss and
   Boss. Rarity shows as a coloured outline and a chevron, flag or boss-bar label. A Leader raises
-  a banner: nearby enemies move and hit harder until it falls, and its crew scatters.
+  a banner: nearby enemies move and hit harder until it falls, and its crew scatters. Some
+  Uncommons have tricks: the Exploding Clay Bird leaves a fused blast where it dies, the
+  Swarm Mother splits into three spawn, and the Cursed Tool Thief snatches a pickup off the ground
+  and runs — kill it to get the pickup back.
 - **20 rounds a night**: every 4th round is a headline — an uncommon wave, the first elites, a
   Leader (rounds 12, 15, 18), the sub-boss, and the final boss in round 20 — while the bigger worlds add their own boss
   in round 18; the final boss must fall before dawn.

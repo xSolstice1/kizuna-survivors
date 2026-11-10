@@ -458,7 +458,7 @@ async fn main() {
                 let t_s = get_time();
                 world.step(input);
                 perf_parts[0] += (get_time() - t_s) * 1000.0;
-                fx.absorb(&world.events, world.player.pos);
+                fx.absorb(&world.events, world.player.pos, world.reach_half().x);
                 audio.absorb(&world.events);
                 // Delivered exactly once, even if the sim steps several times this frame.
                 input.special = false;

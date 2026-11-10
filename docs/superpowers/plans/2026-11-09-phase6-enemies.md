@@ -173,7 +173,7 @@ Same files and steps as Task 5 for the remaining 9. After this task, no kind fal
 - [ ] **Step 1:** Baseline: `git archive c1eca45 | tar -x -C <scratch>/base`, own `CARGO_TARGET_DIR`. Run the 30 configs (Global Constraints) on seeds 81–90 and 91–100, for both base and phase 6. Command per config: `BALANCE_SEEDS=10 BALANCE_SEED0=81 BALANCE_STAGE=<stage> BALANCE_HERO=<hero> cargo test --release -p sim balance -- --ignored --nocapture`. Expect about 60 min of bot time.
 - [ ] **Step 2:** Any config more than 2 wins down: re-run both trees on seeds 111–120. If it misses again, tune `BANNER_*`, `UNCOMMON_SHARE` or the Leader / Uncommon stats on seeds 21–30 only, then re-confirm on 81–100. Record each change.
 - [ ] **Step 3:** Final whole-branch review (`code-review` for correctness, `ponytail-review` for size), then a fix round.
-- [ ] **Step 4:** Spec: add "Carried into phase 7" (final values, rulings, rechecks). This plan: "Measured". Update `handoff.md` and the memory note.
+- [ ] **Step 4:** Spec: add "Last phase (phase 7)" (final values, rulings, rechecks). This plan: "Measured". Update `handoff.md` and the memory note.
 - [ ] **Step 5:** Run the verify block from `handoff.md` (`cargo test -p sim --release`, `cargo test -p client`, `cargo build -p client --release` with 0 warnings, `./scripts/build-web.sh`). Show the final diff. The user commits.
 
 ## Measured

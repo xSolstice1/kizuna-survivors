@@ -560,7 +560,7 @@ Design gate answers for section 5, approved by the user on 2026-11-09. Where thi
 | Tsurube Drop | `Blink` (drops beside the player) | — |
 | Shard Moth | fast `Chase`, low HP | — |
 | Bone-Eater Crow | `Dash` (dive) | — |
-| Rogue Puppeteer | `Ranged` `Single` every 4.5 s (tuned from `Fan3`, see "Carried into phase 7") | — |
+| Rogue Puppeteer | `Ranged` `Single` every 4.5 s (tuned from `Fan3`, see "Last phase (phase 7)") | — |
 | Exploding Clay Bird | `Charger` (dive) | — |
 | Masked Fracción | `Dash` | — |
 | Hollow Husk | slow `Chase`, high HP, large | — |
@@ -596,7 +596,7 @@ through art and lore alone (my call).
 - Phase 5 debt (effects drawn past reach, stale-PWA save risk, open rechecks) stays as recorded unless it blocks
   phase 6.
 
-## Carried into phase 7 (from phase 6, 2026-11-09)
+## Last phase (phase 7): carried from phase 6 (2026-11-09)
 
 - Phase 6 final values: `UNCOMMON_SHARE` 0.03 (refill spawns from round 5), round-4 wave 24 × density Uncommons,
   `LEADER_ROUNDS` [12, 15, 18] (one Leader alive at a time; round-skip catch-up spawns one), Leader crew 10 × density
@@ -624,3 +624,151 @@ through art and lore alone (my call).
   natively.
 - Still open from phase 5: effects drawn past reach, stale-PWA save risk (bump the service-worker cache on deploy),
   Kuon 10/10, Haru/Kaede/Mika/Nanami/Yuzu unmeasured, `BOSS_HP` shortcut, Darkness drain / Ice slow on bosses.
+
+### Phase 7 design (2026-11-10)
+
+Phase 7 clears the list above and ends the overhaul with a whole-game review. User answers from the 2026-11-10 design
+gate are marked (user); everything else is my call.
+
+**Scope (user):** balance fixes, the three enemy tricks, reach + PWA cleanup, measurements, and a final review of the
+whole game using `/ecc:orch-review` plus the `awesome-gamedev-agent-skills` (`disciplines:*`) skills, so the game
+stays balanced with all the new enemies.
+
+#### 1. Enemy tricks (user: death effects + steal)
+
+| Enemy | Trick |
+|---|---|
+| Exploding Clay Bird | On death it leaves a telegraphed blast at its death point: the same `HazardKind::Blast` as boss Rain (warning ring, then damage), radius 34, warn 1.0 s, damage 14 × enemy damage scale. It hurts only the player. |
+| Grade-Three Swarm Mother | On death it splits into 3 Cursed Spawn placed evenly 16 units around its death point (through `pending_spawns`, respecting `MAX_ENEMIES`). The spawns give normal Cursed Spawn XP. |
+| Cursed Tool Thief | When it touches a pickup on the ground (within its radius + 8), it takes the pickup and carries it (one at a time; any kind, including Leader and Elite drops). While carrying, it **flees** from the player for 4 s, then resumes its normal blinking toward the player (user). Killing the thief drops the pickup at its death point. If it is recycled to the spawn ring, it keeps the pickup and comes back. A carried pickup is off the ground: it frees its `MAX_PICKUPS` slot and does not touch the pickup timer. The client draws the carried pickup's icon above the thief. |
+
+Every trick triggers on any death (weapons, screen clears, statuses, a Clay Bird's own contact hit), with no exceptions:
+Swarm Mother spawns arrive through `pending_spawns` on the next tick, so they survive the screen clear that killed
+their mother, and spawns refused by `MAX_ENEMIES` are dropped silently. Hazards keep their existing rules. Balance
+below must still hold with the tricks on.
+
+#### 1b. Ren's orbit weapons (user, 2026-11-10)
+
+Ren had three weapons whose orbs circle her (Moon Orbs, Yin-Yang Orbs, Spirit Seal), and Ofuda already throws homing
+shots. Decisions (user):
+
+- **Moon Orbs:** unchanged, the one true orbit.
+- **Yin-Yang Orbs → boomerang:** each throw sends the orbs out to the edge of the reach box and back through enemies
+  (evenly spaced directions that turn between throws). It hits on the way out and back (existing re-hit timer).
+  Awakening keeps its huge orbs and the Yin-Yang Crash.
+- **Spirit Seal → stamp and detonate:** each volley stamps a seal on random enemies inside reach (one per `amount`,
+  no repeats). About 1.5 s later each seal bursts on its enemy and hurts the enemies around it. Not strongest-first
+  (user: random). Awakening: more stamps at once (`amount` + 3); its Seal Ring stays.
+- This retunes two pre-phase-6 weapons on purpose. Ren's 6 configs are measured with it in the balance step.
+
+#### 2. Balance (user: within 2 wins per block, plus totals)
+
+- **Bar:** each config stays within 2 wins of `c1eca45` per 10-seed block, **and** loses no more than 3 wins in total
+  over 4 fresh blocks (40 runs). The phase 6 miss rule (one re-run on a miss) still applies per block; the total
+  rule has no re-run.
+- **Configs (my call):** every **finished** hero (Ren, Riku, Shun, Toya, Kuon) on every world, 30 configs, Normal.
+  Kaede, Mika, Haru, Nanami and Yuzu are `finished: false` and do not ship, so they are out of scope. This replaces the
+  "unmeasured heroes" recheck.
+- **Seeds:** tune on 21–60; confirm on 131–170 (four blocks: 131, 141, 151, 161), which no earlier phase used.
+  `c1eca45` is run fresh on the same seeds as the baseline (its build is reusable). Configs at 10/10 or 0/10 count
+  like any other (my call).
+- **Known target:** Riku on Ember Leaf (14 → 8 over 40 runs in phase 6). Tune Ember Leaf-local levers first (its
+  newcomers' stats and kits). A global lever needs the full 30-config re-confirm.
+- `BOSS_HP` stays a `shortcut:` (it needs human playtests). Darkness drain and Ice slow on bosses: measure their share
+  of boss damage in the bot runs and report it; change them only if one config's boss kills depend on them.
+
+#### 3. Reach and PWA cleanup
+
+- **Reach (my call):** damage already stops at the reach box (every hit goes through `hurt_enemy`), so this is a
+  visual change plus two pushes. Cap the remaining visuals still drawn past attack reach with the existing `reach_cap` /
+  `clip_to_reach`. These are the Regalia burst (300), the special flourishes (Fox 230, Mukade 220, Domain 360 / 220,
+  Hannya onset 160), and the Divine and Hannya finale pushes (380 / 340). The pushes are capped too, so nothing an
+  attack does reaches past the reach box. Travelling projectiles stay as they are (they are inside reach while they
+  can hit).
+- **PWA (my call):** the cache name already changes per build, but the service worker serves the cache first, so a
+  stale build runs once and can resave the profile. Fix: navigations and the game's `.wasm` / `.js` go network-first
+  with a cache fallback offline; everything else stays cache-first. Saves also gain forward compatibility: an item line
+  `Item::parse` rejects is kept verbatim and written back on save, instead of being dropped. Scope is whole item lines
+  only (partially read items and unknown top-level keys stay as today). Kept lines are hidden from the UI, do not count
+  against the bag, are never salvaged, and their id (if readable) still advances the next item id. Old saves and today's
+  items must round-trip unchanged.
+
+#### 4. Measurements (report; fix only real breaks)
+
+- Frame time with the rarity outlines, on a GPU-backed run (native `cargo run -p client --release`, or Chrome with
+  GPU, not swiftshader; CPU-only sim timing is the fallback if no GPU path works). Use
+  a crowd that includes Uncommons and Elites, compared against `c1eca45`. Fix only if phase 6/7 costs more than 10% of
+  frame time.
+- Phone aspect: screenshots at 844×390 (landscape phone) of the HUD, the boss bar with the rarity prefix, the Leader
+  banner, the round bar and the codex line. Fix anything closer than `kit::MARGIN` (24) to an edge or overlapping.
+
+#### 5. Final review (user)
+
+- **Code review:** `/ecc:orch-review` (the `ecc` plugin's orch-review Workflow) over the full phase 7 diff, in Local
+  mode while phase 7 is uncommitted. It needs the `ecc` plugin, enabled for this project on 2026-11-10 (`.claude/settings.local.json`).
+  If it still fails to load at this step, ask the user to reload plugins; do not swap in another reviewer silently.
+  Blocking findings are fixed. No mid-phase commits: the review runs on the uncommitted phase 7 diff.
+- **Game review:** a whole-game pass through the `disciplines:*` skills: `game-feel`, `level-design` (pacing of the
+  20-round night with Uncommon, Leader, sub-boss and boss beats), `game-ai` (Leader and Uncommon behaviour),
+  `game-ui-ux` (rarity and element readability) and `performance-optimization`. Each gives ranked findings with
+  evidence from the code, the bot logs or screenshots.
+- **Vitality card (user, 2026-11-10):** "+20 max HP and heal 20." reads like a regen next to Recovery. Reword to
+  "+20 max HP. Heals 20 when taken." (copy only).
+- **Window size (user, 2026-11-10):** the review also reconsiders the native default window size. With `cargo run`
+  at the default size, the Collections screen's Back button is cut off. This is an Important finding for the fix wave.
+- **Then:** one fix wave for all Critical/Important findings from both reviews. Any fix that touches balance is
+  re-confirmed against the balance bar above. Minor findings are reported, not built.
+
+#### 6. Reach hold and skill balance (user, 2026-11-10, after the final review)
+
+The user reported "Expanse breaks my reach". An audit found that damage is reach-gated everywhere (`hurt_enemy`), but
+four kinds of effect escape the box:
+
+- Effects that move or stop enemies are not gated: Gravity Well pull, Lantern slow, Purification push and shot-clear,
+  Soul Tether drag, and the heal count of Devour.
+- The radius of an effect centred on a target is not capped (blasts, wells, crashes, meteors).
+- `reach_cap` only checks the box's width (192), so a capped circle still sticks out of the box's 108 height.
+- Persistence is applied twice to Familiars, Tether, Lantern, Mirage and Cyclone (×3.84 at max instead of ×1.96).
+
+Decisions (user):
+
+- **Gate + clip:** every non-damage effect on an enemy (pull, slow, push, drag, shot-clear, heal count) checks
+  `in_reach`, as damage does. All player-attack visuals are drawn clipped to the reach box (one scissor rect in the
+  client). Effect sizes are unchanged.
+- **Expanse:** keeps +area per level. Its per-level value or max level is set by the numbers below.
+- **Balance band, per pool:** run `skill_strength` for each finished hero (Ren, Riku, Shun, Toya, Kuon). Every weapon in a
+  hero's pool must land within ±25% of that pool's median strength (sqrt(crowd × single)). Every passive must land
+  within 2 wins of the pool median over 20 seeds. The Persistence double-count is fixed first. Then one 30-config
+  confirm against the balance bar (this also covers the final fix wave's Leader stagger immunity and Sovereign Domain
+  cap).
+
+- **Result (2026-11-10):** every weapon in all five pools is within ±25% of its pool median. Over-band weapons were scaled
+  down and under-band ones up, and Ren's below-median weapons were raised ×1.2 so shared Flame Pool fits every pool.
+  Win rates per hero come back through `reach_might`: Ren 1.4 and Kuon 1.6 (new `MIGHT_REN` / `MIGHT_KUON`), Riku 2.8,
+  Toya 3.0, Shun 2.3. Final confirm on 131–161: 921 → 912 against `c1eca45` (tuning 919 → 919). Toya on Shotengai
+  went from 7 back to 12 (dawn timeouts on the Night Lord). The plan's "Measured" Task 9 has the tables.
+
+#### Non-goals
+
+- No new enemies, heroes, weapons or worlds. No change to the unfinished heroes.
+- No retuning of existing (pre-phase-6) enemies or weapons unless the balance bar forces it.
+- Fox Mirage decoys still do not pull Leaders (parked in phase 6).
+
+#### Done means
+
+All of sections 1–5 are in, the balance bar holds on 131–170, and both reviews end with no open Critical/Important
+findings. Tests and builds are green, and README, handoff and memory are updated. The user commits.
+
+### Balance retune (2026-11-10, Task 6)
+
+Bar not met on the confirm seeds; see the plan's "Measured". Values changed: `UNCOMMON_SHARE` 0.03 -> 0.015, `BANNER_SPEED`
+1.25 -> 1.1, `BANNER_DAMAGE` 1.25 -> 1.1, Rogue Puppeteer HP 60 -> 42, Clay Bird HP 60 -> 42 and contact damage 11 -> 8,
+Mist Captain HP 640 -> 480 and contact damage 16 -> 12.
+
+Round 2 (user chose a global lever): `XP_GAIN` 2.0 -> 2.2 (pre-phase-6 global; confirm total -51 -> -16 wins). Uncommon ring and Leader crew sizes tried at 16 / 6 and reverted. Bar still unmet; Toya is the remaining gap.
+
+Round 3: dropping the round-18 Leader tried (tune -13, confirm -34 vs -16 kept), reverted; LEADER_ROUNDS stays [12, 15, 18].
+
+### Balance final (2026-11-10)
+
+Values changed vs the handed-over state: XP_GAIN 2.0 -> 2.2, MIGHT_TOYA 2.3 -> 2.5, UNCOMMON_SHARE 0.03 -> 0.015, BANNER_SPEED and BANNER_DAMAGE 1.25 -> 1.1, Rogue Puppeteer HP 60 -> 42, Clay Bird HP 60 -> 42 and contact 11 -> 8, Mist Captain HP 640 -> 480 and contact 16 -> 12. Confirm 131-161: 921 -> 921 wins. Residual debt for human playtests: Shun Pale Citadel (-5), Toya Rainward (-5), Riku Shrine Valley (-4) over 40 runs; Riku Shotengai and Ren Shatterline missed block 131 by more than 2.

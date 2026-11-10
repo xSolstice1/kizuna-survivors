@@ -27,6 +27,8 @@ const FIELD_RADIUS: f32 = 44.0;
 const IFRAMES: f32 = 0.5;
 /// Move speed inside spirit pressure.
 const PRESSURE_SLOW: f32 = 0.6;
+/// Seconds a Leader shrugs off Earth after a stagger ends, so Earth builds cannot stun-lock it.
+const LEADER_STAGGER_IMMUNE: f32 = 1.5;
 
 /// Debug load test: fixed enemy count + extra radial projectiles, no damage, no level-ups.
 #[derive(Clone, Copy, Debug)]
@@ -109,7 +111,7 @@ pub enum Event {
     /// A boss crossed into a new phase.
     BossPhase { pos: Vec2 },
     /// A hazard went off: 0 blast/tag, 1 lightning, 2 domain opened.
-    Hazard { pos: Vec2, radius: f32, kind: u8 },
+    Hazard { pos: Vec2, radius: f32, kind: u8, friendly: bool },
     /// A danmaku curtain started sweeping in.
     Curtain,
     /// The player went down but a Revival brought them back.
@@ -170,6 +172,12 @@ pub enum Event {
     /// A floor pickup appeared / was taken.
     PickupSpawned { pos: Vec2, kind: PickupKind },
     PickupTaken { pos: Vec2, kind: PickupKind },
+    /// A Tool Thief snatched a floor pickup.
+    PickupStolen { pos: Vec2, kind: PickupKind },
+    /// A Leader died and its crew scattered.
+    LeaderFell { pos: Vec2 },
+    /// A Clay Bird's blast began its warning.
+    HazardWarn { pos: Vec2, radius: f32 },
     /// A soul-lantern pulsed.
     LanternPulse { pos: Vec2, radius: f32 },
 }
@@ -297,6 +305,8 @@ pub struct Hazard {
     tick: f32,
     /// Set bonuses' own strikes: never hurt the player.
     pub friendly: bool,
+    /// Blasts that hurt only the player.
+    pub spare_enemies: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -392,6 +402,8 @@ pub struct Enemies {
     pub burn_dps: Vec<f32>,
     pub soak: Vec<f32>,
     pub stagger: Vec<f32>,
+    /// Seconds left before a Leader can be staggered again.
+    pub stagger_immune: Vec<f32>,
     pub slow: Vec<f32>,
     /// Light: the next hit on this enemy crits.
     pub marked: Vec<bool>,
@@ -400,6 +412,9 @@ pub struct Enemies {
     /// Seconds left fleeing `scatter_from`, the point a Leader fell.
     pub scatter: Vec<f32>,
     pub scatter_from: Vec<Vec2>,
+    /// A Tool Thief's stolen pickup, and seconds left fleeing the player with it.
+    pub carry: Vec<Option<PickupKind>>,
+    pub flee: Vec<f32>,
 }
 
 impl Enemies {
@@ -436,11 +451,14 @@ impl Enemies {
         self.burn_dps.swap_remove(i);
         self.soak.swap_remove(i);
         self.stagger.swap_remove(i);
+        self.stagger_immune.swap_remove(i);
         self.slow.swap_remove(i);
         self.marked.swap_remove(i);
         self.banner.swap_remove(i);
         self.scatter.swap_remove(i);
         self.scatter_from.swap_remove(i);
+        self.carry.swap_remove(i);
+        self.flee.swap_remove(i);
     }
 }
 
@@ -521,6 +539,8 @@ pub struct Blast {
     /// Leaves burning ground.
     burns: bool,
     pub elem: Option<Element>,
+    /// `Enemies.id` of the enemy this blast rides until it lands.
+    pub follow: Option<u32>,
 }
 
 #[derive(Default)]
@@ -1061,20 +1081,27 @@ impl World {
         self.reach_cap(FIELD_RADIUS * self.stats_of(w).area * self.area_mult())
     }
 
-    /// World positions of each moon orb. Awakened adds a counter-rotating outer ring.
-    /// Yin-yang orbs: they orbit Ren on a radius that swings wide and back.
+    /// Yin-yang orbs: each throw sends every orb straight out to the edge of Ren's reach and back.
     pub fn yinyang_positions(&self, w: &OwnedWeapon) -> Vec<Vec2> {
-        let s = self.stats_of(w);
-        let n = s.amount.max(1);
-        let swing = 0.5 + 0.5 * (w.phase * 0.35).sin();
-        let r = self.reach_cap((34.0 + 52.0 * swing) * s.area * self.area_mult());
-        (0..n).map(|k| self.player.pos + Vec2::new(0.0, -6.0) + Vec2::from_angle(w.phase + k as f32 / n as f32 * std::f32::consts::TAU) * r).collect()
+        let n = self.stats_of(w).amount.max(1);
+        let throw = w.phase / std::f32::consts::TAU;
+        let heading = throw.floor() * 2.4;
+        let out_and_back = (std::f32::consts::PI * throw.fract()).sin();
+        let radius = self.yinyang_radius(w);
+        (0..n)
+            .map(|k| {
+                let dir = Vec2::from_angle(heading + k as f32 / n as f32 * std::f32::consts::TAU);
+                let edge = (self.clip_to_reach(self.player.pos, self.player.pos + dir * 1000.0) - self.player.pos).length() - radius;
+                self.player.pos + dir * (edge.max(0.0) * out_and_back)
+            })
+            .collect()
     }
 
     pub fn yinyang_radius(&self, w: &OwnedWeapon) -> f32 {
         9.0 * self.stats_of(w).area * self.area_mult()
     }
 
+    /// World positions of each moon orb. Awakened adds a counter-rotating outer ring.
     pub fn orb_positions(&self, w: &OwnedWeapon) -> Vec<Vec2> {
         let s = self.stats_of(w);
         let orbit = ORB_ORBIT * s.area * self.area_mult();
@@ -1161,7 +1188,7 @@ impl World {
     }
 
     fn persistence(&self) -> f32 {
-        1.0 + 0.12 * self.passive_level(PassiveKind::Persistence) as f32
+        1.0 + PERSISTENCE_PER_LEVEL * self.passive_level(PassiveKind::Persistence) as f32
     }
 
     fn move_player(&mut self, input: Input) {
@@ -1317,11 +1344,14 @@ impl World {
         e.burn_dps.push(0.0);
         e.soak.push(0.0);
         e.stagger.push(0.0);
+        e.stagger_immune.push(0.0);
         e.slow.push(0.0);
         e.marked.push(false);
         e.banner.push(false);
         e.scatter.push(0.0);
         e.scatter_from.push(Vec2::ZERO);
+        e.carry.push(None);
+        e.flee.push(0.0);
     }
 
     fn spawn_boss(&mut self, kind: EnemyKind) {
@@ -1503,6 +1533,7 @@ impl World {
         let style = self.shot_style();
         let dmg = self.enemy_damage_scale();
         let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some(self.domain_center);
+        let dr = self.domain_radius();
         let tau = std::f32::consts::TAU;
         for i in 0..self.enemies.len() {
             let kind = self.enemies.kind[i];
@@ -1510,7 +1541,7 @@ impl World {
                 continue;
             }
             if !kind.is_boss() {
-                let held = self.freeze > 0.0 || self.enemies.stagger[i] > 0.0 || domain.is_some_and(|c| (self.enemies.pos[i] - c).length_sq() < DOMAIN_RADIUS * DOMAIN_RADIUS);
+                let held = self.freeze > 0.0 || self.enemies.stagger[i] > 0.0 || domain.is_some_and(|c| (self.enemies.pos[i] - c).length_sq() < dr * dr);
                 if held {
                     self.enemies.vel[i] = Vec2::ZERO;
                     continue;
@@ -1524,7 +1555,7 @@ impl World {
             let to = player - p;
             let base = to.y.atan2(to.x);
             let slow = match domain {
-                Some(c) if (p - c).length_sq() < DOMAIN_RADIUS * DOMAIN_RADIUS => 0.15,
+                Some(c) if (p - c).length_sq() < dr * dr => 0.15,
                 _ => 1.0,
             };
             let slow = if !kind.is_boss() && self.cfg.hero == HeroId::Kuon && to.length_sq() < STILLNESS_RADIUS * STILLNESS_RADIUS {
@@ -1618,7 +1649,7 @@ impl World {
                     let n = (n as f32 * more) as usize;
                     for k in 0..n {
                         let off = if k == 0 { Vec2::ZERO } else { Vec2::from_angle(self.rng.range(0.0, tau)) * self.rng.range(40.0, 170.0) };
-                        self.hazards.push(Hazard { pos: player + off, radius: 34.0, warn: 1.1 + k as f32 * 0.06, life: 0.0, kind: HazardKind::Blast { damage: 14.0 * dmg }, tick: 0.0, friendly: false });
+                        self.hazards.push(Hazard { pos: player + off, radius: 34.0, warn: 1.1 + k as f32 * 0.06, life: 0.0, kind: HazardKind::Blast { damage: 14.0 * dmg }, tick: 0.0, friendly: false, spare_enemies: false });
                     }
                 }
                 Move::Summon { n } => {
@@ -1672,23 +1703,23 @@ impl World {
                 let n = 2 + diff as usize + crisis as usize;
                 for k in 0..n {
                     let off = Vec2::from_angle(self.rng.range(0.0, tau)) * if k == 0 { self.rng.range(0.0, 30.0) } else { self.rng.range(50.0, 170.0) };
-                    self.hazards.push(Hazard { pos: p + off, radius: 44.0, warn: 1.3, life: 0.0, kind: HazardKind::Blast { damage: 12.0 * dmg }, tick: 0.0, friendly: false });
+                    self.hazards.push(Hazard { pos: p + off, radius: 44.0, warn: 1.3, life: 0.0, kind: HazardKind::Blast { damage: 12.0 * dmg }, tick: 0.0, friendly: false, spare_enemies: false });
                 }
             }
             Mechanic::Pressure => {
                 self.next_hazard = gap(15.0, 8.0);
                 let pos = p + Vec2::from_angle(self.rng.range(0.0, tau)) * 280.0;
-                self.hazards.push(Hazard { pos, radius: 85.0, warn: 1.0, life: 22.0, kind: HazardKind::Pressure, tick: 0.0, friendly: false });
+                self.hazards.push(Hazard { pos, radius: 85.0, warn: 1.0, life: 22.0, kind: HazardKind::Pressure, tick: 0.0, friendly: false, spare_enemies: false });
             }
             Mechanic::Downpour => {
                 self.next_hazard = gap(6.0, 3.0);
                 let lead = if self.player.moving { self.player.facing * 30.0 } else { Vec2::ZERO };
-                self.hazards.push(Hazard { pos: p + lead, radius: 36.0, warn: 1.2, life: 0.0, kind: HazardKind::Lightning { damage: 16.0 * dmg }, tick: 0.0, friendly: false });
+                self.hazards.push(Hazard { pos: p + lead, radius: 36.0, warn: 1.2, life: 0.0, kind: HazardKind::Lightning { damage: 16.0 * dmg }, tick: 0.0, friendly: false, spare_enemies: false });
             }
             Mechanic::Domains => {
                 self.next_hazard = gap(100.0, 55.0);
                 let pos = p + Vec2::from_angle(self.rng.range(0.0, tau)) * self.rng.range(0.0, 80.0);
-                self.hazards.push(Hazard { pos, radius: 210.0, warn: 3.0, life: 14.0, kind: HazardKind::Domain { damage: 6.0 * dmg }, tick: 1.0, friendly: false });
+                self.hazards.push(Hazard { pos, radius: 210.0, warn: 3.0, life: 14.0, kind: HazardKind::Domain { damage: 6.0 * dmg }, tick: 1.0, friendly: false, spare_enemies: false });
             }
         }
     }
@@ -1709,7 +1740,7 @@ impl World {
         }
         let p = self.player.pos;
         let mut hurt = 0.0f32;
-        let mut fired: Vec<(Vec2, f32, u8, bool)> = Vec::new();
+        let mut fired: Vec<(Vec2, f32, u8, bool, bool)> = Vec::new();
         let mut own_domains: Vec<(Vec2, f32, f32)> = Vec::new();
         let g = &self.cfg.gear;
         let (tag_safe, bolt_safe, domain_safe) = (g.has_set(StageId::EmberLeaf), g.has_set(StageId::Rainward), g.has_set(StageId::Shatterline));
@@ -1725,10 +1756,10 @@ impl World {
                             if inside && !safe {
                                 hurt = hurt.max(damage);
                             }
-                            fired.push((h.pos, h.radius, bolt as u8, h.friendly));
+                            fired.push((h.pos, h.radius, bolt as u8, h.friendly, h.spare_enemies));
                             h.life = -1.0;
                         }
-                        HazardKind::Domain { .. } => fired.push((h.pos, h.radius, 2, false)),
+                        HazardKind::Domain { .. } => fired.push((h.pos, h.radius, 2, false, false)),
                         HazardKind::Pressure => {}
                     }
                 }
@@ -1766,11 +1797,11 @@ impl World {
                 self.hurt_enemy(j, dmg, dir, None);
             }
         }
-        for (pos, radius, kind, friendly) in fired {
-            self.events.push(Event::Hazard { pos, radius, kind });
+        for (pos, radius, kind, friendly, spare) in fired {
+            self.events.push(Event::Hazard { pos, radius, kind, friendly });
             let blast = if friendly { blast * 2.0 } else { blast };
             let hit_elem = friendly.then_some(if kind == 0 { Element::Wind } else { Element::Electric });
-            if kind < 2 {
+            if kind < 2 && !spare {
                 // Tags and lightning don't take sides.
                 self.query_circle(pos, radius);
                 for k in 0..self.scratch.len() {
@@ -1796,6 +1827,7 @@ impl World {
         let decoys: Vec<Vec2> = self.clones.iter().map(|c| c.pos).collect();
         let stillness = self.cfg.hero == HeroId::Kuon;
         let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some(self.domain_center);
+        let dr = self.domain_radius();
         let style = if self.cfg.stage == StageId::Shotengai { 0 } else { self.cfg.stage.index() as u8 };
         let e = &mut self.enemies;
         let frozen = self.freeze > 0.0;
@@ -1807,7 +1839,7 @@ impl World {
             }
             // Endless Firmament: everything inside is suspended (bosses only crawl).
             if let Some(c) = domain {
-                if (e.pos[i] - c).length_sq() < DOMAIN_RADIUS * DOMAIN_RADIUS {
+                if (e.pos[i] - c).length_sq() < dr * dr {
                     if e.kind[i].is_boss() {
                         e.vel[i] = (player - e.pos[i]).normalize_or_zero() * (e.speed[i] * 0.15);
                     } else {
@@ -1898,6 +1930,11 @@ impl World {
                     }
                 }
                 Ai::Blink => {
+                    if e.flee[i] > 0.0 {
+                        e.flee[i] = (e.flee[i] - DT).max(0.0);
+                        e.vel[i] = (p - player).normalize_or_zero() * speed;
+                        continue;
+                    }
                     // Walk -> fade out (0.5s) -> reappear 140px from the player and fade in (0.6s).
                     // While faded (states 1 and 2) it stands still and deals no contact damage.
                     e.ai_timer[i] -= DT;
@@ -2133,7 +2170,7 @@ impl World {
                 WeaponKind::ThunderChain => {
                     // Heavenfall: sky lightning on a random nearby enemy.
                     if let Some(t) = self.random_targets(320.0, 1).first().copied() {
-                        self.blasts.push(Blast { pos: t, delay: 0.12, max_delay: 0.12, radius: 46.0 * area, damage: dmg * 1.4, style: style::SKYBOLT, burns: false, elem });
+                        self.blasts.push(Blast { pos: t, delay: 0.12, max_delay: 0.12, radius: 46.0 * area, damage: dmg * 1.4, style: style::SKYBOLT, burns: false, elem, follow: None });
                     }
                 }
                 WeaponKind::Taiko => {
@@ -2144,7 +2181,7 @@ impl World {
                 WeaponKind::StarFall => {
                     // Meteor: a giant meteor on the thickest part of the horde, leaving a crater.
                     if let Some(t) = self.random_targets(300.0, 1).first().copied() {
-                        self.blasts.push(Blast { pos: t, delay: 0.7, max_delay: 0.7, radius: 110.0 * area, damage: dmg * 3.0, style: style::METEOR, burns: true, elem });
+                        self.blasts.push(Blast { pos: t, delay: 0.7, max_delay: 0.7, radius: 110.0 * area, damage: dmg * 3.0, style: style::METEOR, burns: true, elem, follow: None });
                     }
                 }
                 WeaponKind::FlamePool => {
@@ -2155,14 +2192,14 @@ impl World {
                     // Comet Rain: five blue comets fall on the horde.
                     for t in self.random_targets(320.0, 5) {
                         let d = self.rng.range(0.4, 0.9);
-                        self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 50.0 * area, damage: dmg * 1.3, style: style::COMET, burns: false, elem });
+                        self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 50.0 * area, damage: dmg * 1.3, style: style::COMET, burns: false, elem, follow: None });
                     }
                 }
                 WeaponKind::GaleShuriken => {
                     // Cyclone: a ring of shuriken bursts out and returns.
                     for k in 0..10 {
                         let a = k as f32 / 10.0 * std::f32::consts::TAU;
-                        self.projectiles.push_kind(ProjKind::Shuriken, 9.0 * area, p, Vec2::from_angle(a) * 300.0, s.duration * self.persistence(), dmg, 255, 0.0, elem);
+                        self.projectiles.push_kind(ProjKind::Shuriken, 9.0 * area, p, Vec2::from_angle(a) * 300.0, s.duration, dmg, 255, 0.0, elem);
                     }
                 }
                 WeaponKind::FoxMirage => {
@@ -2196,7 +2233,7 @@ impl World {
                 WeaponKind::YinYangOrbs => {
                     // Yin-Yang Crash: a giant orb crashes onto the horde.
                     if let Some(t) = self.random_targets(300.0, 1).first().copied() {
-                        self.blasts.push(Blast { pos: t, delay: 0.6, max_delay: 0.6, radius: 90.0 * area, damage: dmg * 4.0, style: style::YINYANG, burns: false, elem });
+                        self.blasts.push(Blast { pos: t, delay: 0.6, max_delay: 0.6, radius: 90.0 * area, damage: dmg * 4.0, style: style::YINYANG, burns: false, elem, follow: None });
                     }
                 }
                 WeaponKind::SpiritSeal => {
@@ -2239,7 +2276,7 @@ impl World {
                     for k in 0..9 {
                         let pos = p + d * (40.0 + 34.0 * k as f32);
                         let delay = 0.12 + 0.07 * k as f32;
-                        self.blasts.push(Blast { pos, delay, max_delay: delay, radius: 34.0 * area, damage: dmg * 1.5, style: style::SPINE, burns: false, elem });
+                        self.blasts.push(Blast { pos, delay, max_delay: delay, radius: 34.0 * area, damage: dmg * 1.5, style: style::SPINE, burns: false, elem, follow: None });
                     }
                 }
                 WeaponKind::Devour => {
@@ -2283,6 +2320,15 @@ impl World {
         let mut i = 0;
         while i < self.blasts.len() {
             self.blasts[i].delay -= DT;
+            if let Some(id) = self.blasts[i].follow {
+                if let Some(j) = self.enemies.id.iter().position(|&x| x == id) {
+                    if self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
+                        self.blasts[i].pos = self.enemies.pos[j];
+                    } else {
+                        self.blasts[i].follow = None;
+                    }
+                }
+            }
             if self.blasts[i].delay > 0.0 {
                 i += 1;
                 continue;
@@ -2355,7 +2401,7 @@ impl World {
             self.divine_orb = DIVINE_ORB_EVERY;
             for t in self.random_targets(340.0, 3) {
                 let d = self.rng.range(0.35, 0.7);
-                self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 80.0, damage: DIVINE_ORB_DAMAGE * power, style: style::YINYANG, burns: false, elem });
+                self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 80.0, damage: DIVINE_ORB_DAMAGE * power, style: style::YINYANG, burns: false, elem, follow: None });
             }
         }
         // Spirit-seal barrage: rings of orbs in every direction.
@@ -2382,7 +2428,7 @@ impl World {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - p;
                 self.hurt_enemy(j, DIVINE_FINALE_DAMAGE * power, dir, elem);
-                self.enemies.push[j] += dir.normalize_or_zero() * (450.0 * self.enemies.knock[j]);
+                self.shove(j, dir, 450.0);
             }
             self.shots.clear();
             self.events.push(Event::Burst { pos: p, radius: self.reach_cap(DIVINE_FINALE_RADIUS), style: style::PURIFY });
@@ -2413,7 +2459,7 @@ impl World {
         self.fox_tick -= DT;
         if self.fox_tick <= 0.0 {
             self.fox_tick = DOMAIN_WAVE_EVERY;
-            self.query_circle(c, DOMAIN_RADIUS);
+            self.query_circle(c, self.domain_radius());
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - c;
@@ -2442,17 +2488,18 @@ impl World {
         self.hannya_beam = 0.4; // eruption timer
         let dmg = MUKADE_BURST_DAMAGE * self.fox_power();
         let elem = Some(self.hero_element);
-        self.query_circle(p, MUKADE_BURST_RADIUS);
+        let radius = self.reach_cap(MUKADE_BURST_RADIUS);
+        self.query_circle(p, radius);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - p;
             self.hurt_enemy(j, dmg, dir, elem);
-            self.enemies.push[j] += dir.normalize_or_zero() * (400.0 * self.enemies.knock[j]);
+            self.shove(j, dir, 400.0);
         }
-        let r2 = MUKADE_BURST_RADIUS * MUKADE_BURST_RADIUS;
+        let r2 = radius * radius;
         self.shots.retain(|s| (s.pos - p).length_sq() > r2);
         self.events.push(Event::MukadeAwakened { pos: p });
-        self.events.push(Event::Burst { pos: p, radius: MUKADE_BURST_RADIUS, style: style::FRENZY });
+        self.events.push(Event::Burst { pos: p, radius, style: style::FRENZY });
     }
 
     fn update_mukade(&mut self) {
@@ -2485,7 +2532,7 @@ impl World {
                 let r = 90.0 + 70.0 * (k % 2) as f32;
                 let pos = p + Vec2::from_angle(a) * r;
                 let d = 0.15 + 0.04 * k as f32;
-                self.blasts.push(Blast { pos, delay: d, max_delay: d, radius: 48.0, damage: MUKADE_ERUPT_DAMAGE * power, style: style::SPINE, burns: false, elem });
+                self.blasts.push(Blast { pos, delay: d, max_delay: d, radius: 48.0, damage: MUKADE_ERUPT_DAMAGE * power, style: style::SPINE, burns: false, elem, follow: None });
             }
         }
         if self.player.form <= 0.0 {
@@ -2502,6 +2549,7 @@ impl World {
         if self.cfg.stress.is_some() {
             return;
         }
+        self.thieves_steal();
         if self.time >= self.next_pickup {
             self.next_pickup = self.time + self.rng.range(PICKUP_EVERY.0, PICKUP_EVERY.1);
             if self.pickups.len() < MAX_PICKUPS {
@@ -2543,6 +2591,29 @@ impl World {
         self.events.push(Event::PickupTaken { pos, kind });
     }
 
+    fn thieves_steal(&mut self) {
+        let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some((self.domain_center, self.domain_radius()));
+        let frozen = self.freeze > 0.0;
+        for i in 0..self.enemies.len() {
+            let e = &mut self.enemies;
+            if e.kind[i] != EnemyKind::ToolThief || e.carry[i].is_some() || e.hp[i] <= 0.0 {
+                continue;
+            }
+            let held = frozen || e.stagger[i] > 0.0 || domain.is_some_and(|(c, r)| (e.pos[i] - c).length_sq() < r * r);
+            if e.ai_state[i] != 0 || held {
+                continue;
+            }
+            let (pos, reach) = (e.pos[i], e.radius[i] + THIEF_REACH);
+            let nearest = self.pickups.iter().enumerate().map(|(k, (c, _))| (k, (*c - pos).length_sq())).filter(|&(_, d)| d <= reach * reach).min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((k, _)) = nearest {
+                let (at, kind) = self.pickups.swap_remove(k);
+                e.carry[i] = Some(kind);
+                e.flee[i] = THIEF_FLEE;
+                self.events.push(Event::PickupStolen { pos: at, kind });
+            }
+        }
+    }
+
     fn update_spirit_arts(&mut self) {
         let p = self.player.pos;
         // Gravity Wells: drag enemies to the centre, then collapse.
@@ -2555,7 +2626,7 @@ impl World {
             for idx in 0..self.scratch.len() {
                 let j = self.scratch[idx] as usize;
                 let to = wl.pos - self.enemies.pos[j];
-                if !self.enemies.kind[j].is_boss() {
+                if !self.enemies.kind[j].is_boss() && self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
                     self.enemies.push[j] += to * (4.0 * DT * 60.0 / 10.0);
                 }
             }
@@ -2586,7 +2657,7 @@ impl World {
             t.life -= DT;
             t.tick -= DT;
             let j = self.enemies.id.iter().position(|id| *id == t.enemy);
-            let alive = j.filter(|&j| self.enemies.hp[j] > 0.0 && t.life > 0.0 && (self.enemies.pos[j] - p).length() < t.reach);
+            let alive = j.filter(|&j| self.enemies.hp[j] > 0.0 && t.life > 0.0 && (self.enemies.pos[j] - p).length() < t.reach && self.in_reach(self.enemies.pos[j], self.enemies.radius[j]));
             let Some(j) = alive else {
                 // Endless River: the chain leaps from a dead enemy to the next one and heals.
                 if t.heals && t.life > 0.0 {
@@ -2603,7 +2674,9 @@ impl World {
                 continue;
             };
             let to_player = p - self.enemies.pos[j];
-            self.enemies.push[j] += to_player.normalize_or_zero() * 9.0 * self.enemies.knock[j].max(0.2); // ~60 px/s drag once push decay settles
+            if self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
+                self.enemies.push[j] += to_player.normalize_or_zero() * 9.0 * self.enemies.knock[j].max(0.2); // ~60 px/s drag once push decay settles
+            }
             if t.tick <= 0.0 {
                 t.tick = 0.25;
                 self.hurt_enemy(j, t.damage, to_player, t.elem);
@@ -2631,7 +2704,7 @@ impl World {
                     let j = self.scratch[idx] as usize;
                     let dir = self.enemies.pos[j] - l.pos;
                     self.hurt_enemy(j, l.damage, dir, l.elem);
-                    if l.slows {
+                    if l.slows && self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
                         self.enemies.push[j] = self.enemies.push[j] * 0.5 - self.enemies.vel[j] * 0.3;
                     }
                 }
@@ -2748,14 +2821,15 @@ impl World {
         self.fox_volley = 0.4;
         let dmg = FOX_BLAST_DAMAGE * self.fox_power();
         let elem = Some(self.hero_element);
-        self.query_circle(p, FOX_BLAST_RADIUS);
+        let radius = self.reach_cap(FOX_BLAST_RADIUS);
+        self.query_circle(p, radius);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - p;
             self.hurt_enemy(j, dmg, dir, elem);
-            self.enemies.push[j] += dir.normalize_or_zero() * (420.0 * self.enemies.knock[j]);
+            self.shove(j, dir, 420.0);
         }
-        let r2 = FOX_BLAST_RADIUS * FOX_BLAST_RADIUS;
+        let r2 = radius * radius;
         self.shots.retain(|s| (s.pos - p).length_sq() > r2);
         self.events.push(Event::FoxAwakened { pos: p });
     }
@@ -2816,14 +2890,15 @@ impl World {
         self.finale_charging = false;
         let dmg = HANNYA_ONSET_DAMAGE * self.fox_power();
         let elem = Some(self.hero_element);
-        self.query_circle(p, HANNYA_ONSET_RADIUS);
+        let radius = self.reach_cap(HANNYA_ONSET_RADIUS);
+        self.query_circle(p, radius);
         for idx in 0..self.scratch.len() {
             let j = self.scratch[idx] as usize;
             let dir = self.enemies.pos[j] - p;
             self.hurt_enemy(j, dmg, dir, elem);
-            self.enemies.push[j] += dir.normalize_or_zero() * (380.0 * self.enemies.knock[j]);
+            self.shove(j, dir, 380.0);
         }
-        let r2 = HANNYA_ONSET_RADIUS * HANNYA_ONSET_RADIUS;
+        let r2 = radius * radius;
         self.shots.retain(|s| (s.pos - p).length_sq() > r2);
         self.events.push(Event::HannyaAwakened { pos: p });
     }
@@ -2930,7 +3005,7 @@ impl World {
                 let j = self.scratch[idx] as usize;
                 let dir = self.enemies.pos[j] - c;
                 self.hurt_enemy(j, HANNYA_FINALE_DAMAGE * power, dir, elem);
-                self.enemies.push[j] += dir.normalize_or_zero() * (450.0 * self.enemies.knock[j]);
+                self.shove(j, dir, 450.0);
             }
             self.shots.clear();
             self.events.push(Event::FinaleBlast { pos: c, radius: self.reach_cap(HANNYA_FINALE_RADIUS) });
@@ -2998,6 +3073,17 @@ impl World {
             (REACH_HALF.x * self.reach_scale).min(self.view_half.x - REACH_EDGE).max(0.0),
             (REACH_HALF.y * self.reach_scale).min(self.view_half.y - REACH_EDGE).max(0.0),
         )
+    }
+
+    pub fn domain_radius(&self) -> f32 {
+        self.reach_cap(DOMAIN_RADIUS)
+    }
+
+    /// Knockback that, like damage, stops at the reach box.
+    fn shove(&mut self, j: usize, dir: Vec2, force: f32) {
+        if self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
+            self.enemies.push[j] += dir.normalize_or_zero() * (force * self.enemies.knock[j]);
+        }
     }
 
     pub fn in_reach(&self, pos: Vec2, radius: f32) -> bool {
@@ -3071,8 +3157,11 @@ impl World {
                 }
             }
             Element::Earth => {
-                if !e.kind[j].is_boss() {
+                if !e.kind[j].is_boss() && e.stagger_immune[j] <= 0.0 {
                     e.stagger[j] = STAGGER_SECONDS;
+                    if e.kind[j].is_leader() {
+                        e.stagger_immune[j] = STAGGER_SECONDS + LEADER_STAGGER_IMMUNE;
+                    }
                 }
             }
             Element::Wind => e.push[j] += dir.normalize_or_zero() * (KNOCK_EXTRA * e.knock[j]),
@@ -3104,7 +3193,7 @@ impl World {
     fn tick_statuses(&mut self) {
         for j in 0..self.enemies.len() {
             let e = &mut self.enemies;
-            for t in [&mut e.soak[j], &mut e.stagger[j], &mut e.slow[j]] {
+            for t in [&mut e.soak[j], &mut e.stagger[j], &mut e.stagger_immune[j], &mut e.slow[j]] {
                 *t = (*t - DT).max(0.0);
             }
             if e.burn[j] <= 0.0 || e.hp[j] <= 0.0 {
@@ -3204,6 +3293,7 @@ impl World {
     }
 
     fn nova(&mut self, c: Vec2, r: f32, dmg: f32, style: u8, elem: Option<Element>) {
+        let r = self.reach_cap(r);
         self.query_circle(c, r);
         for k in 0..self.scratch.len() {
             let j = self.scratch[k] as usize;
@@ -3328,7 +3418,7 @@ impl World {
                     for _ in 0..n {
                         let q = self.random_targets(self.reach_half().length(), 1)[0];
                         let delay = 0.7 + self.rng.range(0.0, 0.5);
-                        self.blasts.push(Blast { pos: q, delay, max_delay: delay, radius: 70.0 * self.area_mult(), damage: 110.0 * pw, style: style::METEOR, burns: false, elem: Some(a.art.element()) });
+                        self.blasts.push(Blast { pos: q, delay, max_delay: delay, radius: 70.0 * self.area_mult(), damage: 110.0 * pw, style: style::METEOR, burns: false, elem: Some(a.art.element()), follow: None });
                     }
                 }
             }
@@ -3343,7 +3433,7 @@ impl World {
                             best = (q, self.scratch.len());
                         }
                     }
-                    self.blasts.push(Blast { pos: best.0, delay: 0.6, max_delay: 0.6, radius: 115.0 * self.area_mult(), damage: 220.0 * pw, style: style::QUAKE, burns: false, elem: Some(a.art.element()) });
+                    self.blasts.push(Blast { pos: best.0, delay: 0.6, max_delay: 0.6, radius: 115.0 * self.area_mult(), damage: 220.0 * pw, style: style::QUAKE, burns: false, elem: Some(a.art.element()), follow: None });
                 }
             }
             ArsenalArt::YinYangBreaker => {
@@ -3414,7 +3504,7 @@ impl World {
         if lantern && self.exo_timers[0] <= 0.0 {
             self.exo_timers[0] = 10.0;
             let d = 90.0 * self.gear_power(1.0);
-            self.nova(p, self.reach_cap(170.0 * self.area_mult()), d, 2, Some(Exotic::LanternHeart.element()));
+            self.nova(p, 170.0 * self.area_mult(), d, 2, Some(Exotic::LanternHeart.element()));
         }
         if seals && self.exo_timers[1] <= 0.0 {
             self.exo_timers[1] = 2.0;
@@ -3424,7 +3514,7 @@ impl World {
         if regalia && self.exo_timers[2] <= 0.0 {
             self.exo_timers[2] = 30.0;
             self.shots.clear();
-            self.events.push(Event::Burst { pos: p, radius: 300.0, style: style::PURIFY });
+            self.events.push(Event::Burst { pos: p, radius: self.reach_cap(300.0), style: style::PURIFY });
         }
         if self.mask > 0.0 {
             self.mask -= DT;
@@ -3459,7 +3549,7 @@ impl World {
         }
         if fingers {
             let d = 40.0 * self.gear_power(1.0);
-            self.hazards.push(Hazard { pos: p, radius: 220.0, warn: 0.0, life: 4.0, kind: HazardKind::Domain { damage: d }, tick: 0.0, friendly: true });
+            self.hazards.push(Hazard { pos: p, radius: self.reach_cap(220.0), warn: 0.0, life: 4.0, kind: HazardKind::Domain { damage: d }, tick: 0.0, friendly: true, spare_enemies: false });
             self.events.push(Event::DomainOpened { pos: p });
         }
     }
@@ -3516,7 +3606,7 @@ impl World {
         let sb = self.cfg.gear.unique(Unique::Starburst);
         if sb > 0.0 && self.gear_timers[1] <= 0.0 {
             self.gear_timers[1] = 6.0 / sb;
-            let r = 120.0 * self.area_mult();
+            let r = self.reach_cap(120.0 * self.area_mult());
             self.query_circle(p, r);
             for k in 0..self.scratch.len() {
                 let j = self.scratch[k] as usize;
@@ -3532,13 +3622,13 @@ impl World {
         if self.cfg.gear.has_set(StageId::EmberLeaf) && self.gear_timers[2] <= 0.0 {
             self.gear_timers[2] = 6.0;
             if let Some(q) = pick(self, 260.0) {
-                self.hazards.push(Hazard { pos: q, radius: 56.0, warn: 0.6, life: 0.0, kind: HazardKind::Blast { damage: 0.0 }, tick: 0.0, friendly: true });
+                self.hazards.push(Hazard { pos: q, radius: 56.0, warn: 0.6, life: 0.0, kind: HazardKind::Blast { damage: 0.0 }, tick: 0.0, friendly: true, spare_enemies: false });
             }
         }
         if self.cfg.gear.has_set(StageId::Rainward) && self.gear_timers[3] <= 0.0 {
             self.gear_timers[3] = 3.0;
             if let Some(q) = pick(self, 250.0) {
-                self.hazards.push(Hazard { pos: q, radius: 40.0, warn: 0.35, life: 0.0, kind: HazardKind::Lightning { damage: 0.0 }, tick: 0.0, friendly: true });
+                self.hazards.push(Hazard { pos: q, radius: 40.0, warn: 0.35, life: 0.0, kind: HazardKind::Lightning { damage: 0.0 }, tick: 0.0, friendly: true, spare_enemies: false });
             }
         }
     }
@@ -3583,6 +3673,7 @@ impl World {
             }
             fell = true;
             let from = e.pos[d];
+            self.events.push(Event::LeaderFell { pos: from });
             for i in 0..e.len() {
                 if e.hp[i] > 0.0 && !e.kind[i].is_boss() && (e.pos[i] - from).length_sq() < BANNER_RADIUS * BANNER_RADIUS {
                     e.scatter[i] = SCATTER_TIME;
@@ -3592,6 +3683,25 @@ impl World {
         }
         if fell {
             e.banner.fill(false);
+        }
+    }
+
+    fn death_trick(&mut self, pos: Vec2, kind: EnemyKind) {
+        match kind {
+            EnemyKind::ClayBird => {
+                let damage = CLAY_BLAST_DAMAGE * self.enemy_damage_scale();
+                self.hazards.push(Hazard { pos, radius: CLAY_BLAST_RADIUS, warn: CLAY_BLAST_WARN, life: 0.0, kind: HazardKind::Blast { damage }, tick: 0.0, friendly: false, spare_enemies: true });
+                if self.in_view(pos) {
+                    self.events.push(Event::HazardWarn { pos, radius: CLAY_BLAST_RADIUS });
+                }
+            }
+            EnemyKind::SwarmMother => {
+                for k in 0..SWARM_SPLIT {
+                    let angle = std::f32::consts::TAU * k as f32 / SWARM_SPLIT as f32;
+                    self.pending_spawns.push((EnemyKind::CursedSpawn, pos + Vec2::from_angle(angle) * SWARM_SPLIT_RADIUS));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -3613,7 +3723,14 @@ impl World {
                 self.player.special = (self.player.special + self.mods.special_rate * (1.0 + self.bonus.special_charge) / SPECIAL_KILLS).min(1.0);
             }
             self.events.push(Event::Kill { pos, kind });
+            if self.cfg.stress.is_none() {
+                self.death_trick(pos, kind);
+            }
             self.kills_by_kind[kind.index()] += 1;
+            if let Some(k) = self.enemies.carry[i] {
+                self.pickups.push((pos, k));
+                self.events.push(Event::PickupSpawned { pos, kind: k });
+            }
             if self.cfg.stress.is_none() {
                 let find = 1.0 + self.bonus.gear_find;
                 let (n, min) = match kind.rank() {
@@ -3964,7 +4081,7 @@ impl World {
             }
             WeaponKind::Familiars => {
                 self.events.push(Event::Fired(WeaponKind::Familiars));
-                let life = s.duration * self.persistence();
+                let life = s.duration;
                 for n in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU) + n as f32;
                     self.projectiles.push_kind(ProjKind::Familiar, 6.0, p, Vec2::from_angle(a) * s.speed, life, dmg, s.pierce, 6.0, elem);
@@ -4013,12 +4130,12 @@ impl World {
                     let Some(j) = self.nearest_index(p, reach, &taken) else { break };
                     let id = self.enemies.id[j];
                     taken.push(id);
-                    self.tethers.push(Tether { enemy: id, life: s.duration * self.persistence(), tick: 0.0, damage: dmg, reach: reach * 1.3, heals: w.awakened, elem });
+                    self.tethers.push(Tether { enemy: id, life: s.duration, tick: 0.0, damage: dmg, reach: reach * 1.3, heals: w.awakened, elem });
                 }
             }
             WeaponKind::LanternVigil => {
                 self.events.push(Event::Fired(WeaponKind::LanternVigil));
-                let life = s.duration * self.persistence();
+                let life = s.duration;
                 for _ in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU);
                     let d = self.rng.range(30.0, 110.0);
@@ -4051,16 +4168,17 @@ impl World {
                 self.events.push(Event::Fired(WeaponKind::MukadeSpines));
                 for (k, t) in self.random_targets(240.0, s.amount).into_iter().enumerate() {
                     let d = 0.3 + 0.06 * k as f32;
-                    self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 30.0 * area, damage: dmg, style: style::SPINE, burns: false, elem });
+                    self.blasts.push(Blast { pos: t, delay: d, max_delay: d, radius: 30.0 * area, damage: dmg, style: style::SPINE, burns: false, elem, follow: None });
                 }
             }
             WeaponKind::Devour => {
                 let r = 70.0 * area;
                 self.query_circle(p, r);
-                let n = self.scratch.len();
-                for idx in 0..n {
+                let mut n = 0;
+                for idx in 0..self.scratch.len() {
                     let j = self.scratch[idx] as usize;
                     let dir = p - self.enemies.pos[j];
+                    n += self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) as u32;
                     self.hurt_enemy(j, dmg, dir * 0.3, elem);
                 }
                 let per = if w.awakened { 1.0 } else { 0.5 };
@@ -4080,14 +4198,19 @@ impl World {
             }
             WeaponKind::SpiritSeal => {
                 self.events.push(Event::Fired(WeaponKind::SpiritSeal));
-                let n = s.amount;
-                for k in 0..n {
-                    let slot = k as f32 / n as f32 * std::f32::consts::TAU;
-                    self.projectiles.push_kind(ProjKind::SealOrb, 7.0, p, Vec2::from_angle(slot) * s.speed, 2.0, dmg, 1, 8.0, elem);
-                    let last = self.projectiles.len() - 1;
-                    self.projectiles.charge[last] = s.duration + 0.05 * k as f32;
-                    self.projectiles.burst[last] = 26.0 * area;
+                let reach = self.reach_half();
+                self.query_circle(p, reach.length());
+                let mut scratch = std::mem::take(&mut self.scratch);
+                scratch.retain(|&j| self.in_reach(self.enemies.pos[j as usize], self.enemies.radius[j as usize]));
+                for _ in 0..s.amount {
+                    if scratch.is_empty() {
+                        break;
+                    }
+                    let j = scratch.swap_remove(self.rng.next_u32() as usize % scratch.len()) as usize;
+                    let (pos, id) = (self.enemies.pos[j], self.enemies.id[j]);
+                    self.blasts.push(Blast { pos, delay: SEAL_STAMP_DELAY, max_delay: SEAL_STAMP_DELAY, radius: SEAL_STAMP_RADIUS * area, damage: dmg, style: style::SEAL, burns: false, elem, follow: Some(id) });
                 }
+                self.scratch = scratch;
             }
             WeaponKind::PurificationWave => {
                 self.events.push(Event::Fired(WeaponKind::PurificationWave));
@@ -4130,7 +4253,7 @@ impl World {
                         pos,
                         facing: self.player.facing,
                         moving: false,
-                        life: s.duration * self.persistence(),
+                        life: s.duration,
                         hits: s.pierce,
                         iframes: 0.5,
                         strike_cd: 0.3,
@@ -4154,7 +4277,7 @@ impl World {
                 let n = s.amount as f32;
                 for k in 0..s.amount {
                     let a = base + (k as f32 - (n - 1.0) / 2.0) * 0.5;
-                    self.projectiles.push_kind(ProjKind::Shuriken, 10.0 * area, p, Vec2::from_angle(a) * s.speed, s.duration * self.persistence(), dmg, 255, 0.0, elem);
+                    self.projectiles.push_kind(ProjKind::Shuriken, 10.0 * area, p, Vec2::from_angle(a) * s.speed, s.duration, dmg, 255, 0.0, elem);
                 }
             }
             _ => {}
@@ -4181,14 +4304,16 @@ impl World {
                     if self.enemies.wave_cd[j] == 0 && off.length_sq() >= band.max(0.0) * band.max(0.0) {
                         self.enemies.wave_cd[j] = 20;
                         self.hurt_enemy(j, wv.damage, off * 2.0, wv.elem);
-                        if wv.purify {
+                        if wv.purify && self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
                             self.enemies.push[j] += off.normalize_or_zero() * (380.0 * self.enemies.knock[j].max(0.3));
                         }
                     }
                 }
                 if wv.purify {
                     let (c, r) = (wv.center, wv.radius);
-                    self.shots.retain(|s| ((s.pos - c).length() - r).abs() > 14.0);
+                    let mut shots = std::mem::take(&mut self.shots);
+                    shots.retain(|s| ((s.pos - c).length() - r).abs() > 14.0 || !self.in_reach(s.pos, 0.0));
+                    self.shots = shots;
                 }
             }
             i += 1;
@@ -4239,15 +4364,8 @@ impl World {
             // Charging in the hand: follow the player, then launch at the nearest enemy.
             if self.projectiles.charge[i] > 0.0 {
                 self.projectiles.charge[i] -= DT;
-                if self.projectiles.kind[i] == ProjKind::SealOrb {
-                    // Gather in a ring around the player (the slot angle rides in the velocity).
-                    let v = self.projectiles.vel[i];
-                    let a = v.y.atan2(v.x) + self.time * 5.0;
-                    self.projectiles.pos[i] = self.player.pos + Vec2::new(0.0, -8.0) + Vec2::from_angle(a) * 30.0;
-                } else {
-                    let hand = Vec2::new(if self.player.facing.x < 0.0 { -9.0 } else { 9.0 }, -6.0);
-                    self.projectiles.pos[i] = self.player.pos + hand;
-                }
+                let hand = Vec2::new(if self.player.facing.x < 0.0 { -9.0 } else { 9.0 }, -6.0);
+                self.projectiles.pos[i] = self.player.pos + hand;
                 if self.projectiles.charge[i] <= 0.0 {
                     let speed = self.projectiles.vel[i].length().max(1.0);
                     let dir = match self.nearest_enemy(380.0) {
@@ -5624,6 +5742,7 @@ mod tests {
         assert!(w.enemies.banner[near]);
         let death = w.enemies.pos[l];
         kill_step(&mut w, l);
+        assert!(w.events.iter().any(|e| matches!(*e, Event::LeaderFell { pos } if pos == death)));
         assert!(w.enemies.banner.iter().all(|b| !b));
         assert_eq!(w.enemies.len(), 1);
         assert_eq!(w.enemies.scatter[0], SCATTER_TIME);
@@ -5638,6 +5757,27 @@ mod tests {
         w.step(Input::default());
         let v = w.enemies.vel[0].normalize_or_zero();
         assert!(v.x * to_player.x + v.y * to_player.y > 0.9);
+    }
+
+    #[test]
+    fn earth_cannot_stun_lock_a_leader() {
+        let mut w = quiet_world();
+        let leader = w.stage().leader;
+        let l = add_enemy(&mut w, leader, 150.0);
+        let wisp = add_enemy(&mut w, EnemyKind::Wisp, -150.0);
+        let mut free_ticks = 0;
+        for _ in 0..(3.0 / DT) as usize {
+            w.on_hit_effect(l, Element::Earth, 5.0, RIGHT);
+            w.on_hit_effect(wisp, Element::Earth, 5.0, RIGHT);
+            w.tick_statuses();
+            assert!(w.enemies.stagger[wisp] > 0.0, "common enemies stay staggerable");
+            if w.enemies.stagger[l] <= 0.0 {
+                free_ticks += 1;
+            }
+        }
+        let cycle = STAGGER_SECONDS + LEADER_STAGGER_IMMUNE;
+        let expected = (3.0 / cycle) * LEADER_STAGGER_IMMUNE / DT;
+        assert!(free_ticks as f32 > expected * 0.8, "Leader free for only {free_ticks} ticks");
     }
 
     #[test]
@@ -5790,7 +5930,7 @@ mod tests {
         let p = w.player.pos;
         let off = p + Vec2::new(w.view_half.x + 60.0, 0.0);
         let bursts = |w: &World| w.events.iter().filter(|e| matches!(e, Event::Burst { .. })).count();
-        let blast = |pos| Blast { pos, delay: 0.0, max_delay: 0.0, radius: 40.0, damage: 10.0, style: style::METEOR, burns: false, elem: None };
+        let blast = |pos| Blast { pos, delay: 0.0, max_delay: 0.0, radius: 40.0, damage: 10.0, style: style::METEOR, burns: false, elem: None, follow: None };
         w.blasts.push(blast(off));
         w.update_signatures();
         assert_eq!(bursts(&w), 0, "off-view delayed blast");
@@ -7454,8 +7594,8 @@ mod tests {
         }
     }
 
-    fn damage_on_one(kind: WeaponKind) -> f32 {
-        let mut w = World::new(WorldConfig { seed: 5, hero: HeroId::Ren, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+    fn damage_on_one(kind: WeaponKind, hero: HeroId) -> f32 {
+        let mut w = World::new(WorldConfig { seed: 5, hero, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
         w.weapons = vec![OwnedWeapon { kind, level: MAX_LEVEL, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
         w.spawn_enemy(EnemyKind::Oni, Vec2::new(60.0, 0.0));
         w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
@@ -7472,15 +7612,18 @@ mod tests {
     #[test]
     #[ignore]
     fn skill_strength() {
+        let hero = std::env::var("SKILL_HERO").ok().map_or(HeroId::Ren, |k| HeroId::from_key(&k).expect("SKILL_HERO is a hero key"));
+        let pool = hero_def(hero).weapon_pool();
         let mut weapons: Vec<(WeaponKind, f32, f32, f32)> = ALL_WEAPONS
             .iter()
+            .filter(|k| pool.contains(k))
             .map(|&k| {
-                let (crowd, single) = (damage_over(k, false, HeroId::Ren), damage_on_one(k));
+                let (crowd, single) = (damage_over(k, false, hero), damage_on_one(k, hero));
                 (k, crowd, single, (crowd * single).sqrt())
             })
             .collect();
         weapons.sort_by(|a, b| b.3.total_cmp(&a.3));
-        println!("WEAPONS (strength = sqrt(crowd * single))");
+        println!("WEAPONS {hero:?} (strength = sqrt(crowd * single))");
         for (k, crowd, single, s) in &weapons {
             println!("{k:?}\tcrowd {crowd:.0}\tsingle {single:.0}\tstrength {s:.0}");
         }
@@ -7492,7 +7635,7 @@ mod tests {
         for p in candidates.filter(|p| p.is_none_or(|p| only.as_ref().is_none_or(|o| format!("{p:?}") == *o))) {
             let (mut wins, mut total_time) = (0, 0.0);
             for seed in first..first + seeds {
-                let mut w = World::new(WorldConfig { seed, hero: HeroId::Ren, stage: StageId::ShrineValley, difficulty: Difficulty::Normal, ..Default::default() });
+                let mut w = World::new(WorldConfig { seed, hero, stage: StageId::ShrineValley, difficulty: Difficulty::Normal, ..Default::default() });
                 if let Some(p) = p {
                     for _ in 0..passive_max(p) {
                         w.apply_upgrade(Upgrade::Passive(p));
@@ -7604,5 +7747,602 @@ mod tests {
         crowd(&mut w);
         w.step(Input::default());
         assert_eq!(w.specials_used, 1, "low health and a crowd should trigger it");
+    }
+    fn ren_with(kind: WeaponKind, seed: u64) -> World {
+        let mut w = World::new(WorldConfig { seed, hero: HeroId::Ren, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.weapons = vec![OwnedWeapon { kind, level: 1, awakened: false, timer: 0.0, phase: 0.0, extra: false, power: 1.0 }];
+        w.bonus.crit_chance = 0.0;
+        w
+    }
+
+    fn place(w: &mut World, offset: Vec2) -> u32 {
+        w.spawn_enemy(EnemyKind::Wisp, w.player.pos + offset);
+        let j = w.enemies.len() - 1;
+        w.enemies.hp[j] = 1000.0;
+        w.enemies.speed[j] = 0.0;
+        w.enemies.id[j]
+    }
+
+    fn index_of(w: &World, id: u32) -> usize {
+        w.enemies.id.iter().position(|&x| x == id).expect("enemy alive")
+    }
+
+    fn fire_seal(w: &mut World, amount: u32) {
+        let weapon = w.weapons[0];
+        let mut s = w.stats_of(&weapon);
+        s.amount = amount;
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        w.fire_new_weapon(&weapon, &s, 1.0);
+    }
+
+    fn throw_samples(w: &mut World) -> Vec<Vec<Vec2>> {
+        let mut out = vec![w.yinyang_positions(&w.weapons[0])];
+        while w.weapons[0].phase < std::f32::consts::TAU {
+            w.step(Input::default());
+            out.push(w.yinyang_positions(&w.weapons[0]));
+        }
+        out
+    }
+
+    #[test]
+    fn yinyang_flies_out_and_back() {
+        let mut w = ren_with(WeaponKind::YinYangOrbs, 3);
+        let p = w.player.pos;
+        let weapon = w.weapons[0];
+        let n = w.stats_of(&weapon).amount as usize;
+        let samples = throw_samples(&mut w);
+        let r = w.yinyang_radius(&weapon);
+        for k in 0..n {
+            let dir = Vec2::from_angle(k as f32 / n as f32 * std::f32::consts::TAU);
+            let edge = (w.clip_to_reach(p, p + dir * 1000.0) - p).length() - r;
+            let peak = samples.iter().map(|s| (s[k] - p).length()).fold(0.0, f32::max);
+            assert!(peak >= 0.9 * edge, "orb {k} peaked at {peak} of {edge}");
+            assert!((samples[0][k] - p).length() <= 12.0 && (samples[samples.len() - 1][k] - p).length() <= 12.0, "orb {k} not home at the ends");
+            assert!(samples.iter().all(|s| w.in_reach(s[k], 0.0)), "orb {k} left the reach box");
+        }
+    }
+
+    #[test]
+    fn yinyang_does_not_orbit() {
+        let mut w = ren_with(WeaponKind::YinYangOrbs, 3);
+        let p = w.player.pos;
+        let angle = |c: Vec2| (c - p).y.atan2((c - p).x);
+        let first: Vec<f32> = throw_samples(&mut w).iter().map(|s| s[0]).filter(|c| (*c - p).length() > 20.0).map(angle).collect();
+        assert!(first.windows(2).all(|a| (a[0] - a[1]).abs() < 0.01), "orb 0 swung around during one throw");
+        for _ in 0..30 {
+            w.step(Input::default());
+        }
+        let second = w.yinyang_positions(&w.weapons[0])[0];
+        let mut turned = (angle(second) - first[0]).abs() % std::f32::consts::TAU;
+        turned = turned.min(std::f32::consts::TAU - turned);
+        assert!(turned > 0.5, "next throw flew the same way");
+    }
+
+    #[test]
+    fn spirit_seal_stamps_random_in_reach() {
+        let mut w = ren_with(WeaponKind::SpiritSeal, 5);
+        let reach = w.reach_half();
+        let inside: Vec<u32> = (0..3).map(|k| place(&mut w, Vec2::new(40.0 + 30.0 * k as f32, 10.0))).collect();
+        for k in 0..2 {
+            place(&mut w, Vec2::new(reach.x + 60.0 + 20.0 * k as f32, 0.0));
+        }
+        fire_seal(&mut w, 5);
+        let mut stamped: Vec<u32> = w.blasts.iter().filter_map(|b| b.follow).collect();
+        stamped.sort();
+        assert_eq!(stamped, inside, "exactly the in-reach enemies, once each");
+
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..50 {
+            let mut w = ren_with(WeaponKind::SpiritSeal, seed);
+            for k in 0..10 {
+                place(&mut w, Vec2::new(30.0 + 12.0 * k as f32, 20.0 - 4.0 * k as f32));
+            }
+            fire_seal(&mut w, 1);
+            seen.extend(w.blasts.iter().filter_map(|b| b.follow));
+        }
+        assert!(seen.len() >= 4, "only {} distinct enemies stamped over 50 seeds", seen.len());
+    }
+
+    fn seal_radius(w: &World) -> f32 {
+        SEAL_STAMP_RADIUS * w.stats_of(&w.weapons[0]).area * w.area_mult()
+    }
+
+    fn run_ticks(w: &mut World, ticks: u32) {
+        for _ in 0..ticks {
+            w.step(Input::default());
+        }
+    }
+
+    #[test]
+    fn spirit_seal_bursts_after_delay() {
+        let mut w = ren_with(WeaponKind::SpiritSeal, 5);
+        w.weapons[0].timer = 1e9;
+        let stamped = place(&mut w, Vec2::new(60.0, 0.0));
+        let beside_start = place(&mut w, Vec2::new(60.0, -30.0));
+        let radius = seal_radius(&w);
+        fire_seal(&mut w, 1);
+        assert_eq!(w.blasts[0].follow, Some(stamped));
+        let moved = Vec2::new(60.0, 70.0);
+        let beside_end = place(&mut w, moved + Vec2::new(radius * 0.5, 0.0));
+        let hp = |w: &World, id| w.enemies.hp[index_of(w, id)];
+        run_ticks(&mut w, 30);
+        let j = index_of(&w, stamped);
+        w.enemies.pos[j] = w.player.pos + moved;
+        run_ticks(&mut w, 55);
+        assert_eq!((hp(&w, stamped), hp(&w, beside_end), hp(&w, beside_start)), (1000.0, 1000.0, 1000.0), "seal hurt before 1.5 s");
+        run_ticks(&mut w, 10);
+        assert!(hp(&w, stamped) < 1000.0 && hp(&w, beside_end) < 1000.0, "burst missed the enemy's current position");
+        assert_eq!(hp(&w, beside_start), 1000.0, "burst landed where the stamp was placed");
+    }
+
+    #[test]
+    fn stamp_stops_following_out_of_reach() {
+        let mut w = ren_with(WeaponKind::SpiritSeal, 5);
+        w.weapons[0].timer = 1e9;
+        let stamped = place(&mut w, Vec2::new(60.0, 0.0));
+        let last_in_reach = Vec2::new(60.0, 40.0);
+        let radius = seal_radius(&w);
+        fire_seal(&mut w, 1);
+        assert_eq!(w.blasts[0].follow, Some(stamped));
+        let neighbour = place(&mut w, last_in_reach + Vec2::new(radius * 0.5, 0.0));
+        let j = index_of(&w, stamped);
+        w.enemies.pos[j] = w.player.pos + last_in_reach;
+        run_ticks(&mut w, 30);
+        let j = index_of(&w, stamped);
+        w.enemies.pos[j] = w.player.pos + Vec2::new(w.reach_half().x + 80.0, 40.0);
+        run_ticks(&mut w, 65);
+        assert!(w.blasts.is_empty(), "seal never burst");
+        assert!(w.enemies.hp[index_of(&w, neighbour)] < 1000.0, "burst followed the enemy out of reach");
+    }
+
+    #[test]
+    fn stamp_on_killed_enemy_still_bursts() {
+        let mut w = ren_with(WeaponKind::SpiritSeal, 5);
+        w.weapons[0].timer = 1e9;
+        let stamped = place(&mut w, Vec2::new(60.0, 0.0));
+        let offset = seal_radius(&w) * 0.5;
+        let neighbour = place(&mut w, Vec2::new(60.0 + offset, 0.0));
+        fire_seal(&mut w, 1);
+        run_ticks(&mut w, 30);
+        let j = index_of(&w, stamped);
+        kill_step(&mut w, j);
+        assert!(w.enemies.id.iter().all(|&id| id != stamped));
+        run_ticks(&mut w, 55);
+        assert_eq!(w.enemies.hp[index_of(&w, neighbour)], 1000.0);
+        run_ticks(&mut w, 10);
+        assert!(w.enemies.hp[index_of(&w, neighbour)] < 1000.0, "burst never landed");
+    }
+
+    #[test]
+    fn spirit_seal_fires_no_orbiting_orbs() {
+        let mut w = ren_with(WeaponKind::SpiritSeal, 5);
+        place(&mut w, Vec2::new(60.0, 0.0));
+        fire_seal(&mut w, 5);
+        assert!((0..w.projectiles.len()).all(|i| w.projectiles.kind[i] != ProjKind::SealOrb));
+    }
+
+    fn live_world() -> World {
+        let mut w = World::new(WorldConfig::default());
+        w.weapons.clear();
+        w.enemies = Enemies::default();
+        w
+    }
+
+    fn count_kind(w: &World, kind: EnemyKind) -> usize {
+        w.enemies.kind.iter().filter(|&&k| k == kind).count()
+    }
+
+    #[test]
+    fn clay_bird_death_leaves_blast() {
+        let mut w = live_world();
+        let j = add_enemy(&mut w, EnemyKind::ClayBird, 300.0);
+        let pos = w.enemies.pos[j];
+        kill_step(&mut w, j);
+        assert_eq!(w.hazards.len(), 1);
+        let h = &w.hazards[0];
+        assert_eq!((h.pos, h.radius, h.warn, h.spare_enemies, h.friendly), (pos, 34.0, 1.0, true, false));
+        assert_eq!(h.kind, HazardKind::Blast { damage: 14.0 * w.enemy_damage_scale() });
+        assert!(w.events.iter().any(|e| matches!(*e, Event::HazardWarn { pos: p, radius: 34.0 } if p == pos)));
+    }
+
+    #[test]
+    fn clay_bird_blast_spares_enemies() {
+        let mut w = live_world();
+        let a = add_enemy(&mut w, EnemyKind::ClayBird, 300.0);
+        let b = add_enemy(&mut w, EnemyKind::ClayBird, 310.0);
+        w.player.pos = w.enemies.pos[a];
+        w.player.iframes = 0.0;
+        w.hazards.push(Hazard { pos: w.player.pos, radius: 34.0, warn: DT, life: 0.0, kind: HazardKind::Blast { damage: 10.0 }, tick: 0.0, friendly: false, spare_enemies: true });
+        let (hp, before) = (w.enemies.hp[b], w.player.hp);
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        w.update_hazards();
+        assert!(w.player.hp < before);
+        assert_eq!(w.enemies.hp[b], hp);
+        assert_eq!(w.enemies.hp[a], hp);
+        assert!(w.hazards.is_empty());
+    }
+
+    #[test]
+    fn swarm_mother_splits_into_three() {
+        let mut w = live_world();
+        let j = add_enemy(&mut w, EnemyKind::SwarmMother, 300.0);
+        let death = w.enemies.pos[j];
+        w.enemies.hp[j] = 0.0;
+        w.step(Input::default());
+        w.step(Input::default());
+        assert_eq!(count_kind(&w, EnemyKind::CursedSpawn), 3);
+        let spawn: Vec<usize> = (0..w.enemies.len()).filter(|&i| w.enemies.kind[i] == EnemyKind::CursedSpawn).collect();
+        for &i in &spawn {
+            assert!(((w.enemies.pos[i] - death).length() - 16.0).abs() < 0.01 + w.enemies.speed[i] * DT * 2.0);
+            assert_eq!(w.enemies.xp[i], enemy_def(EnemyKind::CursedSpawn).xp);
+        }
+    }
+
+    #[test]
+    fn swarm_split_survives_screen_clear() {
+        let mut w = live_world();
+        let j = add_enemy(&mut w, EnemyKind::SwarmMother, 100.0);
+        w.enemies.hp[j] = 10.0;
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        w.pickups.push((w.player.pos, PickupKind::ExorcismSeal));
+        w.step(Input::default());
+        assert_eq!(count_kind(&w, EnemyKind::SwarmMother), 0);
+        w.step(Input::default());
+        assert_eq!(count_kind(&w, EnemyKind::CursedSpawn), 3);
+    }
+
+    #[test]
+    fn swarm_split_respects_max_enemies() {
+        let mut w = live_world();
+        for _ in 0..MAX_ENEMIES - 1 {
+            w.spawn_enemy(EnemyKind::Wisp, w.player.pos + Vec2::new(800.0, 0.0));
+        }
+        let j = add_enemy(&mut w, EnemyKind::SwarmMother, 300.0);
+        w.enemies.hp[j] = 0.0;
+        w.step(Input::default());
+        w.step(Input::default());
+        assert!(w.enemies.len() <= MAX_ENEMIES);
+    }
+
+    #[test]
+    fn tricks_off_in_stress() {
+        let mut w = quiet_world();
+        let a = add_enemy(&mut w, EnemyKind::ClayBird, 300.0);
+        let b = add_enemy(&mut w, EnemyKind::SwarmMother, 320.0);
+        w.enemies.hp[a] = 0.0;
+        w.enemies.hp[b] = 0.0;
+        w.remove_dead_enemies();
+        assert!(w.hazards.is_empty() && w.pending_spawns.is_empty());
+    }
+
+    fn thief_world(carry: Option<PickupKind>) -> (World, usize) {
+        let mut w = live_world();
+        let j = add_enemy(&mut w, EnemyKind::ToolThief, 300.0);
+        w.enemies.carry[j] = carry;
+        w.enemies.speed[j] = 40.0;
+        (w, j)
+    }
+
+    fn steal_step(w: &mut World) {
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        w.update_pickups();
+        w.move_enemies();
+    }
+
+    #[test]
+    fn thief_steals_pickup_and_flees() {
+        let (mut w, j) = thief_world(None);
+        let at = w.enemies.pos[j] + Vec2::new(w.enemies.radius[j] + THIEF_REACH - 1.0, 0.0);
+        w.pickups.push((at, PickupKind::OniSake));
+        steal_step(&mut w);
+        assert!(w.pickups.is_empty());
+        assert_eq!(w.enemies.carry[j], Some(PickupKind::OniSake));
+        assert!(w.events.iter().any(|e| matches!(*e, Event::PickupStolen { pos, kind: PickupKind::OniSake } if pos == at)));
+        assert!((w.enemies.flee[j] - (THIEF_FLEE - DT)).abs() < 1e-4);
+        let (v, away) = (w.enemies.vel[j], w.enemies.pos[j] - w.player.pos);
+        assert!(v.x * away.x + v.y * away.y > 0.0, "runs from the player");
+    }
+
+    #[test]
+    fn thief_steals_only_while_visible_and_free() {
+        let holds: [fn(&mut World, usize); 4] = [
+            |w, j| w.enemies.ai_state[j] = 1,
+            |w, j| w.enemies.ai_state[j] = 2,
+            |w, _| w.freeze = 1.0,
+            |w, j| w.enemies.stagger[j] = 1.0,
+        ];
+        for (n, hold) in holds.iter().enumerate() {
+            let (mut w, j) = thief_world(None);
+            hold(&mut w, j);
+            w.pickups.push((w.enemies.pos[j], PickupKind::OniSake));
+            steal_step(&mut w);
+            assert_eq!((w.pickups.len(), w.enemies.carry[j]), (1, None), "hold {n}");
+        }
+        let mut w = World::new(WorldConfig { hero: HeroId::Kuon, ..Default::default() });
+        w.weapons.clear();
+        w.enemies = Enemies::default();
+        let j = add_enemy(&mut w, EnemyKind::ToolThief, 60.0);
+        w.player.form = 1.0;
+        w.domain_center = w.player.pos;
+        w.pickups.push((w.enemies.pos[j], PickupKind::OniSake));
+        steal_step(&mut w);
+        assert_eq!((w.pickups.len(), w.enemies.carry[j]), (1, None), "inside Firmament");
+    }
+
+    #[test]
+    fn thief_carries_one_at_a_time() {
+        let (mut w, j) = thief_world(None);
+        let at = w.enemies.pos[j];
+        w.pickups.push((at, PickupKind::Feast));
+        w.pickups.push((at, PickupKind::SenPurse));
+        steal_step(&mut w);
+        assert_eq!(w.pickups.len(), 1);
+        assert!(w.enemies.carry[j].is_some());
+    }
+
+    #[test]
+    fn carried_pickup_frees_slot() {
+        let (mut w, j) = thief_world(None);
+        let at = w.enemies.pos[j];
+        w.pickups = vec![(at, PickupKind::Feast); MAX_PICKUPS];
+        let next = w.next_pickup;
+        steal_step(&mut w);
+        assert_eq!(w.pickups.len(), MAX_PICKUPS - 1);
+        assert_eq!(w.next_pickup, next);
+        assert!(w.enemies.carry[j].is_some());
+    }
+
+    #[test]
+    fn thief_resumes_blink_after_flee() {
+        let (mut w, j) = thief_world(None);
+        let at = w.enemies.pos[j];
+        w.pickups.push((at, PickupKind::Hourglass));
+        steal_step(&mut w);
+        for _ in 0..(THIEF_FLEE / DT) as usize + 1 {
+            w.move_enemies();
+        }
+        assert_eq!(w.enemies.flee[j], 0.0);
+        assert_eq!(w.enemies.carry[j], Some(PickupKind::Hourglass));
+        assert_eq!(w.enemies.ai_state[j], 0);
+        for _ in 0..(5.0 / DT) as usize {
+            w.move_enemies();
+        }
+        assert_ne!(w.enemies.ai_state[j], 0, "blink cycle runs again");
+    }
+
+    #[test]
+    fn thief_drops_pickup_on_death() {
+        let (mut w, j) = thief_world(Some(PickupKind::ShrineBell));
+        let pos = w.enemies.pos[j];
+        kill_step(&mut w, j);
+        assert_eq!(w.pickups, vec![(pos, PickupKind::ShrineBell)]);
+        assert!(w.events.iter().any(|e| matches!(e, Event::PickupSpawned { kind: PickupKind::ShrineBell, .. })));
+    }
+
+    #[test]
+    fn thief_drop_ignores_pickup_cap() {
+        let (mut w, j) = thief_world(Some(PickupKind::Feast));
+        w.pickups = vec![(Vec2::new(5000.0, 0.0), PickupKind::Feast); MAX_PICKUPS];
+        kill_step(&mut w, j);
+        assert_eq!(w.pickups.len(), MAX_PICKUPS + 1);
+    }
+
+    #[test]
+    fn recycled_thief_keeps_pickup() {
+        let (mut w, j) = thief_world(Some(PickupKind::OniSake));
+        w.enemies.pos[j] = w.player.pos + Vec2::new(w.cfg.recycle_radius + 50.0, 0.0);
+        w.enemies.flee[j] = 3.0;
+        w.step(Input::default());
+        let d = (w.enemies.pos[j] - w.player.pos).length();
+        assert!((d - (w.cfg.spawn_radius + 40.0)).abs() < 40.0, "on the spawn ring, got {d}");
+        assert_eq!(w.enemies.carry[j], Some(PickupKind::OniSake));
+        assert!(w.enemies.flee[j] < 3.0 && w.enemies.flee[j] > 2.0);
+    }
+
+    #[test]
+    fn other_enemies_never_steal() {
+        let mut w = live_world();
+        let j = add_enemy(&mut w, EnemyKind::Nopperabo, 300.0);
+        let at = w.enemies.pos[j];
+        w.pickups.push((at, PickupKind::Feast));
+        steal_step(&mut w);
+        assert_eq!(w.pickups.len(), 1);
+        assert_eq!(w.enemies.carry[j], None);
+    }
+
+    #[test]
+    fn finale_pushes_stop_at_reach() {
+        for hero in [HeroId::Ren, HeroId::Shun] {
+            let mut w = World::new(WorldConfig { hero, ..Default::default() });
+            w.weapons.clear();
+            w.enemies = Enemies::default();
+            w.player.special = 1.0;
+            w.step(Input { special: true, ..Default::default() });
+            w.enemies = Enemies::default();
+            let near = add_enemy(&mut w, EnemyKind::Oni, 100.0);
+            let far = add_enemy(&mut w, EnemyKind::Oni, 300.0);
+            for j in [near, far] {
+                w.enemies.hp[j] = 1e9;
+                w.enemies.knock[j] = 1.0;
+            }
+            w.player.form = 0.001;
+            w.step(Input::default());
+            assert!(w.enemies.push[near].length() > 0.0, "{hero:?}: near enemy not pushed");
+            assert_eq!(w.enemies.push[far], Vec2::ZERO, "{hero:?}: far enemy pushed");
+        }
+    }
+
+    #[test]
+    fn player_bursts_stay_in_reach() {
+        for hero in [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Toya, HeroId::Kuon] {
+            let mut gear = Loadout::default();
+            gear.exotics = vec![Exotic::Kusanagi, Exotic::YataMirror, Exotic::Yasakani, Exotic::JeweledBranch, Exotic::LanternHeart];
+            let mut w = World::new(WorldConfig { hero, gear, ..Default::default() });
+            w.debug_max_loadout();
+            let mut checked = 0;
+            for t in 0..60 * 120 {
+                if w.offer.is_some() {
+                    w.bot_pick();
+                }
+                w.close_chest();
+                w.choose_shrine(None);
+                w.player.special = 1.0;
+                w.player.hp = w.player.max_hp;
+                let before = w.player.pos;
+                let a = t as f32 * 0.01;
+                w.step(Input { move_dir: Vec2::new(a.cos(), a.sin()), special: true, ..Default::default() });
+                let cap = w.reach_half().x + 0.01;
+                for e in &w.events {
+                    if let Event::Burst { pos, radius, .. } | Event::FinaleBlast { pos, radius } = *e {
+                        if (pos - before).length() < 8.0 || (pos - w.player.pos).length() < 8.0 {
+                            checked += 1;
+                            assert!(radius <= cap, "{hero:?}: burst radius {radius} past reach {cap}");
+                        }
+                    }
+                }
+            }
+            assert!(checked > 0, "{hero:?}: no player-centred bursts seen");
+        }
+    }
+
+    #[test]
+    fn onset_pushes_stop_at_reach() {
+        for hero in [HeroId::Riku, HeroId::Shun, HeroId::Toya] {
+            let mut w = World::new(WorldConfig { hero, ..Default::default() });
+            w.weapons.clear();
+            w.enemies = Enemies::default();
+            let reach = w.reach_half().x;
+            let uncapped = match hero {
+                HeroId::Riku => FOX_BLAST_RADIUS,
+                HeroId::Shun => HANNYA_ONSET_RADIUS,
+                _ => MUKADE_BURST_RADIUS,
+            };
+            let near = add_enemy(&mut w, EnemyKind::Oni, 100.0);
+            let far = add_enemy(&mut w, EnemyKind::Oni, 0.0);
+            w.enemies.pos[far].x = w.player.pos.x + reach + w.enemies.radius[far] + (uncapped - reach) / 2.0;
+            for j in [near, far] {
+                w.enemies.hp[j] = 1e9;
+                w.enemies.knock[j] = 1.0;
+            }
+            w.player.special = 1.0;
+            w.step(Input { special: true, ..Default::default() });
+            assert!(w.enemies.push[near].length() > 0.0, "{hero:?}: near enemy not pushed");
+            assert_eq!(w.enemies.push[far], Vec2::ZERO, "{hero:?}: far enemy pushed");
+        }
+    }
+
+    fn edge_pair(w: &World) -> (Vec2, Vec2) {
+        let half = w.reach_half();
+        let d = half.y + 40.0;
+        assert!(d < half.x, "inside control must sit in the box");
+        (Vec2::new(d, 0.0), Vec2::new(0.0, d))
+    }
+
+    fn put_at(w: &mut World, offset: Vec2) -> usize {
+        let id = place(w, offset);
+        index_of(w, id)
+    }
+
+    #[test]
+    fn well_pull_stops_at_reach() {
+        let mut w = ren_with(WeaponKind::GravityWell, 1);
+        let (inside, outside) = edge_pair(&w);
+        let (i, o) = (put_at(&mut w, inside), put_at(&mut w, outside));
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        let pos = w.player.pos + (inside + outside) * 0.5;
+        w.wells.push(Well { pos, life: 1.0, max_life: 1.0, radius: 170.0, damage: 1.0, tick: 1.0, elem: None });
+        w.update_spirit_arts();
+        assert!(w.enemies.push[i].length() > 0.0);
+        assert_eq!(w.enemies.push[o], Vec2::ZERO);
+    }
+
+    #[test]
+    fn lantern_slow_stops_at_reach() {
+        let mut w = ren_with(WeaponKind::LanternVigil, 1);
+        let (inside, outside) = edge_pair(&w);
+        let (i, o) = (put_at(&mut w, inside), put_at(&mut w, outside));
+        w.enemies.vel[i] = Vec2::new(10.0, 0.0);
+        w.enemies.vel[o] = Vec2::new(10.0, 0.0);
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        let pos = w.player.pos + (inside + outside) * 0.5;
+        w.lanterns.push(Lantern { pos, life: 5.0, max_life: 5.0, radius: 170.0, tick: 0.0, damage: 1.0, slows: true, elem: None });
+        w.update_spirit_arts();
+        assert!(w.enemies.push[i].length() > 0.0);
+        assert_eq!(w.enemies.push[o], Vec2::ZERO);
+    }
+
+    #[test]
+    fn purify_push_and_clear_stop_at_reach() {
+        let mut w = ren_with(WeaponKind::PurificationWave, 1);
+        let (inside, outside) = edge_pair(&w);
+        let (i, o) = (put_at(&mut w, inside), put_at(&mut w, outside));
+        w.grid.rebuild(w.player.pos, &w.enemies.pos);
+        let p = w.player.pos;
+        let shot = |off: Vec2| Shot { pos: p + off, vel: Vec2::ZERO, life: 5.0, style: 0, elem: None };
+        w.shots = vec![shot(inside * -1.0), shot(outside * -1.0)];
+        w.waves.push(Wave { center: p, radius: inside.length(), max_radius: 500.0, speed: 0.0, damage: 1.0, purify: true, elem: None });
+        w.update_effects();
+        assert!(w.enemies.push[i].length() > 0.0);
+        assert_eq!(w.enemies.push[o], Vec2::ZERO);
+        assert_eq!(w.shots.len(), 1);
+        assert_eq!(w.shots[0].pos, p + outside * -1.0);
+    }
+
+    #[test]
+    fn tether_drag_stops_at_reach() {
+        let mut w = ren_with(WeaponKind::SoulTether, 1);
+        let (inside, outside) = edge_pair(&w);
+        let (i, o) = (put_at(&mut w, inside), put_at(&mut w, outside));
+        for j in [i, o] {
+            let enemy = w.enemies.id[j];
+            w.tethers.push(Tether { enemy, life: 5.0, tick: 1.0, damage: 1.0, reach: 1000.0, heals: false, elem: None });
+        }
+        w.update_spirit_arts();
+        assert!(w.enemies.push[i].length() > 0.0);
+        assert_eq!(w.enemies.push[o], Vec2::ZERO);
+        assert_eq!(w.tethers.len(), 1);
+        assert_eq!(w.tethers[0].enemy, w.enemies.id[i]);
+    }
+
+    #[test]
+    fn devour_heal_counts_only_in_reach() {
+        let mut w = ren_with(WeaponKind::Devour, 1);
+        w.reach_scale = 0.3;
+        for _ in 0..10 {
+            put_at(&mut w, Vec2::new(0.0, 60.0));
+        }
+        put_at(&mut w, Vec2::new(5.0, 0.0));
+        w.player.hp = 1.0;
+        w.mods.healing = 1.0;
+        fire_seal(&mut w, 1);
+        assert!((w.player.hp - 1.5).abs() < 1e-3, "healed {}", w.player.hp - 1.0);
+    }
+
+    #[test]
+    fn persistence_applied_once() {
+        let near = Vec2::new(50.0, 0.0);
+        let lives = |w: &World| -> Vec<f32> {
+            let mut v: Vec<f32> = w.projectiles.life.clone();
+            v.extend(w.lanterns.iter().map(|l| l.life));
+            v.extend(w.tethers.iter().map(|t| t.life));
+            v.extend(w.clones.iter().map(|c| c.life));
+            v
+        };
+        for kind in [WeaponKind::LanternVigil, WeaponKind::Familiars, WeaponKind::SoulTether, WeaponKind::FoxMirage, WeaponKind::GaleShuriken] {
+            let mut w = ren_with(kind, 1);
+            w.passives.push((PassiveKind::Persistence, 5));
+            put_at(&mut w, near);
+            let want = weapon_stats(kind, 1).duration * w.persistence();
+            fire_seal(&mut w, 1);
+            let got = lives(&w);
+            assert!(!got.is_empty() && got.iter().all(|l| (l - want).abs() < 1e-3), "{kind:?}: {got:?} vs {want}");
+        }
+        let mut w = ren_with(WeaponKind::GaleShuriken, 1);
+        w.weapons[0].awakened = true;
+        w.passives.push((PassiveKind::Persistence, 5));
+        let want = awakened_stats(WeaponKind::GaleShuriken).duration * w.persistence();
+        w.update_signatures();
+        let got = lives(&w);
+        assert!(got.len() == 10 && got.iter().all(|l| (l - want).abs() < 1e-3), "cyclone: {got:?} vs {want}");
     }
 }

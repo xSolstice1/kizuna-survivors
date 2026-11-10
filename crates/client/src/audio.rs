@@ -262,6 +262,9 @@ impl Audio {
                     sim::content::PickupKind::Hourglass => Sfx::Warble,
                     _ => Sfx::LevelUp,
                 },
+                Event::PickupStolen { .. } => Sfx::Card,
+                Event::LeaderFell { .. } => Sfx::ChestBurst,
+                Event::HazardWarn { .. } => Sfx::Click,
                 Event::Devour { .. } => Sfx::Chomp,
                 Event::MukadeAwakened { .. } => Sfx::Roar,
             };

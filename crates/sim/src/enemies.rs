@@ -223,9 +223,9 @@ pub fn enemy_def(kind: EnemyKind) -> EnemyDef {
         EmberToad => def(58_000.0, 26.0, 34.0, 32.0, 220, 0.0, Ai::Boss),
         BurningShogun => def(125_000.0, 30.0, 38.0, 32.0, 0, 0.0, Ai::Boss),
 
-        RoguePuppeteer => def(60.0, 54.0, 11.0, 9.0, 4, 0.5, Ai::Ranged { volley: Volley::Single { speed: 150.0 }, every: 4.5 }),
-        ClayBird => def(60.0, 58.0, 11.0, 9.0, 4, 0.5, Ai::Charger { speed: 240.0, rest: 6.0 }),
-        MistCaptain => def(640.0, 34.0, 16.0, 16.0, 60, 0.0, Ai::Boss),
+        RoguePuppeteer => def(42.0, 54.0, 11.0, 9.0, 4, 0.5, Ai::Ranged { volley: Volley::Single { speed: 150.0 }, every: 4.5 }),
+        ClayBird => def(42.0, 58.0, 8.0, 9.0, 4, 0.5, Ai::Charger { speed: 240.0, rest: 6.0 }),
+        MistCaptain => def(480.0, 34.0, 12.0, 16.0, 60, 0.0, Ai::Boss),
 
         LostSoul => def(8.0, 46.0, 5.0, 7.0, 1, 1.0, Ai::Chase),
         MaskedHound => def(24.0, 54.0, 9.0, 7.0, 2, 0.7, Ai::Dash),

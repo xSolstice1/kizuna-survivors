@@ -23,8 +23,13 @@ pub const REACH_EDGE: f32 = 24.0;
 pub const DEFAULT_VIEW_HALF: Vec2 = Vec2::new(320.0, 180.0);
 /// Melee reach covers far fewer enemies, so melee heroes hit harder; hybrids keep pace without help.
 pub const MIGHT_MELEE: f32 = 2.3;
-pub const MIGHT_TOYA: f32 = 2.3;
-pub const MIGHT_RIKU: f32 = 2.0;
+pub const MIGHT_TOYA: f32 = 3.0;
+/// Effect duration and range gained per Persistence level.
+pub const PERSISTENCE_PER_LEVEL: f32 = 0.12;
+pub const MIGHT_RIKU: f32 = 2.8;
+/// Ranged heroes after the per-pool weapon band (phase 7 task 9) cut their strongest weapons.
+pub const MIGHT_REN: f32 = 1.4;
+pub const MIGHT_KUON: f32 = 1.6;
 /// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
 pub const BOSS_HP: f32 = 0.5;
 
@@ -39,12 +44,24 @@ pub const SHOT_RADIUS: f32 = 5.0;
 pub const SHOT_DAMAGE: f32 = 4.0;
 
 /// Share of refill spawns, from round 5, that are an Uncommon.
-pub const UNCOMMON_SHARE: f32 = 0.03;
+pub const UNCOMMON_SHARE: f32 = 0.015;
 
 /// A Leader's banner: enemies this close move and hit harder.
 pub const BANNER_RADIUS: f32 = 140.0;
-pub const BANNER_SPEED: f32 = 1.25;
-pub const BANNER_DAMAGE: f32 = 1.25;
+pub const BANNER_SPEED: f32 = 1.1;
+pub const BANNER_DAMAGE: f32 = 1.1;
+/// A Clay Bird's death leaves a blast that hurts only the player.
+pub const CLAY_BLAST_RADIUS: f32 = 34.0;
+pub const CLAY_BLAST_WARN: f32 = 1.0;
+pub const CLAY_BLAST_DAMAGE: f32 = 14.0;
+pub const SEAL_STAMP_DELAY: f32 = 1.5;
+pub const SEAL_STAMP_RADIUS: f32 = 36.0;
+/// A Swarm Mother's death splits into Cursed Spawn around the spot.
+pub const SWARM_SPLIT: usize = 3;
+pub const SWARM_SPLIT_RADIUS: f32 = 16.0;
+/// A Tool Thief takes a pickup within its radius plus this, then flees the player for a while.
+pub const THIEF_REACH: f32 = 8.0;
+pub const THIEF_FLEE: f32 = 4.0;
 /// Seconds the crew runs from a fallen Leader.
 pub const SCATTER_TIME: f32 = 2.0;
 
@@ -400,7 +417,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
     let base = WeaponStats { damage: 0.0, cooldown: 1.0, amount: 1, area: 1.0, speed: 0.0, pierce: 0, duration: 0.0 };
     match kind {
         WeaponKind::Ofuda => WeaponStats {
-            damage: 9.0 + 2.5 * k,
+            damage: 5.6 + 1.54 * k,
             cooldown: 1.0 - 0.05 * k,
             amount: 2 + at(l, 3) + at(l, 5) + at(l, 7) + at(l, 8),
             speed: 340.0,
@@ -408,23 +425,23 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::MoonOrbs => WeaponStats {
-            damage: 8.0 + 2.0 * k,
+            damage: 13.0 + 3.24 * k,
             cooldown: 0.6, // re-hit interval on the same enemy
             amount: 1 + at(l, 2) + at(l, 4) + at(l, 6) + at(l, 8),
             area: 1.0 + 0.08 * k,
             speed: 3.2 + 0.15 * k, // radians / second
             ..base
         },
-        WeaponKind::SakuraField => WeaponStats { damage: 4.0 + 1.5 * k, cooldown: 0.5, area: 1.0 + 0.12 * k, ..base },
+        WeaponKind::SakuraField => WeaponStats { damage: 4.8 + 1.8 * k, cooldown: 0.5, area: 1.0 + 0.12 * k, ..base },
         WeaponKind::ThunderChain => WeaponStats {
-            damage: 12.0 + 3.0 * k,
+            damage: 41.0 + 10.3 * k,
             cooldown: 1.6 - 0.06 * k,
             amount: 3 + l / 2, // jumps
             area: 1.0 + 0.05 * k, // jump range
             ..base
         },
         WeaponKind::Taiko => WeaponStats {
-            damage: 8.0 + 2.4 * k,
+            damage: 15.6 + 4.56 * k,
             cooldown: 3.0 - 0.1 * k,
             amount: 1 + at(l, 5),
             area: 1.0 + 0.10 * k,
@@ -446,7 +463,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::FlamePool => WeaponStats {
-            damage: 5.0 + 1.5 * k, // per 0.3s tick
+            damage: 2.8 + 0.84 * k, // per 0.3s tick
             cooldown: 3.2 - 0.12 * k,
             amount: 1 + at(l, 3) + at(l, 6),
             area: 1.0 + 0.08 * k,
@@ -454,7 +471,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::FoxfireOrb => WeaponStats {
-            damage: 17.0 + 4.5 * k, // burst damage
+            damage: 10.9 + 2.87 * k, // burst damage
             cooldown: 1.6 - 0.06 * k,
             amount: 1 + at(l, 4) + at(l, 7),
             area: 1.0 + 0.10 * k, // burst radius
@@ -463,7 +480,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::Familiars => WeaponStats {
-            damage: 10.0 + 2.5 * k,
+            damage: 14.0 + 3.5 * k,
             cooldown: 2.2 - 0.08 * k,
             amount: 2 + at(l, 3) + at(l, 5) + at(l, 7),
             speed: 170.0,
@@ -472,7 +489,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::GaleShuriken => WeaponStats {
-            damage: 12.0 + 3.0 * k,
+            damage: 21.0 + 5.2 * k,
             cooldown: 2.0 - 0.07 * k,
             amount: 1 + at(l, 3) + at(l, 6),
             area: 1.0 + 0.08 * k,
@@ -481,7 +498,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::FoxMirage => WeaponStats {
-            damage: 9.0 + 2.5 * k, // per strike; the smoke pop deals 2x
+            damage: 7.1 + 1.96 * k, // per strike; the smoke pop deals 2x
             cooldown: 6.5 - 0.3 * k,
             amount: 1 + at(l, 3) + at(l, 5) + at(l, 7),
             area: 1.0 + 0.08 * k, // pop radius
@@ -490,7 +507,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             duration: 4.0 + 0.3 * k,
         },
         WeaponKind::GraveCleaver => WeaponStats {
-            damage: 16.0 + 4.0 * k,
+            damage: 8.6 + 2.13 * k,
             cooldown: 1.3 - 0.04 * k,
             amount: 1 + at(l, 4) + at(l, 7), // swings (alternating sides)
             area: 1.0 + 0.08 * k,
@@ -498,7 +515,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::SoulTether => WeaponStats {
-            damage: 4.0 + 1.2 * k, // per 0.25s tick
+            damage: 15.2 + 4.6 * k, // per 0.25s tick
             cooldown: 3.0 - 0.1 * k,
             amount: 2 + at(l, 3) + at(l, 5) + at(l, 7), // chains
             area: 1.0 + 0.06 * k, // reach
@@ -506,7 +523,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::LanternVigil => WeaponStats {
-            damage: 10.0 + 3.0 * k, // per pulse
+            damage: 6.6 + 1.95 * k, // per pulse
             cooldown: 4.0 - 0.15 * k,
             amount: 1 + at(l, 3) + at(l, 6),
             area: 1.0 + 0.10 * k,
@@ -521,21 +538,21 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::MukadeSpines => WeaponStats {
-            damage: 18.0 + 5.0 * k,
+            damage: 13.9 + 3.87 * k,
             cooldown: 1.7 - 0.06 * k,
             amount: 3 + at(l, 3) + at(l, 5) + at(l, 7),
             area: 1.0 + 0.08 * k,
             ..base
         },
         WeaponKind::Devour => WeaponStats {
-            damage: 8.0 + 2.5 * k,
+            damage: 11.0 + 3.4 * k,
             cooldown: 1.5 - 0.05 * k,
             amount: 1,
             area: 1.0 + 0.10 * k,
             ..base
         },
         WeaponKind::VenomFang => WeaponStats {
-            damage: 10.0 + 3.0 * k,
+            damage: 4.7 + 1.4 * k,
             cooldown: 1.2 - 0.04 * k,
             amount: 2 + at(l, 3) + at(l, 6) + at(l, 8),
             area: 1.0 + 0.06 * k,
@@ -543,7 +560,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::GravityWell => WeaponStats {
-            damage: 26.0 + 7.0 * k, // collapse damage (the pull ticks for a quarter of this)
+            damage: 4.6 + 1.22 * k, // collapse damage (the pull ticks for a quarter of this)
             cooldown: 2.2 - 0.08 * k,
             amount: 1 + at(l, 4) + at(l, 7),
             area: 1.0 + 0.09 * k,
@@ -551,7 +568,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::RepulsionStar => WeaponStats {
-            damage: 16.0 + 4.5 * k,
+            damage: 18.2 + 5.2 * k,
             cooldown: 1.3 - 0.05 * k,
             amount: 1 + at(l, 3) + at(l, 6),
             area: 1.0 + 0.06 * k,
@@ -559,7 +576,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::VoidLance => WeaponStats {
-            damage: 40.0 + 11.0 * k,
+            damage: 23.5 + 6.47 * k,
             cooldown: 3.4 - 0.12 * k,
             amount: 1 + at(l, 5),
             area: 1.0 + 0.08 * k,
@@ -567,24 +584,24 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::YinYangOrbs => WeaponStats {
-            damage: 12.0 + 3.0 * k,
+            damage: 19.8 + 5.04 * k,
             cooldown: 0.4, // re-hit interval
             amount: 2 + at(l, 4) + at(l, 7),
             area: 1.0 + 0.07 * k,
-            speed: 3.0 + 0.12 * k, // orbit radians / second
+            speed: 3.0 + 0.12 * k, // throw cycle radians / second
             ..base
         },
         WeaponKind::SpiritSeal => WeaponStats {
-            damage: 18.0 + 4.5 * k, // per orb burst
+            damage: 14.1 + 3.46 * k, // per seal burst
             cooldown: 2.6 - 0.09 * k,
             amount: 5 + at(l, 3) + at(l, 5) + at(l, 7),
             area: 1.0 + 0.07 * k,
             speed: 300.0,
-            duration: 0.6, // gathering time
+            duration: SEAL_STAMP_DELAY, // stamp delay
             ..base
         },
         WeaponKind::PurificationWave => WeaponStats {
-            damage: 14.0 + 3.5 * k,
+            damage: 16.8 + 4.2 * k,
             cooldown: 3.2 - 0.12 * k,
             amount: 1,
             area: 1.0 + 0.09 * k,
@@ -796,7 +813,9 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         _ => (SpecialKind::Barrier, "Barrier"),
     };
     let (reach, reach_might) = match id {
-        HeroId::Ren | HeroId::Kuon | HeroId::Mika | HeroId::Nanami => (REACH_RANGED, 1.0),
+        HeroId::Ren => (REACH_RANGED, MIGHT_REN),
+        HeroId::Kuon => (REACH_RANGED, MIGHT_KUON),
+        HeroId::Mika | HeroId::Nanami => (REACH_RANGED, 1.0),
         HeroId::Riku => (REACH_HYBRID, MIGHT_RIKU),
         HeroId::Kaede | HeroId::Yuzu => (REACH_HYBRID, 1.0),
         HeroId::Toya => (REACH_MELEE, MIGHT_TOYA),
@@ -884,7 +903,7 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::RepulsionStar => "Red Nova: a ring of crimson stars blasts outward every few seconds.",
         WeaponKind::VoidLance => "Void Cascade: three void lances fan out across the field every few seconds.",
         WeaponKind::YinYangOrbs => "Great Yin-Yang: the orbs grow huge, and a giant yin-yang crashes down on the horde every few seconds.",
-        WeaponKind::SpiritSeal => "Myriad Spirit Seal: more orbs, and a full ring of seal orbs bursts out every few seconds.",
+        WeaponKind::SpiritSeal => "Myriad Spirit Seal: more seals at once, and a full ring of seal orbs bursts out every few seconds.",
         WeaponKind::PurificationWave => "Heaven-Sweeping Wave: a second, wider wave follows every pulse.",
     }
 }
@@ -1368,8 +1387,8 @@ impl Upgrade {
                 WeaponKind::GravityWell => "A gravity singularity drags a cluster of enemies together, then crushes them.",
                 WeaponKind::RepulsionStar => "A crimson star tears through enemies and blasts them back.",
                 WeaponKind::VoidLance => "A slow orb of void erases everything along its line.",
-                WeaponKind::YinYangOrbs => "Two yin-yang orbs circle you, swinging wide and back through enemies.",
-                WeaponKind::SpiritSeal => "Spirit orbs gather around you, then home in on enemies and burst.",
+                WeaponKind::YinYangOrbs => "Two yin-yang orbs fly out to the edge of your reach and spin back through enemies.",
+                WeaponKind::SpiritSeal => "Stamps a seal on random enemies; each bursts a moment later and hurts the crowd around it.",
                 WeaponKind::PurificationWave => "A wide purifying ring blasts enemies back and erases fireballs.",
             }
             .into(),
@@ -1402,7 +1421,7 @@ impl Upgrade {
                         WeaponKind::RepulsionStar => "star",
                         WeaponKind::VoidLance => "lance",
                         WeaponKind::YinYangOrbs => "orb",
-                        WeaponKind::SpiritSeal => "orb",
+                        WeaponKind::SpiritSeal => "seal",
                         WeaponKind::PurificationWave => "",
                         WeaponKind::SakuraField => "",
                     };
@@ -1425,7 +1444,7 @@ impl Upgrade {
                 PassiveKind::Expanse => "+10% area of effect.",
                 PassiveKind::Swiftness => "+8% move speed.",
                 PassiveKind::Magnet => "+30% pickup radius.",
-                PassiveKind::Vitality => "+20 max HP and heal 20.",
+                PassiveKind::Vitality => "+20 max HP. Heals 20 when taken.",
                 PassiveKind::Abundance => "+1 to every weapon's count.",
                 PassiveKind::Persistence => "+12% effect duration and range.",
                 PassiveKind::Recovery => "Regenerate 0.25 HP per second.",
@@ -1567,7 +1586,7 @@ impl Default for Modifiers {
 // ───────────────────────── Progression & pacing ─────────────────────────
 
 /// Attacks only land inside the reach box, so kills are rarer; each gem is worth more to keep levelling on pace.
-pub const XP_GAIN: f32 = 2.0;
+pub const XP_GAIN: f32 = 2.2;
 
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;
@@ -1679,12 +1698,13 @@ mod tests {
 
     #[test]
     fn hero_levers_are_per_hero() {
-        assert_eq!(hero_def(HeroId::Riku).reach_might, 2.0);
-        assert_eq!(hero_def(HeroId::Toya).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Riku).reach_might, MIGHT_RIKU);
+        assert_eq!(hero_def(HeroId::Toya).reach_might, MIGHT_TOYA);
         assert_eq!(hero_def(HeroId::Shun).reach_might, 2.3);
         assert_eq!(hero_def(HeroId::Haru).reach_might, 2.3);
         assert_eq!(hero_def(HeroId::Kaede).reach_might, 1.0);
-        assert_eq!(hero_def(HeroId::Ren).reach_might, 1.0);
+        assert_eq!(hero_def(HeroId::Ren).reach_might, MIGHT_REN);
+        assert_eq!(hero_def(HeroId::Kuon).reach_might, MIGHT_KUON);
     }
 
     #[test]

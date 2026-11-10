@@ -494,7 +494,7 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
     kit::text(&price, px + 20.0, py + 108.0, 22.0, if maxed || profile.can_buy(p) { GOLD } else { Color::new(1.0, 0.5, 0.5, 1.0) });
 
     let mut action = None;
-    let by = py + ph + 20.0;
+    let by = screen_height() - kit::MARGIN - 52.0;
     if button(Rect::new(w / 2.0 - 330.0, by, 200.0, 52.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
         action = Some(ShopAction::Back);
     }
@@ -507,7 +507,7 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
         action = Some(ShopAction::Changed);
     }
     if profile.spent > 0 {
-        centered(&format!("Refund returns all {} Sen spent.", profile.spent), by + 80.0, 18.0, DIM);
+        centered(&format!("Refund returns all {} Sen spent.", profile.spent), by - 18.0, 18.0, DIM);
     }
     action
 }
@@ -739,7 +739,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     // Grid.
     let n = st.tab.len();
     // Big tabs (the bestiary) use smaller cells so the detail panel still fits.
-    let (cols, cw, gap) = if n > 30 { (16.min(n), 62.0, 8.0) } else { (10.min(n), 84.0, 10.0) };
+    let (cols, cw, gap) = if n > 30 { (17.min(n), 62.0, 8.0) } else { (10.min(n), 84.0, 10.0) };
     let x0 = (w - (cols as f32 * cw + (cols as f32 - 1.0) * gap)) / 2.0;
     let y0 = 160.0;
     for i in 0..n {
@@ -776,7 +776,9 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
     // Detail panel.
     let rows = n.div_ceil(cols) as f32;
     let e = entry(profile, st.tab, st.cursor);
-    let (px, py, pw, ph) = ((w - 760.0) / 2.0, y0 + rows * (cw + gap) + 14.0, 760.0, 170.0);
+    let back_y = screen_height() - kit::MARGIN - 48.0;
+    let (px, py, pw) = ((w - 760.0) / 2.0, y0 + rows * (cw + gap) + 14.0, 760.0);
+    let ph = 170.0_f32.min(back_y - 12.0 - py);
     kit::panel_ex(px, py, pw, ph, PANEL, Color::new(1.0, 1.0, 1.0, 0.2));
     if e.found {
         let tag_w = e.elem.map_or(0.0, |el| crate::ui::element_tag_width(el, 20.0) + 16.0);
@@ -811,7 +813,7 @@ pub fn collection(profile: &Profile, assets: &Assets, st: &mut CollectionState, 
             kit::text(&t, px + 20.0, py + 104.0, 20.0, GOLD);
         }
     }
-    button(Rect::new((w - 200.0) / 2.0, py + ph + 18.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape)
+    button(Rect::new((w - 200.0) / 2.0, back_y, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape)
 }
 
 // ───────────────────────── Settings ─────────────────────────
