@@ -1,4 +1,5 @@
-// Offline play: cache the whole game on install, then serve it from the cache.
+// Offline play: cache the whole game on install; online, always fetch the latest and refresh
+// the cache, offline, serve from it.
 // scripts/build-web.sh fills in __BUILD__ (a hash of dist/) and __FILES__ (every file in dist/),
 // so each deploy gets a fresh cache and the old one is dropped.
 var CACHE = "kizuna-__BUILD__";
@@ -15,10 +16,17 @@ self.addEventListener("activate", function (e) {
 });
 
 self.addEventListener("fetch", function (e) {
-  if (e.request.method !== "GET") return;
+  if (e.request.method !== "GET" || new URL(e.request.url).origin !== location.origin) return;
   // Pages open the game, except the sign-in return page, which must load as itself.
   var key = e.request.mode === "navigate" && e.request.url.indexOf("auth-callback") < 0 ? "./" : e.request;
-  e.respondWith(caches.open(CACHE).then(function (c) {
-    return c.match(key, { ignoreSearch: true }).then(function (hit) { return hit || fetch(e.request); });
+  // Network first, so a new deploy is used on the next load (the browser's HTTP cache keeps
+  // unchanged files cheap); the cache is only the offline fallback.
+  e.respondWith(fetch(e.request).then(function (r) {
+    if (r.ok) { var copy = r.clone(); caches.open(CACHE).then(function (c) { c.put(key, copy); }); }
+    return r;
+  }).catch(function () {
+    return caches.open(CACHE).then(function (c) { return c.match(key, { ignoreSearch: true }); }).then(function (hit) {
+      return hit || Response.error();
+    });
   }));
 });
