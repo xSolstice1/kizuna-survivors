@@ -51,6 +51,12 @@ pub fn load() -> Profile {
 
 pub fn store(p: &Profile) {
     backend::write(&p.serialize());
+    crate::cloud::push(p);
+}
+
+/// Saves locally only (used when loading a cloud save, which needs no upload).
+pub fn store_local(p: &Profile) {
+    backend::write(&p.serialize());
 }
 
 /// The raw saved text (dev hooks read flags from it).

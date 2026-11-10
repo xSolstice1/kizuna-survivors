@@ -7,6 +7,7 @@ use sim::{Input, RunState, Stress, World, WorldConfig};
 mod armory;
 mod audio;
 mod chest_ui;
+mod cloud;
 mod devmenu;
 mod kit;
 mod menu;
@@ -109,6 +110,8 @@ async fn main() {
     let mut screen = Screen::Menu;
     let mut stress: Option<Stress> = None;
     let mut profile = save::load();
+    // Hand the cloud plugin our state so it can reconcile with the account (if signed in).
+    cloud::push(&profile);
     let mut world = new_world(stress, &profile);
     // Set once a finished run has been banked into the profile.
     let mut report: Option<RunReport> = None;
@@ -207,6 +210,13 @@ async fn main() {
             screen = Screen::Paused;
         }
         let now = get_time();
+        // A cloud save to load (another device's progress), applied between runs.
+        if !matches!(screen, Screen::Playing | Screen::Paused) {
+            if let Some(p) = cloud::incoming() {
+                profile = p;
+                save::store_local(&profile);
+            }
+        }
         audio.begin_frame();
         // UI click feedback on any out-of-run screen.
         if !matches!(screen, Screen::Playing | Screen::Paused) && (is_mouse_button_pressed(MouseButton::Left) || is_key_pressed(KeyCode::Enter)) {
@@ -363,7 +373,9 @@ async fn main() {
         }
         let over = matches!(world.state, RunState::Dead | RunState::Won);
         if over && report.is_none() && world.cfg.stress.is_none() {
-            report = Some(profile.record_run(&world));
+            let r = profile.record_run(&world);
+            cloud::record_run(&world, &r);
+            report = Some(r);
             save::store(&profile);
         }
         // Music: battle theme, the boss theme while the Night Lord lives, a jingle at the end.
