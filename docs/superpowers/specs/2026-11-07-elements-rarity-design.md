@@ -733,8 +733,8 @@ four kinds of effect escape the box:
 Decisions (user):
 
 - **Gate + clip:** every non-damage effect on an enemy (pull, slow, push, drag, shot-clear, heal count) checks
-  `in_reach`, as damage does. All player-attack visuals are drawn clipped to the reach box (one scissor rect in the
-  client). Effect sizes are unchanged.
+  `in_reach`, as damage does. Effect sizes are unchanged. Visuals are drawn whole: the reach-box scissor was dropped
+  (user, 2026-11-11) because it cut large effects into hard-edged boxes.
 - **Expanse:** keeps +area per level. Its per-level value or max level is set by the numbers below.
 - **Balance band, per pool:** run `skill_strength` for each finished hero (Ren, Riku, Shun, Toya, Kuon). Every weapon in a
   hero's pool must land within ±25% of that pool's median strength (sqrt(crowd × single)). Every passive must land

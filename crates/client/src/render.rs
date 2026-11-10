@@ -1196,24 +1196,6 @@ pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
     Camera2D { target: vec2(p.x.round(), p.y.round()) + jitter, zoom: vec2(2.0 / sw, 2.0 / sh), ..Default::default() }
 }
 
-/// Scissors the world target to the reach box until `end_reach_clip`; pixels are target pixels, y from the top.
-fn begin_reach_clip(world: &World, cam: &Camera2D, target: Option<&RenderTarget>) {
-    let Some(rt) = target else { return };
-    let (w, h) = (rt.texture.width(), rt.texture.height());
-    let half = world.reach_half();
-    let scale = world_scale();
-    let (cx, cy) = (w / 2.0 + (world.player.pos.x - cam.target.x) * scale, h / 2.0 + (world.player.pos.y - cam.target.y) * scale);
-    let (left, right) = ((cx - half.x * scale).floor().max(0.0), (cx + half.x * scale).ceil().min(w));
-    let (top, bottom) = ((cy - half.y * scale).floor().max(0.0), (cy + half.y * scale).ceil().min(h));
-    // The target pass is flipped: macroquad measures the scissor y from the opposite edge.
-    let clip = (left as i32, (h - bottom) as i32, (right - left) as i32, (bottom - top) as i32);
-    unsafe { get_internal_gl() }.quad_gl.scissor(Some(clip));
-}
-
-fn end_reach_clip() {
-    unsafe { get_internal_gl() }.quad_gl.scissor(None);
-}
-
 fn draw_smokes(smokes: &[(Vec2, f32, f32)]) {
     for (c, r, age) in smokes {
         let k = age / 0.5;
@@ -1327,7 +1309,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let view = view_rect(cam);
 
     // Sakura Field sits on the ground under everything.
-    begin_reach_clip(world, cam, target);
     for w in &world.weapons {
         if w.kind == WeaponKind::SakuraField {
             let r = world.field_radius_of(w);
@@ -1361,14 +1342,12 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let t = (st.delay / 0.6).clamp(0.0, 1.0);
         draw_circle_lines(st.pos.x, st.pos.y, st.radius * (0.4 + 0.6 * t), 1.5, Color::new(1.0, 0.95, 0.5, 0.7));
     }
-    end_reach_clip();
     if let Some(s) = world.shrine {
         let pulse = 0.5 + 0.5 * (time * 3.0).sin() as f32;
         draw_rectangle(s.x - 5.0, s.y - 120.0, 10.0, 120.0, Color::new(1.0, 0.9, 0.6, 0.10 + 0.06 * pulse));
         draw_circle(s.x, s.y, 22.0 + 3.0 * pulse, Color::new(1.0, 0.85, 0.5, 0.16 + 0.08 * pulse));
         draw_texture_ex(&a.shrine, (s.x - 16.0).round(), (s.y - 30.0).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(32.0, 36.0)), ..Default::default() });
     }
-    begin_reach_clip(world, cam, target);
     for wl in &world.wells {
         draw_well(vec2(wl.pos.x, wl.pos.y), wl.radius, wl.life / wl.max_life, time as f32);
     }
@@ -1388,7 +1367,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_circle(x, y, 2.5, Color::new(0.55, 0.82, 1.0, fade));
         draw_rectangle(x - 2.0, y + 6.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
     }
-    end_reach_clip();
 
     let e = &world.enemies;
     let mut sprites = Sprites::new();
@@ -1562,7 +1540,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_line(from.x, from.y - 10.0, to.x, to.y - 10.0, 2.0 * k, Color::new(1.0, 0.4, 0.4, 0.8 * k));
     }
     // Fox Mirage clones: translucent, blue-shifted copies of Riku (gold while he's transformed).
-    begin_reach_clip(world, cam, target);
     for c in &world.clones {
         let f = if c.moving { 1 + ((time * 9.0 + c.pos.x as f64 * 0.1) as usize % 2) } else { 0 };
         let ctex = if fox { &a.riku_fox[f] } else { &a.hero(world.cfg.hero)[f] };
@@ -1588,7 +1565,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             }
         }
     }
-    end_reach_clip();
     let awakened = world.weapons.iter().filter(|w| w.awakened).count();
     if awakened > 0 {
         // A golden rune circle that grows richer with every Awakening.
@@ -1656,7 +1632,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     draw_rectangle(p.x - 10.0, p.y + 9.0, 20.0, 2.0, Color::from_rgba(40, 20, 30, 255));
     draw_rectangle(p.x - 10.0, p.y + 9.0, 20.0 * frac, 2.0, Color::from_rgba(255, 80, 110, 255));
 
-    begin_reach_clip(world, cam, target);
     for w in &world.weapons {
         if w.kind == WeaponKind::YinYangOrbs {
             let r = world.yinyang_radius(w);
@@ -1976,7 +1951,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     draw_bursts(&fx.bursts);
     draw_hazards(world, time as f32, true);
     draw_art(world, time as f32);
-    end_reach_clip();
     draw_bursts(&fx.free_bursts);
     draw_smokes(&fx.free_smokes);
 
