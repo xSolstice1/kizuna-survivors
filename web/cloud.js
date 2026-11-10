@@ -56,6 +56,14 @@
       .then(function (r) { return r.json().catch(function () { return null; }).then(function (j) { if (!r.ok) throw { body: j || {}, status: r.status }; return j; }); },
             function () { throw { body: { msg: "Can't reach the server. Check your connection." }, status: 0 }; });
   }
+  // Whether an email has a Google account and no password (…_sign_in_methods.sql). False when
+  // unknown, e.g. before that migration has been run.
+  var GOOGLE_ONLY = "This email uses Google sign-in. Continue with Google below.";
+  function googleOnly(email) {
+    return anonRpc("sign_in_methods", { p_email: email }).then(function (m) {
+      return Array.isArray(m) && m.indexOf("google") >= 0 && m.indexOf("password") < 0;
+    }, function () { return false; });
+  }
   function authPost(path, body) {
     pending = true;
     return fetch(URL_ + path, { method: "POST", headers: headers(true), body: JSON.stringify(body) })
@@ -288,9 +296,18 @@
           if (!m) throw { body: { msg: "Wrong username or password." }, status: 400 };
           return m;
         });
+        var used = "";
         pending = true;
-        email.then(function (m) { return authPost("/auth/v1/token?grant_type=password", { email: m, password: pw }); })
-          .then(startSession).catch(function (e) { pending = false; say(friendly(e && e.body, e && e.status), 1); });
+        email.then(function (m) { used = m; return authPost("/auth/v1/token?grant_type=password", { email: m, password: pw }); })
+          .then(startSession).catch(function (e) {
+            pending = false;
+            var code = e && e.body && (e.body.error_code || e.body.error);
+            // A wrong password for an email that only has Google: point at the Google button.
+            if (used && (code === "invalid_credentials" || code === "invalid_grant")) {
+              return googleOnly(used).then(function (g) { say(g ? GOOGLE_ONLY : friendly(e.body, e.status), g ? 3 : 1); });
+            }
+            say(friendly(e && e.body, e && e.status), 1);
+          });
       };
       env.kz_cloud_sign_up = function (up, ul, ep, el, pp, pl) {
         if (!status || pending) return;
@@ -308,7 +325,12 @@
               // Supabase answers an already-registered email with a stand-in user that has no
               // identities (so emails can't be probed) and sets no password.
               var ids = j.identities || (j.user && j.user.identities);
-              if (ids && ids.length === 0) return say("That email already has an account. Use Google, or Forgot password.", 1);
+              if (ids && ids.length === 0) {
+                return googleOnly(email).then(function (g) {
+                  if (g) say(GOOGLE_ONLY, 3);
+                  else say("That email already has an account. Sign in instead, or use Forgot password.", 1);
+                });
+              }
               say("Almost there: we sent a confirmation link to " + email + ". Open it, then sign in.", 2);
             });
           })

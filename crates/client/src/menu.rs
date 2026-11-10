@@ -972,7 +972,7 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
     let show_msg = |y: f32| {
         if !msg.is_empty() {
             let c = match kind {
-                1 => Color::new(1.0, 0.45, 0.45, 1.0),
+                1 | 3 => Color::new(1.0, 0.45, 0.45, 1.0),
                 2 => kit::JADE,
                 _ => DIM,
             };
@@ -1111,7 +1111,7 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
                 ti::field(1, Kind::Text, Rect::new(fx, y, fw, field_h), "Username or email", "KuonFan or you@example.com");
                 y += field_h + 30.0;
                 ti::field(2, Kind::Password, Rect::new(fx, y, fw, field_h), "Password", "Your password");
-                let forgot = link("Forgot password?", fx + fw, y + field_h + 20.0, 13.0, true);
+                let forgot = link("Forgot password?", fx + fw, y - 8.0, 13.0, true);
                 if forgot {
                     st.forgot = true;
                     st.forgot_sent = false;
@@ -1159,7 +1159,13 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
                 draw_line(fx, y, fx + fw / 2.0 - 20.0, y, 1.0, Color::new(1.0, 1.0, 1.0, 0.15));
                 draw_line(fx + fw / 2.0 + 20.0, y, fx + fw, y, 1.0, Color::new(1.0, 1.0, 1.0, 0.15));
                 kit::text_fit_centered("or", fx + fw / 2.0, y + 5.0, 30.0, 13.0, kit::FAINT);
-                if google_button(Rect::new(fx, y + 16.0, fw, 44.0), !pending) {
+                let gr = Rect::new(fx, y + 16.0, fw, 44.0);
+                if kind == 3 {
+                    // The message says "use Google": ring the button.
+                    let a = 0.55 + 0.45 * (t * 4.0).sin();
+                    kit::rounded_outline(gr.x - 4.0, gr.y - 4.0, gr.w + 8.0, gr.h + 8.0, 13.0, 2.5, Color::new(1.0, 0.82, 0.42, a));
+                }
+                if google_button(gr, !pending) {
                     cloud::sign_in("google");
                 }
                 y += 76.0;
