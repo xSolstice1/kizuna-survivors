@@ -21,7 +21,7 @@ game keeps saving to the browser only.
 - **Browser** (`web/cloud.js`): sign-in through Supabase Auth's REST API: email + password
   (sign-up takes a unique username), password reset, Google, Discord or an email link. All
   forms and messages are drawn in the game; `web/input.js` places real `<input>`s over the
-  game's field boxes so mobile keyboards and password managers work. Then and local-first sync: the game hands over its state on every save, the plugin
+  game's field boxes so mobile keyboards and password managers work. Sync is local-first: the game hands over its state on every save, the plugin
   sends only the difference (debounced), keeps a queue of runs while offline, and on sign-in
   reconciles: upload a new account, take the cloud copy if only the cloud changed, or ask the
   player (Settings → Account) when both changed.
