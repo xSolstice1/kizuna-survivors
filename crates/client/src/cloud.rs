@@ -53,6 +53,17 @@ mod backend {
         fn kz_cloud_message_len() -> u32;
         fn kz_cloud_message(ptr: *mut u8, len: u32);
         fn kz_cloud_clear_message();
+        fn kz_cloud_account_len() -> u32;
+        fn kz_cloud_account(ptr: *mut u8, len: u32);
+    }
+
+    pub fn account() -> String {
+        let n = unsafe { kz_cloud_account_len() };
+        if n == 0 {
+            String::new()
+        } else {
+            take(n, kz_cloud_account)
+        }
     }
 
     pub fn password_sign_in(e: &str, p: &str) {
@@ -121,6 +132,7 @@ mod backend {
         let n = unsafe { kz_cloud_incoming_len() };
         (n > 0).then(|| take(n, kz_cloud_incoming))
     }
+    #[allow(dead_code)]
     pub fn user() -> String {
         let n = unsafe { kz_cloud_user_len() };
         if n == 0 {
@@ -147,6 +159,7 @@ mod backend {
     pub fn incoming() -> Option<String> {
         None
     }
+    #[allow(dead_code)]
     pub fn user() -> String {
         String::new()
     }
@@ -165,6 +178,9 @@ mod backend {
         (String::new(), 0)
     }
     pub fn clear_message() {}
+    pub fn account() -> String {
+        String::new()
+    }
 }
 
 pub fn status() -> Status {
@@ -229,7 +245,32 @@ pub fn clear_message() {
     backend::clear_message();
 }
 
+/// The signed-in account as shown in the Account panel.
+#[derive(Clone, Debug, Default)]
+pub struct Account {
+    pub username: String,
+    pub email: String,
+    /// "Google", "Email" ...
+    pub method: String,
+    /// YYYY-MM-DD.
+    pub since: String,
+}
+
+pub fn account() -> Account {
+    let raw = backend::account();
+    let mut f = raw.split('\n').map(str::to_string);
+    let (username, email, provider, since) = (f.next().unwrap_or_default(), f.next().unwrap_or_default(), f.next().unwrap_or_default(), f.next().unwrap_or_default());
+    let method = match provider.as_str() {
+        "google" => "Google".to_string(),
+        "discord" => "Discord".to_string(),
+        "" => String::new(),
+        _ => "Email and password".to_string(),
+    };
+    Account { username, email, method, since }
+}
+
 /// The signed-in account's username (or email).
+#[allow(dead_code)]
 pub fn user() -> String {
     backend::user()
 }

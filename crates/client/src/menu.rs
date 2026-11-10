@@ -388,6 +388,24 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Start);
     }
 
+    // Account chip: who's signed in; opens Settings → Account.
+    let acct = crate::cloud::account();
+    if crate::cloud::status() != crate::cloud::Status::Off && !(acct.username.is_empty() && acct.email.is_empty()) {
+        let name = if acct.username.is_empty() { acct.email.clone() } else { acct.username.clone() };
+        let nw = kit::measure(&name, 15).width.min(260.0);
+        let r = Rect::new(w - kit::MARGIN - nw - 62.0, h - kit::MARGIN - 34.0 - 22.0, nw + 62.0, 34.0);
+        let hover = r.contains(mouse_position().into());
+        kit::rounded(r.x, r.y, r.w, r.h, 17.0, Color::new(0.06, 0.05, 0.11, if hover { 0.95 } else { 0.8 }));
+        kit::rounded_outline(r.x, r.y, r.w, r.h, 17.0, 1.2, if hover { GOLD } else { Color::new(1.0, 1.0, 1.0, 0.18) });
+        draw_circle(r.x + 17.0, r.y + 17.0, 12.0, ACCENT);
+        let initial: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+        kit::text_fit_centered(&initial, r.x + 17.0, r.y + 22.0, 20.0, 14.0, WHITE);
+        kit::text_fit(&name, r.x + 36.0, r.y + 22.0, nw + 4.0, 15.0, kit::INK);
+        draw_triangle(vec2(r.x + r.w - 18.0, r.y + 14.0), vec2(r.x + r.w - 10.0, r.y + 14.0), vec2(r.x + r.w - 14.0, r.y + 20.0), DIM);
+        if hover && is_mouse_button_pressed(MouseButton::Left) {
+            action = Some(MenuAction::Settings);
+        }
+    }
     if dev && kit::button(Rect::new(kit::MARGIN, h - kit::MARGIN - 36.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
         action = Some(MenuAction::Dev);
     }
@@ -835,8 +853,8 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
     changed |= slider("Sound effects", h * 0.36 + 70.0, &mut profile.sfx_volume);
     fullscreen_button(Rect::new((screen_width() - 300.0) / 2.0, h * 0.36 + 140.0, 300.0, 46.0));
     centered("All music and sound effects are generated in code.", h * 0.36 + 210.0, 16.0, DIM);
-    account_panel(h * 0.36 + 228.0);
-    if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 352.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
+    account_panel(h * 0.36 + 222.0);
+    if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 380.0, 200.0, 46.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
         return Some(SettingsAction::Back);
     }
     changed.then_some(SettingsAction::Changed)
@@ -893,6 +911,9 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
     let status = cloud::status();
     let recovery = cloud::recovery();
     if matches!(status, Status::Off | Status::Synced | Status::Syncing | Status::Error) && !recovery {
+        // Leaving the login screen: hide its text fields.
+        ti::begin();
+        ti::end();
         return true;
     }
     scenery(time, Color::new(1.0, 0.45, 0.65, 1.0));
@@ -1062,52 +1083,40 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
     false
 }
 
-/// Cloud saves: sign in, sync status, sign out, and settling a conflict between devices.
+/// The signed-in player's account: username, email, sign-in method, member since, cloud sync
+/// state, and Sign out.
 fn account_panel(y: f32) {
     use crate::cloud::{self, Status};
     let w = screen_width();
-    let (pw, ph) = (560.0f32.min(w - 40.0), 110.0);
+    let (pw, ph) = (600.0f32.min(w - 40.0), 144.0);
     let px = (w - pw) / 2.0;
     kit::panel(px, y, pw, ph);
     kit::panel_title("ACCOUNT", px + 16.0, y + 28.0, 16.0, GOLD);
-    let user = cloud::user();
-    let line = |t: &str, c: Color| kit::text_fit(t, px + 18.0, y + 54.0, pw - 36.0, 15.0, c);
-    let by = y + 66.0;
-    match cloud::status() {
-        Status::Off => line("Cloud saves aren't set up on this build. Progress is saved in this browser.", DIM),
-        Status::SignedOut => {
-            line("Sign in to keep your progress in the cloud and play on any device.", kit::INK);
-            let (g, d, e) = cloud::providers();
-            let opts: Vec<(&str, &str)> = [("Google", "google", g), ("Discord", "discord", d), ("Email link", "email", e)].into_iter().filter(|o| o.2).map(|o| (o.0, o.1)).collect();
-            let bw = ((pw - 36.0 - 10.0 * (opts.len() as f32 - 1.0)) / opts.len().max(1) as f32).min(170.0);
-            for (i, (label, key)) in opts.iter().enumerate() {
-                if kit::button(Rect::new(px + 18.0 + i as f32 * (bw + 10.0), by, bw, 34.0), label, true, kit::Style::Primary) {
-                    cloud::sign_in(key);
-                }
-            }
-        }
-        Status::Conflict => {
-            line("This device and your cloud save have both changed. Which one do you want to keep?", GOLD);
-            let bw = (pw - 46.0) / 2.0;
-            if kit::button(Rect::new(px + 18.0, by, bw, 34.0), "Keep cloud save", true, kit::Style::Primary) {
-                cloud::resolve(true);
-            }
-            if kit::button(Rect::new(px + 28.0 + bw, by, bw, 34.0), "Keep this device", true, kit::Style::Secondary) {
-                cloud::resolve(false);
-            }
-        }
-        st => {
-            let state = match st {
-                Status::Synced => "saved to the cloud",
-                Status::Syncing | Status::Connecting => "syncing...",
-                _ => "offline, will retry",
-            };
-            let who = if user.is_empty() { "Signed in".to_string() } else { format!("Signed in as {user}") };
-            line(&format!("{who}  ·  {state}"), if st == Status::Error { DIM } else { kit::JADE });
-            if kit::button(Rect::new(px + pw - 138.0, by, 120.0, 34.0), "Sign out", true, kit::Style::Secondary) {
-                cloud::sign_out();
-            }
-        }
+    let st = cloud::status();
+    if st == Status::Off {
+        kit::text_fit("Cloud saves aren't set up on this build. Progress is saved in this browser.", px + 18.0, y + 62.0, pw - 36.0, 15.0, DIM);
+        return;
+    }
+    let a = cloud::account();
+    let (sync, c) = match st {
+        Status::Synced => ("Saved to the cloud", kit::JADE),
+        Status::Syncing | Status::Connecting => ("Syncing...", GOLD),
+        Status::Conflict => ("Waiting for you to pick a save", GOLD),
+        Status::SignedOut => ("Signed out", DIM),
+        _ => ("Offline: will sync when you're back online", DIM),
+    };
+    let dash = |v: &str| if v.is_empty() { "-".to_string() } else { v.to_string() };
+    let rows = [("Username", dash(&a.username)), ("Email", dash(&a.email)), ("Signed in with", dash(&a.method)), ("Member since", dash(&a.since))];
+    let colw = (pw - 190.0) / 2.0;
+    for (i, (label, value)) in rows.iter().enumerate() {
+        let (cx, cy) = (px + 18.0 + (i % 2) as f32 * colw, y + 54.0 + (i / 2) as f32 * 36.0);
+        kit::text(label, cx, cy, 12.0, kit::FAINT);
+        kit::text_fit(value, cx, cy + 17.0, colw - 14.0, 15.0, kit::INK);
+    }
+    draw_circle(px + 22.0, y + ph - 16.0, 4.0, c);
+    kit::text_fit(sync, px + 32.0, y + ph - 11.0, pw - 200.0, 13.0, c);
+    if kit::button(Rect::new(px + pw - 150.0, y + 50.0, 132.0, 38.0), "Sign out", true, kit::Style::Danger) {
+        cloud::sign_out();
     }
 }
 
