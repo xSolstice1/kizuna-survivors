@@ -983,13 +983,12 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
     };
     match (status, recovery) {
         (_, true) => {
-            kit::text("Set a new password", fx, y + 6.0, 28.0, kit::INK);
-            kit::text("Your reset link worked. Choose a new password for", fx, y + 36.0, 15.0, DIM);
-            kit::text_fit(&format!("{}.", cloud::account().email), fx, y + 56.0, fw, 15.0, kit::INK);
-            y += 104.0;
+            kit::text("Choose a new password", fx, y + 6.0, 28.0, kit::INK);
+            kit::text_fit(&format!("For {}", cloud::account().email), fx, y + 38.0, fw, 15.0, DIM);
+            y += 84.0;
             ti::field(6, Kind::NewPassword, Rect::new(fx, y, fw, 44.0), "New password", "At least 8 characters");
             y += 44.0 + 30.0;
-            ti::field(8, Kind::NewPassword, Rect::new(fx, y, fw, 44.0), "Confirm new password", "Type it again");
+            ti::field(8, Kind::NewPassword, Rect::new(fx, y, fw, 44.0), "Confirm new password", "Re-enter your new password");
             show_msg(y + 64.0);
             y += 44.0 + 48.0;
             let key = ti::key();
@@ -1001,9 +1000,9 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
                 let (a, b) = (ti::value(6), ti::value(8));
                 st.error.clear();
                 if a.chars().count() < 8 {
-                    st.error = "Choose a longer password (at least 8 characters).".into();
+                    st.error = "Password must be at least 8 characters.".into();
                 } else if a != b {
-                    st.error = "The two passwords don't match.".into();
+                    st.error = "Passwords don't match.".into();
                 } else {
                     cloud::set_password(&a);
                 }
@@ -1019,14 +1018,14 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
             }
         }
         (Status::Conflict, _) => {
-            kit::text("Two saves found", fx, y + 40.0, 28.0, GOLD);
-            for (k, l) in kit::wrap("This device and your account both have progress that the other doesn't. Which one do you want to keep?", fw, 15).iter().enumerate() {
+            kit::text("Choose which progress to keep", fx, y + 40.0, 28.0, GOLD);
+            for (k, l) in kit::wrap("This device and your account each have progress the other doesn't. Pick one to keep; the other will be replaced.", fw, 15).iter().enumerate() {
                 kit::text(l, fx, y + 76.0 + k as f32 * 20.0, 15.0, DIM);
             }
-            if kit::button(Rect::new(fx, y + 150.0, fw, 46.0), "Keep account save", true, kit::Style::Primary) {
+            if kit::button(Rect::new(fx, y + 150.0, fw, 46.0), "Use my account's progress", true, kit::Style::Primary) {
                 cloud::resolve(true);
             }
-            if kit::button(Rect::new(fx, y + 206.0, fw, 46.0), "Keep this device's save", true, kit::Style::Secondary) {
+            if kit::button(Rect::new(fx, y + 206.0, fw, 46.0), "Use this device's progress", true, kit::Style::Secondary) {
                 cloud::resolve(false);
             }
         }
@@ -1042,7 +1041,7 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
             }
             if !st.forgot_sent {
                 kit::text("Reset your password", fx, y + 6.0, 28.0, kit::INK);
-                for (k, l) in kit::wrap("Enter the email on your account and we'll send you a link to choose a new password.", fw, 15).iter().enumerate() {
+                for (k, l) in kit::wrap("Enter the email address for your account and we'll send you a link to reset your password.", fw, 15).iter().enumerate() {
                     kit::text(l, fx, y + 38.0 + k as f32 * 20.0, 15.0, DIM);
                 }
                 y += 112.0;
@@ -1069,14 +1068,14 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
                 y += 86.0;
                 let email = st.sent_to.clone();
                 let body = format!(
-                    "If {} has an account, a reset link is on its way. Open it on this device, then come back to this tab to choose a new password. Check spam if it hasn't arrived in a few minutes.",
+                    "If an account exists for {}, you'll get an email with a link to reset your password. Didn't get it? Check your spam folder, or resend it below.",
                     email
                 );
                 for (k, l) in kit::wrap(&body, fw, 15).iter().enumerate() {
                     kit::text(l, fx, y + k as f32 * 21.0, 15.0, DIM);
                 }
                 y += 112.0;
-                if kit::button(Rect::new(fx, y, fw, 46.0), if pending { "Sending..." } else { "Resend link" }, !pending, kit::Style::Secondary) {
+                if kit::button(Rect::new(fx, y, fw, 46.0), if pending { "Sending..." } else { "Resend email" }, !pending, kit::Style::Secondary) {
                     cloud::reset_password(&email);
                 }
                 if kit::button(Rect::new(fx, y + 58.0, fw, 46.0), "Back to sign in", true, kit::Style::Primary) {
@@ -1108,9 +1107,9 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
             if !st.create {
                 kit::text("Welcome back", fx, y + 6.0, 26.0, kit::INK);
                 y += 48.0;
-                ti::field(1, Kind::Text, Rect::new(fx, y, fw, field_h), "Username or email", "KuonFan or you@example.com");
+                ti::field(1, Kind::Text, Rect::new(fx, y, fw, field_h), "Username or email", "Enter your username or email");
                 y += field_h + 30.0;
-                ti::field(2, Kind::Password, Rect::new(fx, y, fw, field_h), "Password", "Your password");
+                ti::field(2, Kind::Password, Rect::new(fx, y, fw, field_h), "Password", "Enter your password");
                 let forgot = link("Forgot password?", fx + fw, y - 8.0, 13.0, true);
                 if forgot {
                     st.forgot = true;
@@ -1134,7 +1133,7 @@ pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
             } else {
                 kit::text("Create your account", fx, y + 6.0, 26.0, kit::INK);
                 y += 44.0;
-                ti::field(3, Kind::Text, Rect::new(fx, y, fw, field_h), "Username", "3-16 letters, numbers or _");
+                ti::field(3, Kind::Text, Rect::new(fx, y, fw, field_h), "Username", "3 to 16 letters, numbers or _");
                 y += field_h + 28.0;
                 ti::field(4, Kind::Email, Rect::new(fx, y, fw, field_h), "Email", "you@example.com");
                 y += field_h + 28.0;

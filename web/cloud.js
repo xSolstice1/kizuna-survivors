@@ -32,33 +32,34 @@
     var code = (body && (body.error_code || body.code || body.error)) || "";
     var msg = (body && (body.msg || body.message || body.error_description)) || "";
     var map = {
-      invalid_credentials: "Wrong username, email or password.",
-      invalid_grant: "Wrong username, email or password.",
-      email_not_confirmed: "Confirm your email first: check your inbox for the link.",
-      user_already_exists: "That email already has an account. Sign in instead.",
-      email_exists: "That email already has an account. Sign in instead.",
-      weak_password: "Choose a longer password (at least 8 characters).",
-      over_email_send_rate_limit: "Too many emails sent. Try again in a few minutes.",
-      over_request_rate_limit: "Too many attempts. Wait a moment and try again.",
-      email_address_invalid: "That email address doesn't look right.",
-      validation_failed: "Check the email address and password.",
-      P0429: "Too many wrong passwords for that username. Wait 15 minutes, or sign in with your email.",
+      invalid_credentials: "Incorrect email or password.",
+      invalid_grant: "Incorrect email or password.",
+      email_not_confirmed: "Please confirm your email first. Check your inbox for the link we sent when you signed up.",
+      user_already_exists: "An account with this email already exists. Please sign in.",
+      email_exists: "An account with this email already exists. Please sign in.",
+      weak_password: "Password must be at least 8 characters.",
+      over_email_send_rate_limit: "We've sent several emails already. Please wait a few minutes and try again.",
+      over_request_rate_limit: "Too many attempts. Please wait a moment and try again.",
+      email_address_invalid: "Please enter a valid email address.",
+      validation_failed: "Please enter a valid email address and password.",
+      P0429: "Too many sign-in attempts. Try again in 15 minutes, or sign in with your email.",
     };
     if (map[code]) return map[code];
     if (/invalid login/i.test(msg)) return map.invalid_credentials;
+    if (/link.*(invalid|expired)|expired/i.test(msg)) return "This link has expired. Please request a new one.";
     if (/already registered/i.test(msg)) return map.user_already_exists;
     if (/password/i.test(msg) && /6|8|short|weak/i.test(msg)) return map.weak_password;
-    return msg ? msg.charAt(0).toUpperCase() + msg.slice(1) : "Something went wrong (" + status + "). Try again.";
+    return msg ? msg.charAt(0).toUpperCase() + msg.slice(1) : "Something went wrong. Please try again.";
   }
   // Calls a database function as a signed-out visitor; errors carry PostgREST's body.
   function anonRpc(fn, args) {
     return fetch(URL_ + "/rest/v1/rpc/" + fn, { method: "POST", headers: { apikey: KEY, "Content-Type": "application/json" }, body: JSON.stringify(args) })
       .then(function (r) { return r.json().catch(function () { return null; }).then(function (j) { if (!r.ok) throw { body: j || {}, status: r.status }; return j; }); },
-            function () { throw { body: { msg: "Can't reach the server. Check your connection." }, status: 0 }; });
+            function () { throw { body: { msg: "Can't connect. Check your internet connection and try again." }, status: 0 }; });
   }
   // Whether an email has a Google account and no password (…_sign_in_methods.sql). False when
   // unknown, e.g. before that migration has been run.
-  var GOOGLE_ONLY = "This email uses Google sign-in. Continue with Google below.";
+  var GOOGLE_ONLY = "This email is linked to a Google account. Use Continue with Google.";
   function googleOnly(email) {
     return anonRpc("sign_in_methods", { p_email: email }).then(function (m) {
       return Array.isArray(m) && m.indexOf("google") >= 0 && m.indexOf("password") < 0;
@@ -68,7 +69,7 @@
     pending = true;
     return fetch(URL_ + path, { method: "POST", headers: headers(true), body: JSON.stringify(body) })
       .then(function (r) { return r.text().then(function (t) { var j = t ? JSON.parse(t) : {}; pending = false; if (!r.ok) throw { body: j, status: r.status }; return j; }); })
-      .catch(function (e) { pending = false; if (e && e.body !== undefined) throw e; throw { body: { msg: "Can't reach the server. Check your connection." }, status: 0 }; });
+      .catch(function (e) { pending = false; if (e && e.body !== undefined) throw e; throw { body: { msg: "Can't connect. Check your internet connection and try again." }, status: 0 }; });
   }
   function startSession(j) {
     saveSession({ access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() / 1000 + (j.expires_in || 3600), user: j.user ? { id: j.user.id, email: j.user.email || "" } : null });
@@ -76,9 +77,13 @@
     status = 2;
     if (local) reconcile();
   }
-  // Google sign-in and every emailed link land on auth-callback.html, which hands the session
-  // back to this tab (see the storage listener below).
-  function back() { return location.origin + location.pathname.replace(/[^/]*$/, "") + "auth-callback.html"; }
+  // Where sign-in returns to. Emailed links (confirm, sign-in, reset) open the game itself,
+  // which reads the session from the URL (fromHash). The Google popup returns to
+  // auth-callback.html, which hands the session to this tab and closes.
+  function back(popup) {
+    var dir = location.origin + location.pathname.replace(/[^/]*$/, "");
+    return popup ? dir + "auth-callback.html" : dir;
+  }
 
   function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
   function set(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
@@ -112,6 +117,7 @@
     if (h.indexOf("access_token=") < 0) return false;
     var q = new URLSearchParams(h);
     recovery = q.get("type") === "recovery";
+    set("kz_cloud_recovery", recovery ? "1" : null);   // before the session: other tabs read it
     saveSession({ access_token: q.get("access_token"), refresh_token: q.get("refresh_token"), expires_at: Date.now() / 1000 + Number(q.get("expires_in") || 3600) });
     history.replaceState(null, "", location.pathname + location.search);
     return true;
@@ -240,6 +246,7 @@
     window.addEventListener("online", function () { if (status === 5) reconcile(); });
     // A sign-in finished in another tab or window (Google popup, an emailed link).
     window.addEventListener("storage", function (e) {
+      if (e.key === "kz_cloud_recovery" && !e.newValue) { recovery = false; return; }   // password set elsewhere
       if (e.key !== LS.session || !e.newValue) return;
       try { session = JSON.parse(e.newValue); } catch (err) { return; }
       session.user = null;
@@ -278,22 +285,22 @@
       env.kz_cloud_sign_in = function (ptr, len) {
         if (!status) return;
         var provider = readStr(ptr, len);
-        var url = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back());
+        var url = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back(true));
         // A sign-in window; this tab signs in by itself when it finishes. Blocked popups fall back
         // to signing in in this tab.
         var w = 480, h = 640, x = (screen.width - w) / 2, y = (screen.height - h) / 2;
         var popup = window.open(url, "kz_sign_in", "popup,width=" + w + ",height=" + h + ",left=" + x + ",top=" + y);
         if (!popup) { location.href = url; return; }
-        say("Finish signing in with Google in the window that opened.", 0);
+        say("Complete sign-in in the Google window.", 0);
       };
       env.kz_cloud_password_sign_in = function (ep, el, pp, pl) {
         if (!status || pending) return;
         var who = readStr(ep, el).trim(), pw = readStr(pp, pl);
-        if (!who || !pw) return say("Enter your username or email and your password.", 1);
+        if (!who || !pw) return say("Please enter your username or email, and your password.", 1);
         // A username is swapped for its email by the database, which only answers when the
         // password is right (supabase/migrations/…_username_sign_in.sql).
         var email = who.indexOf("@") >= 0 ? Promise.resolve(who) : anonRpc("email_for_sign_in", { p_username: who, p_password: pw }).then(function (m) {
-          if (!m) throw { body: { msg: "Wrong username or password." }, status: 400 };
+          if (!m) throw { body: { msg: "Incorrect username or password." }, status: 400 };
           return m;
         });
         var used = "";
@@ -312,14 +319,14 @@
       env.kz_cloud_sign_up = function (up, ul, ep, el, pp, pl) {
         if (!status || pending) return;
         var name = readStr(up, ul).trim(), email = readStr(ep, el).trim(), pw = readStr(pp, pl);
-        if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return say("Usernames are 3 to 16 letters, numbers or underscores.", 1);
-        if (pw.length < 8) return say("Choose a longer password (at least 8 characters).", 1);
+        if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) return say("Usernames must be 3 to 16 characters: letters, numbers or underscores.", 1);
+        if (pw.length < 8) return say("Password must be at least 8 characters.", 1);
         pending = true;
         fetch(URL_ + "/rest/v1/rpc/username_available", { method: "POST", headers: { apikey: KEY, "Content-Type": "application/json" }, body: JSON.stringify({ p_username: name }) })
           .then(function (r) { return r.json(); })
           .then(function (free) {
             pending = false;
-            if (free !== true) return say("That username is taken. Try another.", 1);
+            if (free !== true) return say("That username is already taken. Please choose another.", 1);
             return authPost("/auth/v1/signup?redirect_to=" + encodeURIComponent(back()), { email: email, password: pw, data: { username: name } }).then(function (j) {
               if (j.access_token) return startSession(j);
               // Supabase answers an already-registered email with a stand-in user that has no
@@ -328,10 +335,10 @@
               if (ids && ids.length === 0) {
                 return googleOnly(email).then(function (g) {
                   if (g) say(GOOGLE_ONLY, 3);
-                  else say("That email already has an account. Sign in instead, or use Forgot password.", 1);
+                  else say("An account with this email already exists. Sign in, or reset your password.", 1);
                 });
               }
-              say("Almost there: we sent a confirmation link to " + email + ". Open it, then sign in.", 2);
+              say("Check your email. We sent a confirmation link to " + email + ".", 2);
             });
           })
           .catch(function (e) { pending = false; say(friendly(e && e.body, e && e.status), 1); });
@@ -339,28 +346,28 @@
       env.kz_cloud_magic_link = function (ep, el) {
         if (!status || pending) return;
         var email = readStr(ep, el).trim();
-        if (email.indexOf("@") < 0) return say("Type your account's email above (not your username) and try again.", 1);
+        if (email.indexOf("@") < 0) return say("Please enter the email address for your account.", 1);
         authPost("/auth/v1/otp?redirect_to=" + encodeURIComponent(back()), { email: email, create_user: true })
-          .then(function () { say("Sign-in link sent to " + email + ". Open it on this device.", 2); })
+          .then(function () { say("Check your email. We sent a sign-in link to " + email + ".", 2); })
           .catch(function (e) { say(friendly(e.body, e.status), 1); });
       };
       env.kz_cloud_reset = function (ep, el) {
         if (!status || pending) return;
         var email = readStr(ep, el).trim();
-        if (email.indexOf("@") < 0) return say("Type your account's email above (not your username) and try again.", 1);
+        if (email.indexOf("@") < 0) return say("Please enter the email address for your account.", 1);
         authPost("/auth/v1/recover?redirect_to=" + encodeURIComponent(back()), { email: email })
-          .then(function () { say("If that email has an account, a reset link is on its way.", 2); })
+          .then(function () { say("Reset email sent.", 2); })
           .catch(function (e) { say(friendly(e.body, e.status), 1); });
       };
       env.kz_cloud_set_password = function (pp, pl) {
         if (!session || pending) return;
         var pw = readStr(pp, pl);
-        if (pw.length < 8) return say("Choose a longer password (at least 8 characters).", 1);
+        if (pw.length < 8) return say("Password must be at least 8 characters.", 1);
         pending = true;
         refresh().then(function () {
           return fetch(URL_ + "/auth/v1/user", { method: "PUT", headers: headers(true), body: JSON.stringify({ password: pw }) });
         }).then(function (r) { return r.json().then(function (j) { pending = false; if (!r.ok) throw { body: j, status: r.status }; }); })
-          .then(function () { recovery = false; set("kz_cloud_recovery", null); say("Password updated.", 2); })
+          .then(function () { recovery = false; set("kz_cloud_recovery", null); say("Your password has been changed.", 2); })
           .catch(function (e) { pending = false; say(friendly(e && e.body, e && e.status), 1); });
       };
       env.kz_cloud_recovery = function () { return recovery ? 1 : 0; };
