@@ -7542,7 +7542,44 @@ mod tests {
             let hero = std::env::var("BALANCE_HERO").ok().and_then(|h| HeroId::from_key(&h)).unwrap_or(HeroId::Ren);
             let stage = std::env::var("BALANCE_STAGE").ok().and_then(|h| StageId::from_key(&h)).unwrap_or(StageId::Shotengai);
             let difficulty = std::env::var("BALANCE_DIFF").ok().and_then(|h| Difficulty::from_key(&h)).unwrap_or(Difficulty::Normal);
-            let mut w = World::new(WorldConfig { seed, hero, stage, difficulty, ..Default::default() });
+            // BALANCE_ASC=n: Nightmare+n. BALANCE_GEAR=count:rarity (e.g. 4:epic): that many random
+            // pieces at the stage's drop item level. BALANCE_AFK=1: the bot never moves.
+            // BALANCE_TRACE=1: a line per minute (lowest HP, damage taken, enemies alive).
+            let ascension: u32 = std::env::var("BALANCE_ASC").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let afk = std::env::var("BALANCE_AFK").is_ok_and(|v| v == "1");
+            // BALANCE_AFK_AFTER=secs: play normally, then stop moving (a "semi-AFK" player).
+            let afk_after: f32 = std::env::var("BALANCE_AFK_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(f32::INFINITY);
+            let trace = std::env::var("BALANCE_TRACE").is_ok_and(|v| v == "1");
+            let gear = match std::env::var("BALANCE_GEAR").ok().and_then(|g| g.split_once(':').map(|(n, r)| (n.parse::<usize>().ok(), r.to_string()))) {
+                Some((Some(n), r)) => {
+                    let rarity = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic]
+                        .into_iter()
+                        .find(|x| x.name().eq_ignore_ascii_case(&r))
+                        .unwrap_or(Rarity::Rare);
+                    let mut rng = crate::rng::Rng::new(seed ^ 0x9e37);
+                    let ilvl = crate::gear::drop_ilvl(stage, difficulty.index(), ascension);
+                    let slots = [crate::gear::Slot::Hat, crate::gear::Slot::Top, crate::gear::Slot::Bottom, crate::gear::Slot::Gloves, crate::gear::Slot::Shoes, crate::gear::Slot::Necklace, crate::gear::Slot::Ring, crate::gear::Slot::Earring, crate::gear::Slot::Charm, crate::gear::Slot::Omamori];
+                    let items: Vec<_> = slots.iter().take(n).map(|s| crate::gear::roll_item(&mut rng, Some(*s), rarity, ilvl)).collect();
+                    Loadout::from_items(&items.iter().collect::<Vec<_>>())
+                }
+                _ => Loadout::default(),
+            };
+            // BALANCE_META=max: every Shrine Shop upgrade at max rank and every world's relic.
+            let meta = if std::env::var("BALANCE_META").is_ok_and(|v| v == "max") {
+                let mut prof = crate::meta::Profile::default();
+                for p in crate::meta::ALL_POWERUPS {
+                    prof.ranks[p.index()] = p.max_rank();
+                }
+                prof.relics = crate::campaign::ALL_STAGES.iter().filter_map(|s| s.def().relic).collect();
+                prof.bonus()
+            } else {
+                Bonus::default()
+            };
+            let mut w = World::new(WorldConfig { seed, hero, stage, difficulty, ascension, gear, meta, ..Default::default() });
+            let (mut hp_low, mut taken, mut last_hp, mut next_trace) = (1.0f32, 0.0f32, 0.0f32, 60.0f32);
+            let mut dealt = 0.0f64;
+            let mut boss_at: Vec<(EnemyKind, f32)> = Vec::new();
+            last_hp = last_hp.max(w.player.hp);
             let mut level_at_15 = None;
             let mut maxed_offers = 0u32;
             let mut first_maxed = None;
@@ -7564,9 +7601,38 @@ mod tests {
                 if w.shrine_offer.is_some() {
                     w.choose_shrine(Some(0));
                 }
-                let input = w.bot_input();
+                let input = if afk || w.time >= afk_after { Input::default() } else { w.bot_input() };
                 w.step(input);
                 gear_drops += w.events.iter().filter(|e| matches!(e, Event::GearDrop { .. })).count() as u32;
+                dealt += w.events.iter().map(|e| if let Event::Hit { amount, .. } = e { *amount as f64 } else { 0.0 }).sum::<f64>();
+                for e in &w.events {
+                    match e {
+                        Event::BossSpawned(k) | Event::NightLordSpawned(k) => boss_at.push((*k, w.time)),
+                        Event::Kill { kind, .. } if kind.is_boss() => {
+                            if let Some(i) = boss_at.iter().position(|(k, _)| k == kind) {
+                                let (k, t0) = boss_at.remove(i);
+                                if trace {
+                                    println!("  boss {:?} spawned {:.0}s, killed in {:.1}s", k, t0, w.time - t0);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if w.player.hp < last_hp {
+                    taken += last_hp - w.player.hp;
+                }
+                last_hp = w.player.hp;
+                hp_low = hp_low.min(w.player.hp / w.player.max_hp);
+                if trace && w.time >= next_trace {
+                    // dps_ratio: damage dealt this minute / enemy HP scale = how many "base enemies" of
+                    // HP the player chews through per second. Flat = enemies keep pace with the build.
+                    let dps = dealt / 60.0;
+                    println!("  {:>4.0}s  hp_low {:>3.0}%  taken {:>6.0}  alive {:>4}  kills {:>6}  level {:>3}  enemy_hp x{:>6.1}  dmg x{:.1}  dps {:>9.0}  dps/hp {:>7.0}", w.time, hp_low * 100.0, taken, w.enemies.len(), w.kills, w.player.level, w.enemy_hp_scale(), w.enemy_damage_scale(), dps, dps / w.enemy_hp_scale() as f64);
+                    dealt = 0.0;
+                    next_trace += 60.0;
+                    hp_low = 1.0;
+                }
             }
             let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
             let nl = w.boss().map(|b| format!("{} {:.0}%", b.2.short_name(), b.1 * 100.0)).unwrap_or("-".into());
