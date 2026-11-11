@@ -249,6 +249,8 @@ pub struct Profile {
     /// Equipment: the shared bag, each hero's 12 slots (item ids, 0 = empty), Spirit Dust,
     /// Shrine Draw pity and the next item id.
     pub items: Vec<Item>,
+    /// `item=` lines this build cannot read; written back untouched on save.
+    kept_items: Vec<String>,
     pub loadouts: [[u32; 12]; ALL_HEROES.len()],
     pub dust: u32,
     pub draw_pity: u32,
@@ -300,6 +302,7 @@ impl Default for Profile {
             asc_open: [0; ALL_STAGES.len()],
             ascension: 0,
             items: Vec::new(),
+            kept_items: Vec::new(),
             loadouts: [[0; 12]; ALL_HEROES.len()],
             dust: 0,
             draw_pity: 0,
@@ -401,7 +404,7 @@ impl Profile {
             return 0;
         }
         it.id = self.next_item;
-        self.next_item += 1;
+        self.next_item = self.next_item.saturating_add(1);
         let id = it.id;
         self.items.push(it);
         id
@@ -692,6 +695,9 @@ impl Profile {
         for it in &self.items {
             s += &format!("item={}\n", it.serialize());
         }
+        for line in &self.kept_items {
+            s += &format!("item={}\n", line);
+        }
         for (i, h) in ALL_HEROES.iter().enumerate() {
             if self.loadouts[i].iter().any(|x| *x != 0) {
                 let ids: Vec<String> = self.loadouts[i].iter().map(|x| x.to_string()).collect();
@@ -751,12 +757,18 @@ impl Profile {
                 "dust" => p.dust = v.parse().unwrap_or(0),
                 "draw_pity" => p.draw_pity = v.parse().unwrap_or(0),
                 "next_item" => p.next_item = v.parse().unwrap_or(1).max(1),
-                "item" => {
-                    if let Some(it) = Item::parse(v) {
-                        p.next_item = p.next_item.max(it.id + 1);
+                "item" => match Item::parse(v) {
+                    Some(it) => {
+                        p.next_item = p.next_item.max(it.id.saturating_add(1));
                         p.items.push(it);
                     }
-                }
+                    None => {
+                        if let Some(id) = v.split(';').next().and_then(|x| x.parse::<u32>().ok()) {
+                            p.next_item = p.next_item.max(id.saturating_add(1));
+                        }
+                        p.kept_items.push(v.to_string());
+                    }
+                },
                 "map" => {
                     if let Some(st) = StageId::from_key(v) {
                         p.stage = st;
@@ -869,7 +881,56 @@ pub fn enemy_found(p: &Profile, k: EnemyKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content::EnemyRarity;
     use crate::WorldConfig;
+
+    #[test]
+    fn future_item_line_round_trips() {
+        let mut rng = Rng::new(3);
+        let mut seed = Profile::default();
+        let mut it = gear::roll_item(&mut rng, Some(Slot::Hat), Rarity::Common, 1);
+        it.id = 5;
+        seed.items.push(it);
+        let future = "9;hat;9;99;0;-;0;;-;-;0;-;-;fire;extra";
+        let p = Profile::parse(&format!("{}item={}\n", seed.serialize(), future));
+        assert_eq!(p.items.len(), 1);
+        assert_eq!(p.kept_items.len(), 1);
+        assert_eq!(p.next_item, 10);
+        assert_eq!(p.serialize().matches(&format!("item={}\n", future)).count(), 1);
+    }
+
+    #[test]
+    fn max_kept_id_never_wraps_next_item() {
+        let mut p = Profile::parse("item=4294967295;garbage\n");
+        let mut rng = Rng::new(3);
+        let id = p.add_item(gear::roll_item(&mut rng, Some(Slot::Hat), Rarity::Common, 1));
+        assert_ne!(id, 0);
+        assert_ne!(p.next_item, 0);
+    }
+
+    #[test]
+    fn unreadable_kept_line_keeps_next_id() {
+        let p = Profile::parse("next_item=7\nitem=garbage\n");
+        assert_eq!(p.kept_items, vec!["garbage".to_string()]);
+        assert_eq!(p.next_item, 7);
+        assert!(p.items.is_empty());
+        assert!(p.serialize().contains("item=garbage\n"));
+    }
+
+    #[test]
+    fn todays_save_round_trips_unchanged() {
+        let mut rng = Rng::new(11);
+        let mut p = Profile::default();
+        for r in [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Mythic] {
+            p.add_item(gear::roll_item(&mut rng, Some(Slot::Hat), r, 5));
+        }
+        p.add_item(gear::roll_set_piece(&mut rng, StageId::ShrineValley, 5));
+        let text = p.serialize();
+        let back = Profile::parse(&text);
+        assert!(back.kept_items.is_empty());
+        assert_eq!(back.items.len(), p.items.len());
+        assert_eq!(back.serialize(), text);
+    }
 
     #[test]
     fn set_pieces_survive_a_full_bag() {
@@ -886,6 +947,24 @@ mod tests {
         assert_eq!(p.add_item(mythic), 0);
         assert_eq!(p.items.len(), BAG_SIZE + 1);
         assert!(p.dust > dust);
+    }
+
+    #[test]
+    fn old_save_keeps_enemy_kills() {
+        let old: Vec<_> = ALL_ENEMIES.iter().filter(|k| !matches!(k.rarity(), EnemyRarity::Uncommon | EnemyRarity::Leader)).collect();
+        assert_eq!(old.len(), 47);
+        let mut text = String::new();
+        for (n, k) in old.iter().enumerate() {
+            text += &format!("enemy.{}={}\n", key_of(*k), n + 1);
+        }
+        let p = Profile::parse(&text);
+        for (n, k) in old.iter().enumerate() {
+            assert_eq!(p.enemy_kills[k.index()], n as u64 + 1, "{k:?}");
+        }
+        for k in ALL_ENEMIES.iter().filter(|k| !old.contains(k)) {
+            assert_eq!(p.enemy_kills[k.index()], 0, "{k:?}");
+        }
+        assert_eq!(Profile::parse(&p.serialize()).serialize(), p.serialize());
     }
 
     #[test]

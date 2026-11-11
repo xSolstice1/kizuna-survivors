@@ -6,6 +6,7 @@ use crate::kit::{draw_circle, draw_circle_lines};
 
 use crate::kit;
 use sim::content::{Element, EnemyKind, HeroId, Rank, PassiveKind, PickupKind, SpecialKind, Upgrade, WeaponKind, ALL_HEROES, ALL_PICKUPS};
+use sim::enemies::EnemyRarity;
 use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
@@ -23,7 +24,7 @@ pub fn world_scale() -> f32 {
     }
 }
 
-/// Source of a campaign enemy's sprite (None for prologue enemies, which have named fields).
+/// Source of an enemy's sprite (None for the original prologue kinds, which have named fields).
 fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
     Some(match k {
         EnemyKind::Kodama => "w1/fodder_a",
@@ -66,6 +67,24 @@ fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
         EnemyKind::PatchworkSorcerer => "w5/mini",
         EnemyKind::CrossingCalamity => "w5/boss",
         EnemyKind::ShatterSovereign => "w5/final",
+        EnemyKind::RokurokubiClerk => "rokurokubi_clerk",
+        EnemyKind::TsurubeDrop => "tsurube_drop",
+        EnemyKind::CaptainKitsunebi => "captain_kitsunebi",
+        EnemyKind::ShardMoth => "w1/uncommon_a",
+        EnemyKind::BoneEaterCrow => "w1/uncommon_b",
+        EnemyKind::AdmiralTengu => "w1/leader",
+        EnemyKind::RoguePuppeteer => "w2/uncommon_a",
+        EnemyKind::ClayBird => "w2/uncommon_b",
+        EnemyKind::MistCaptain => "w2/leader",
+        EnemyKind::MaskedRetainer => "w3/uncommon_a",
+        EnemyKind::HollowHusk => "w3/uncommon_b",
+        EnemyKind::NumberedQuartermaster => "w3/leader",
+        EnemyKind::BladetailRunner => "w4/uncommon_a",
+        EnemyKind::MaskCollector => "w4/uncommon_b",
+        EnemyKind::DrownedCaptain => "w4/leader",
+        EnemyKind::SwarmMother => "w5/uncommon_a",
+        EnemyKind::ToolThief => "w5/uncommon_b",
+        EnemyKind::CurseCaptain => "w5/leader",
         _ => return None,
     })
 }
@@ -95,6 +114,8 @@ pub struct Assets {
     pub chochin: Texture2D,
     pub nopperabo: Texture2D,
     pub night_lord: Texture2D,
+    oni_outline: Texture2D,
+    night_lord_outline: Texture2D,
     pub talisman: Texture2D,
     pub orb: Texture2D,
     pub gem: Texture2D,
@@ -104,6 +125,8 @@ pub struct Assets {
     icons: Vec<(&'static str, Texture2D)>,
     /// Campaign enemies, indexed like `ALL_ENEMIES` (None for the prologue's own sprites).
     world_enemies: Vec<Option<Texture2D>>,
+    /// White silhouettes of the Uncommon-and-above campaign enemies, same indexing.
+    enemy_outlines: Vec<Option<Texture2D>>,
     gear_icons: Vec<(&'static str, Texture2D)>,
     /// Soft round shadow, batched under crowds.
     pub shadow: Texture2D,
@@ -118,6 +141,19 @@ impl Assets {
             let walk_b = hero.lift(14..19, 27..32);
             [hero.texture(), walk_a.texture(), walk_b.texture()]
         };
+        let (oni, oni_outline) = sprites::art_and_outline("oni");
+        let (night_lord, night_lord_outline) = sprites::art_and_outline("night_lord");
+        let (world_enemies, enemy_outlines): (Vec<_>, Vec<_>) = sim::content::ALL_ENEMIES
+            .iter()
+            .map(|k| match world_enemy_src(*k) {
+                Some(src) => {
+                    let sprite = sprites::sprite(src);
+                    let outline = (k.rarity() > sim::enemies::EnemyRarity::Common).then(|| sprites::silhouette(&sprite));
+                    (Some(sprite.texture()), outline)
+                }
+                None => (None, None),
+            })
+            .unzip();
         let heroes = ALL_HEROES
             .iter()
             .map(|h| match h {
@@ -154,10 +190,12 @@ impl Assets {
             coin: sprites::art("coin"),
             wisp: sprites::art("wisp"),
             kasa: sprites::art("kasa"),
-            oni: sprites::art("oni"),
+            oni,
             chochin: sprites::art("chochin"),
             nopperabo: sprites::art("nopperabo"),
-            night_lord: sprites::art("night_lord"),
+            night_lord,
+            oni_outline,
+            night_lord_outline,
             talisman: sprites::art("talisman"),
             orb: sprites::art("orb"),
             gem: sprites::art("gem"),
@@ -208,7 +246,8 @@ impl Assets {
             ("relic_w4", sprites::art("icons/relic_w4")),
             ("relic_w5", sprites::art("icons/relic_w5")),
             ],
-            world_enemies: sim::content::ALL_ENEMIES.iter().map(|k| world_enemy_src(*k).map(sprites::art)).collect(),
+            world_enemies,
+            enemy_outlines,
             shadow: {
                 let (w, h) = (32u16, 16u16);
                 let mut px = vec![0u8; w as usize * h as usize * 4];
@@ -418,6 +457,7 @@ pub struct Fx {
     impacts: Vec<(Vec2, f32, f32)>,
     /// Bursts: (pos, radius, age, style). Style: 0 foxfire blue, 1 gold blast, 2 crimson, 3 finale.
     bursts: Vec<(Vec2, f32, f32, u8)>,
+    free_bursts: Vec<(Vec2, f32, f32, u8)>,
     /// Beams: (from, to, age, style).
     beams: Vec<(Vec2, Vec2, f32, u8)>,
     /// Signature flourishes under the player: age.
@@ -442,6 +482,7 @@ pub struct Fx {
 
     /// Smoke puffs from Fox Mirage clones appearing / popping: (pos, radius, age).
     smokes: Vec<(Vec2, f32, f32)>,
+    free_smokes: Vec<(Vec2, f32, f32)>,
     pub shake: f32,
     pub show_numbers: bool,
     /// Short line spoken by the hero, shown above her head.
@@ -477,7 +518,9 @@ impl Fx {
         self.slashes.clear();
         self.impacts.clear();
         self.bursts.clear();
+        self.free_bursts.clear();
         self.smokes.clear();
+        self.free_smokes.clear();
         self.beams.clear();
         self.sig_rings.clear();
         self.steps.clear();
@@ -502,6 +545,18 @@ impl Fx {
         voice::lines(self.hero.unwrap_or(HeroId::Ren))
     }
 
+    /// A ring of `n` sparks flying out from `pos`.
+    fn spray(&mut self, pos: Vec2, n: usize, color: Color) {
+        for k in 0..n {
+            if self.particles.len() >= MAX_PARTICLES {
+                break;
+            }
+            let a = k as f32 / n as f32 * std::f32::consts::TAU + rand::gen_range(-0.3, 0.3);
+            let speed = rand::gen_range(30.0, 90.0);
+            self.particles.push(Particle { pos, vel: vec2(a.cos(), a.sin()) * speed, age: 0.0, life: rand::gen_range(0.25, 0.45), color });
+        }
+    }
+
     pub fn say(&mut self, line: &str) {
         self.bark = Some((line.to_string(), 2.2));
     }
@@ -510,8 +565,9 @@ impl Fx {
         self.banner = Some((text, 2.8));
     }
 
-    pub fn absorb(&mut self, events: &[Event], player: sim::Vec2) {
+    pub fn absorb(&mut self, events: &[Event], player: sim::Vec2, reach: f32) {
         let mut round_banner = None;
+        let boss_arrived = events.iter().any(|e| matches!(e, Event::BossSpawned(_) | Event::NightLordSpawned(_)));
         for ev in events {
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
@@ -543,20 +599,7 @@ impl Fx {
                         self.shake = self.shake.max(0.6);
                         self.say(self.lines().night_lord_down);
                     }
-                    for k in 0..n {
-                        if self.particles.len() >= MAX_PARTICLES {
-                            break;
-                        }
-                        let a = k as f32 / n as f32 * std::f32::consts::TAU + rand::gen_range(-0.3, 0.3);
-                        let speed = rand::gen_range(30.0, 90.0);
-                        self.particles.push(Particle {
-                            pos: vec2(pos.x, pos.y),
-                            vel: vec2(a.cos(), a.sin()) * speed,
-                            age: 0.0,
-                            life: rand::gen_range(0.25, 0.45),
-                            color,
-                        });
-                    }
+                    self.spray(vec2(pos.x, pos.y), n, color);
                 }
                 Event::PlayerHurt => self.shake = self.shake.max(0.18),
                 Event::LevelUp if !self.leveled_once => {
@@ -576,6 +619,12 @@ impl Fx {
                     self.announce(format!("{name} APPROACHES"));
                     self.say(self.lines().boss);
                 }
+                Event::LeaderSpawned { kind } => {
+                    if !boss_arrived {
+                        self.announce(format!("{} rallies the crew", kind.name()));
+                    }
+                    self.shake = self.shake.max(0.2);
+                }
                 Event::EliteWave => {
                     self.announce("ELITE WAVE".into());
                     self.shake = self.shake.max(0.2);
@@ -586,16 +635,17 @@ impl Fx {
                     self.shake = self.shake.max(0.4);
                 }
                 Event::BossPhase { pos } => {
-                    self.bursts.push((vec2(pos.x, pos.y), 90.0, 0.0, 1));
+                    self.free_bursts.push((vec2(pos.x, pos.y), 90.0, 0.0, 1));
                     self.shake = self.shake.max(0.35);
                 }
-                Event::Hazard { pos, radius, kind } => {
+                Event::Hazard { pos, radius, kind, friendly } => {
                     let style = match kind {
                         0 => style::METEOR,
                         1 => style::SKYBOLT,
                         _ => 3,
                     };
-                    self.bursts.push((vec2(pos.x, pos.y), radius, 0.0, style));
+                    let list = if friendly { &mut self.bursts } else { &mut self.free_bursts };
+                    list.push((vec2(pos.x, pos.y), radius, 0.0, style));
                     if kind == 1 {
                         self.flash = 1.0;
                     }
@@ -658,7 +708,7 @@ impl Fx {
                 }
                 Event::Signature(_) => self.sig_rings.push(0.0),
                 Event::HannyaAwakened { pos } => {
-                    self.bursts.push((vec2(pos.x, pos.y), sim::content::HANNYA_ONSET_RADIUS, 0.0, 2));
+                    self.bursts.push((vec2(pos.x, pos.y), sim::content::HANNYA_ONSET_RADIUS.min(reach), 0.0, 2));
                     self.announce("HANNYA UNBOUND".into());
                     self.say(self.lines().special);
                     self.shake = self.shake.max(0.5);
@@ -682,7 +732,7 @@ impl Fx {
                 }
                 Event::Fired(WeaponKind::GraveCleaver) => self.swing = (0.2, Vec2::ZERO),
                 Event::FoxAwakened { pos } => {
-                    self.bursts.push((vec2(pos.x, pos.y), sim::content::FOX_BLAST_RADIUS, 0.0, 1));
+                    self.bursts.push((vec2(pos.x, pos.y), sim::content::FOX_BLAST_RADIUS.min(reach), 0.0, 1));
                     self.announce("NINEFOLD FOXFIRE".into());
                     self.say(self.lines().special);
                     self.shake = self.shake.max(0.5);
@@ -698,6 +748,15 @@ impl Fx {
                         self.bursts.push((vec2(pos.x, pos.y), sim::content::EXORCISM_RADIUS, 0.0, 1));
                         self.shake = self.shake.max(0.5);
                     }
+                }
+                Event::LeaderFell { pos } => {
+                    self.free_bursts.push((vec2(pos.x, pos.y), sim::content::BANNER_RADIUS, 0.0, LEADER_FELL));
+                    self.spray(vec2(pos.x, pos.y), 28, leader_color());
+                    self.shake = self.shake.max(0.3);
+                }
+                Event::PickupStolen { pos, kind } => {
+                    self.free_smokes.push((vec2(pos.x, pos.y), 14.0, 0.0));
+                    self.say(&format!("Hey! That thief took the {}!", kind.name()));
                 }
                 Event::Lash { from, to } => self.lashes.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
                 Event::WellCollapse { pos, radius } => {
@@ -783,6 +842,8 @@ impl Fx {
         self.impacts.retain(|i| i.2 < 0.3);
         self.bursts.iter_mut().for_each(|b| b.2 += dt);
         self.bursts.retain(|b| b.2 < burst_life(b.3));
+        self.free_bursts.iter_mut().for_each(|b| b.2 += dt);
+        self.free_bursts.retain(|b| b.2 < burst_life(b.3));
         self.beams.iter_mut().for_each(|b| b.2 += dt);
         self.beams.retain(|b| b.2 < if b.3 == style::MOON { 0.45 } else { 0.3 });
         self.sig_rings.iter_mut().for_each(|r| *r += dt);
@@ -803,6 +864,8 @@ impl Fx {
 
         self.smokes.iter_mut().for_each(|s| s.2 += dt);
         self.smokes.retain(|s| s.2 < 0.5);
+        self.free_smokes.iter_mut().for_each(|s| s.2 += dt);
+        self.free_smokes.retain(|s| s.2 < 0.5);
         self.shake = (self.shake - dt).max(0.0);
         for t in [&mut self.bark, &mut self.banner] {
             if let Some((_, left)) = t {
@@ -844,7 +907,21 @@ fn dimmed(c: Color) -> Color {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, flip: bool, accent: Color, time: f64, sprites: &mut Sprites<'a>, shadows: &mut Sprites<'a>, shadow: &'a Texture2D) {
+fn draw_world_enemy<'a>(
+    world: &World,
+    i: usize,
+    t: &'a Texture2D,
+    outline: Option<&'a Texture2D>,
+    tint: Color,
+    flip: bool,
+    accent: Color,
+    time: f64,
+    sprites: &mut Sprites<'a>,
+    shadows: &mut Sprites<'a>,
+    outlines: &mut Sprites<'a>,
+    cues: &mut Vec<(f32, f32, EnemyRarity, f32)>,
+    shadow: &'a Texture2D,
+) {
     use sim::content::{enemy_def, Ai, Rank};
     let e = &world.enemies;
     let (pos, kind) = (e.pos[i], e.kind[i]);
@@ -876,10 +953,7 @@ fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, 
             draw_line(pos.x, pos.y, pos.x + d.x * 80.0, pos.y + d.y * 80.0, 3.0, Color::new(1.0, 0.3, 0.3, 0.35));
             warn = true;
         }
-        Ai::Blink if e.ai_state[i] != 0 => {
-            let f = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
-            tint.a = f.clamp(0.1, 1.0) * 0.85;
-        }
+        Ai::Blink if e.ai_state[i] != 0 => tint.a = blink_alpha(e, i),
         _ => {}
     }
     if warn && ((tf * 16.0) as i32) % 2 == 0 && e.flash[i] == 0 {
@@ -898,15 +972,89 @@ fn draw_world_enemy<'a>(world: &World, i: usize, t: &'a Texture2D, tint: Color, 
     if !world.in_reach(pos, e.radius[i]) {
         tint = dimmed(tint);
     }
-    sprites.push(t, (pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round(), tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+    let (x, y) = ((pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round());
+    let rarity = kind.rarity();
+    if let (Some(outline), Some(c)) = (outline, outline_tint(rarity, tint.a)) {
+        for (dx, dy) in OUTLINE_OFFSETS {
+            outlines.push(outline, x + dx, y + dy, c, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+        }
+        cues.push((pos.x, y, rarity, tint.a));
+    }
+    if rarity == EnemyRarity::Leader {
+        let c = leader_color();
+        let pulse = 0.22 + 0.08 * (tf * 3.0).sin();
+        draw_circle(pos.x, pos.y, sim::content::BANNER_RADIUS, Color::new(c.r, c.g, c.b, 0.05));
+        draw_circle_lines(pos.x, pos.y, sim::content::BANNER_RADIUS, 2.0, Color::new(c.r, c.g, c.b, pulse));
+    }
+    sprites.push(t, x, y, tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+}
+
+/// A Blink enemy fading out before a blink (state 1) or back in after it (state 2).
+fn blink_alpha(e: &sim::world::Enemies, i: usize) -> f32 {
+    let f = match e.ai_state[i] {
+        0 => return 1.0,
+        1 => e.ai_timer[i] / 0.5,
+        _ => 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN,
+    };
+    f.clamp(0.1, 1.0) * 0.85
+}
+
+const OUTLINE_OFFSETS: [(f32, f32); 8] = [(-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5), (-1.1, -1.1), (1.1, -1.1), (-1.1, 1.1), (1.1, 1.1)];
+
+fn outline_tint(rarity: EnemyRarity, alpha: f32) -> Option<Color> {
+    crate::ui::enemy_rarity_color(rarity).map(|c| Color::new(c.r, c.g, c.b, alpha))
+}
+
+/// Outline for an enemy drawn straight to the screen (not batched), under its sprite.
+fn draw_outline_now(outline: &Texture2D, x: f32, y: f32, size: Vec2, flip: bool, rarity: EnemyRarity) {
+    let Some(c) = outline_tint(rarity, 1.0) else { return };
+    for (dx, dy) in OUTLINE_OFFSETS {
+        draw_texture_ex(outline, x + dx, y + dy, c, DrawTextureParams { flip_x: flip, dest_size: Some(size), ..Default::default() });
+    }
+}
+
+/// Shape cue above the sprite, so rarity reads without the colour: chevrons for Uncommon and
+/// Elite, a pennant on a pole for a Leader.
+fn draw_rarity_cue(x: f32, top: f32, rarity: EnemyRarity, alpha: f32) {
+    let Some(c) = crate::ui::enemy_rarity_color(rarity) else { return };
+    let c = Color::new(c.r, c.g, c.b, c.a * alpha);
+    let dark = Color::new(0.0, 0.0, 0.0, 0.6 * alpha);
+    let chevrons = match rarity {
+        EnemyRarity::Uncommon => 1,
+        EnemyRarity::Elite => 2,
+        _ => 0,
+    };
+    for k in 0..chevrons {
+        let y = top - 3.0 - k as f32 * 5.0;
+        draw_triangle(vec2(x - 5.0, y + 1.0), vec2(x + 5.0, y + 1.0), vec2(x, y - 5.0), dark);
+        draw_triangle(vec2(x - 4.0, y), vec2(x + 4.0, y), vec2(x, y - 4.0), c);
+    }
+    if rarity == EnemyRarity::Leader {
+        draw_line(x, top + 2.0, x, top - 18.0, 2.0, dark);
+        draw_line(x, top + 2.0, x, top - 17.0, 1.0, c);
+        draw_triangle(vec2(x, top - 18.0), vec2(x + 11.0, top - 14.0), vec2(x, top - 10.0), c);
+    }
 }
 
 /// World hazards: tag/blast and lightning telegraphs, spirit pressure, hostile domains.
-fn draw_hazards(world: &World, t: f32) {
+fn draw_hazards(world: &World, t: f32, friendly: bool) {
     use sim::world::HazardKind;
-    for h in &world.hazards {
+    for h in world.hazards.iter().filter(|h| h.friendly == friendly) {
         let (x, y, r) = (h.pos.x, h.pos.y, h.radius);
         match h.kind {
+            HazardKind::Blast { .. } if h.spare_enemies => {
+                // A Clay Bird's shell: a clay ring that fills from empty, with a fuse spark on top.
+                let k = (1.0 - h.warn / sim::content::CLAY_BLAST_WARN).clamp(0.0, 1.0);
+                draw_circle(x, y, r * k, Color::new(0.8, 0.5, 0.28, 0.24));
+                for seg in (0..24).step_by(2) {
+                    let a0 = seg as f32 / 24.0 * std::f32::consts::TAU;
+                    let a1 = a0 + std::f32::consts::TAU / 24.0;
+                    draw_line(x + a0.cos() * r, y + a0.sin() * r, x + a1.cos() * r, y + a1.sin() * r, 2.0, Color::new(0.85, 0.55, 0.3, 0.6 + 0.35 * k));
+                }
+                draw_circle(x, y, 4.0, Color::new(0.55, 0.32, 0.18, 0.95));
+                let spark = 0.6 + 0.4 * (t * 30.0).sin().abs();
+                draw_circle(x + 1.0, y - 5.0, 1.5 + k, Color::new(1.0, 0.85, 0.3, spark));
+            }
             HazardKind::Blast { .. } => {
                 // A paper tag / falling strike: a ring that fills as it is about to go off.
                 let k = (1.0 - h.warn / 1.3).clamp(0.0, 1.0);
@@ -957,15 +1105,18 @@ fn draw_hazards(world: &World, t: f32) {
     }
 }
 
-/// Exclusive Arsenal summons: drums, dragon, foxes, yin-yang orbs; and the Hollow Mask aura.
-fn draw_art(world: &World, t: f32) {
-    use sim::gear::ArsenalArt;
+/// The Hollow Mask aura, a player-form flourish.
+fn draw_mask(world: &World, t: f32) {
     let p = world.player.pos;
     if world.mask > 0.0 {
         let a = 0.25 + 0.1 * (t * 10.0).sin();
         draw_circle(p.x, p.y - 8.0, 30.0, Color::new(0.9, 0.1, 0.15, a));
         draw_circle_lines(p.x, p.y - 8.0, 34.0, 2.0, Color::new(1.0, 0.9, 0.9, 0.6));
     }
+}
+
+fn draw_art(world: &World, t: f32) {
+    use sim::gear::ArsenalArt;
     let Some(a) = &world.art else { return };
     match a.art {
         ArsenalArt::RaijinDrums => {
@@ -1014,6 +1165,17 @@ fn draw_art(world: &World, t: f32) {
     }
 }
 
+/// World units the camera moves at full trauma (1.0).
+const SHAKE_MAX: f32 = 6.0;
+
+/// Trauma-squared amplitude with a smooth sum-of-sines wobble, so small shakes stay small.
+fn shake_offset(trauma: f32, t: f32) -> Vec2 {
+    let amp = SHAKE_MAX * trauma * trauma;
+    let x = (t * 47.0).sin() + 0.5 * (t * 29.0 + 1.3).sin();
+    let y = (t * 41.0 + 0.7).sin() + 0.5 * (t * 23.0).sin();
+    vec2(x, y) * (amp / 1.5)
+}
+
 /// The world area the camera shows (no shake), for skipping what's off-screen.
 fn view_rect(cam: &Camera2D) -> Rect {
     let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
@@ -1028,10 +1190,113 @@ fn near(view: &Rect, x: f32, y: f32, pad: f32) -> bool {
 pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
     let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
     let p = world.player.pos;
-    let jitter = if fx.shake > 0.0 { vec2(rand::gen_range(-2.0, 2.0), rand::gen_range(-2.0, 2.0)) } else { Vec2::ZERO };
+    let jitter = shake_offset(fx.shake, get_time() as f32);
     // Positive y zoom: macroquad already flips y when drawing to the screen, so this gives
     // y-down world coordinates (from_display_rect would flip twice and render upside down).
     Camera2D { target: vec2(p.x.round(), p.y.round()) + jitter, zoom: vec2(2.0 / sw, 2.0 / sh), ..Default::default() }
+}
+
+fn draw_smokes(smokes: &[(Vec2, f32, f32)]) {
+    for (c, r, age) in smokes {
+        let k = age / 0.5;
+        for i in 0..7 {
+            let a = i as f32 * 0.9 + c.x * 0.05;
+            let d = r * 0.5 * k.sqrt();
+            let pr = r * (0.35 + 0.35 * k) * (0.8 + 0.2 * ((i * 37 % 10) as f32 / 10.0));
+            draw_circle(c.x + a.cos() * d, c.y - 6.0 + a.sin() * d * 0.7 - k * 6.0, pr, Color::new(0.85, 0.88, 0.95, 0.45 * (1.0 - k)));
+        }
+    }
+}
+
+fn draw_bursts(bursts: &[(Vec2, f32, f32, u8)]) {
+    for (c, r, age, style) in bursts {
+        let k = age / burst_life(*style);
+        let rr = r * (0.3 + 0.7 * k.sqrt());
+        let fade = 1.0 - k;
+        let (fill, edge, width) = match *style {
+            1 => (Color::new(1.0, 0.7, 0.2, 0.35 * fade), Color::new(1.0, 0.9, 0.5, 0.9 * fade), 5.0),
+            style::SEAL => (Color::new(1.0, 0.85, 0.3, 0.3 * fade), Color::new(1.0, 0.95, 0.6, fade), 2.0),
+            style::METEOR => (Color::new(1.0, 0.45, 0.1, 0.5 * fade), Color::new(1.0, 0.85, 0.4, fade), 7.0),
+            style::FOX => (Color::new(1.0, 0.55, 0.15, 0.35 * fade), Color::new(1.0, 0.85, 0.4, fade), 2.5),
+            style::SKYBOLT => (Color::new(0.7, 0.85, 1.0, 0.4 * fade), Color::new(1.0, 1.0, 1.0, fade), 3.0),
+            style::COMET => (Color::new(0.3, 0.6, 1.0, 0.45 * fade), Color::new(0.85, 0.95, 1.0, fade), 4.0),
+            style::QUAKE => (Color::new(1.0, 0.6, 0.2, 0.25 * fade), Color::new(1.0, 0.85, 0.4, fade), 6.0),
+            style::SPINE => (Color::new(0.4, 0.02, 0.06, 0.35 * fade), Color::new(0.9, 0.2, 0.25, fade), 2.0),
+            16 => (Color::new(0.2, 0.35, 0.9, 0.35 * fade), Color::new(0.75, 0.88, 1.0, fade), 3.0),
+            21 => (Color::new(1.0, 0.6, 0.75, 0.3 * fade), Color::new(1.0, 0.9, 0.95, fade), 2.0),
+            style::YINYANG => (Color::new(1.0, 1.0, 1.0, 0.3 * fade), Color::new(1.0, 0.4, 0.45, fade), 4.0),
+            style::PURIFY => (Color::new(1.0, 0.92, 0.65, 0.4 * fade), Color::new(1.0, 0.35, 0.4, fade), 9.0),
+            17 => (Color::new(0.45, 0.8, 1.0, 0.3 * fade), Color::new(0.9, 0.97, 1.0, fade), 2.5),
+            18 => (Color::new(0.55, 0.25, 1.0, 0.4 * fade), Color::new(0.9, 0.75, 1.0, fade), 7.0),
+            LEADER_FELL => {
+                let c = leader_color();
+                (Color::new(c.r, c.g, c.b, 0.18 * fade), Color::new(c.r, c.g, c.b, fade), 6.0)
+            }
+            style::VENOM => (Color::new(0.3, 0.75, 0.2, 0.35 * fade), Color::new(0.6, 1.0, 0.4, fade), 2.0),
+            style::FRENZY => (Color::new(0.5, 0.0, 0.08, 0.4 * fade), Color::new(1.0, 0.25, 0.3, fade), 6.0),
+            2 => (Color::new(0.6, 0.0, 0.1, 0.4 * fade), Color::new(1.0, 0.3, 0.3, 0.9 * fade), 3.0),
+            3 => (Color::new(0.25, 0.0, 0.05, 0.55 * fade), Color::new(1.0, 0.15, 0.2, fade), 8.0),
+            _ => (Color::new(0.3, 0.65, 1.0, 0.35 * fade), Color::new(0.8, 0.95, 1.0, 0.9 * fade), 2.0),
+        };
+        draw_circle(c.x, c.y, rr, fill);
+        match *style {
+            style::SEAL => {
+                // A spinning seal glyph: square inside the ring.
+                let a = k * 3.0;
+                let q = rr * 0.6;
+                for i in 0..4 {
+                    let (a0, a1) = (a + i as f32 * std::f32::consts::FRAC_PI_2, a + (i + 1) as f32 * std::f32::consts::FRAC_PI_2);
+                    draw_line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, Color::new(1.0, 0.3, 0.25, fade));
+                }
+            }
+            style::METEOR => {
+                draw_circle(c.x, c.y, rr * 0.55, Color::new(1.0, 0.95, 0.7, 0.7 * fade));
+                for i in 0..12 {
+                    let a = i as f32 * 0.52 + c.x;
+                    let d = rr * (0.4 + 0.8 * k);
+                    draw_rectangle(c.x + a.cos() * d, c.y + a.sin() * d * 0.7, 3.0, 3.0, Color::new(0.4, 0.2, 0.1, fade));
+                }
+            }
+            style::SKYBOLT => {
+                // The bolt column from the top of the sky.
+                let mut prev = vec2(c.x, c.y - 300.0);
+                for s in 1..=8 {
+                    let y = c.y - 300.0 + 300.0 * s as f32 / 8.0;
+                    let x = if s < 8 { c.x + ((s as f32 * 5.3 + c.y).sin()) * 10.0 } else { c.x };
+                    draw_line(prev.x, prev.y, x, y, 6.0 * fade, Color::new(0.6, 0.8, 1.0, 0.7 * fade));
+                    draw_line(prev.x, prev.y, x, y, 2.5 * fade, Color::new(1.0, 1.0, 1.0, fade));
+                    prev = vec2(x, y);
+                }
+            }
+            style::QUAKE => {
+                draw_circle_lines(c.x, c.y, rr * 0.6, 3.0, Color::new(1.0, 0.4, 0.3, 0.8 * fade));
+            }
+            style::SPINE => draw_spine_burst(vec2(c.x, c.y), *r, k),
+            style::FRENZY => {
+                // Thousand-Leg Burst: a crown of spikes radiating out.
+                for i in 0..28 {
+                    let a = i as f32 / 28.0 * std::f32::consts::TAU;
+                    let r0 = rr * 0.35;
+                    let r1 = rr * (0.85 + 0.15 * ((i * 7 % 5) as f32 / 5.0));
+                    let base = vec2(c.x, c.y);
+                    let l = base + vec2((a - 0.05).cos(), (a - 0.05).sin()) * r0;
+                    let rgt = base + vec2((a + 0.05).cos(), (a + 0.05).sin()) * r0;
+                    let tip = base + vec2(a.cos(), a.sin()) * r1;
+                    draw_triangle(l, rgt, tip, Color::new(0.75, 0.08, 0.15, fade));
+                }
+            }
+            _ => {}
+        }
+        if *style == style::PURIFY {
+            draw_circle_lines(c.x, c.y, rr * 0.8, 5.0, Color::new(1.0, 0.95, 0.75, fade));
+            draw_circle_lines(c.x, c.y, rr * 0.55, 3.0, Color::new(1.0, 0.5, 0.6, fade));
+        }
+        if *style == 3 {
+            draw_circle(c.x, c.y, rr * 0.6, Color::new(0.05, 0.0, 0.02, 0.5 * fade));
+            draw_circle_lines(c.x, c.y, rr * 0.8, 4.0, Color::new(0.9, 0.05, 0.1, 0.7 * fade));
+        }
+        draw_circle_lines(c.x, c.y, rr, width, edge);
+    }
 }
 
 pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx: &Fx, cam: &Camera2D, time: f64, target: Option<&RenderTarget>) {
@@ -1106,6 +1371,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let e = &world.enemies;
     let mut sprites = Sprites::new();
     let mut shadows = Sprites::new();
+    let mut outlines = Sprites::new();
+    let mut cues = Vec::new();
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
         let pos = e.pos[i];
@@ -1114,15 +1381,22 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         if !near(&view, pos.x, pos.y, pad) {
             continue;
         }
-        let in_domain = world.form_kind() == Some(SpecialKind::Firmament) && (e.pos[i] - world.domain_center).length() < sim::content::DOMAIN_RADIUS;
+        let in_domain = world.form_kind() == Some(SpecialKind::Firmament) && (e.pos[i] - world.domain_center).length() < world.domain_radius();
         let frozen = (world.freeze > 0.0 || in_domain) && !e.kind[i].is_boss();
+        let scattering = e.scatter[i] > sim::content::SCATTER_TIME - SCATTER_CUE && ((time * 12.0) as i32) % 2 == 0;
         let tint = if e.flash[i] > 0 {
             flash
         } else if frozen {
             Color::new(0.6, 0.85, 1.0, 1.0)
+        } else if scattering {
+            Color::new(0.85, 0.7, 1.0, 1.0)
         } else {
             WHITE
         };
+        if e.banner[i] {
+            let c = leader_color();
+            draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 3.0, 1.0, Color::new(c.r, c.g, c.b, 0.45));
+        }
         let flip = e.kind[i] != EnemyKind::Wisp && pos.x > p.x;
         let out_of_reach = !world.in_reach(pos, e.radius[i]);
         if e.kind[i] == EnemyKind::GreatOni {
@@ -1141,6 +1415,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             };
             let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+            draw_outline_now(&a.oni_outline, (pos.x - 32.0).round(), (pos.y - 52.0).round(), vec2(64.0, 64.0), flip, e.kind[i].rarity());
+            cues.push((pos.x, (pos.y - 52.0).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
                 &a.oni,
                 (pos.x - 32.0).round(),
@@ -1157,6 +1433,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let tint = if out_of_reach { dimmed(tint) } else { tint };
             draw_circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
             draw_ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
+            draw_outline_now(&a.night_lord_outline, (pos.x - 48.0).round(), (pos.y - 84.0 + bob).round(), vec2(96.0, 96.0), false, e.kind[i].rarity());
+            cues.push((pos.x, (pos.y - 84.0 + bob).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
                 &a.night_lord,
                 (pos.x - 48.0).round(),
@@ -1168,7 +1446,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
         let kind = e.kind[i];
         if let Some(t) = &a.world_enemies[kind.index()] {
-            draw_world_enemy(world, i, t, tint, flip, fx.accent, time, &mut sprites, &mut shadows, &a.shadow);
+            draw_world_enemy(world, i, t, a.enemy_outlines[kind.index()].as_ref(), tint, flip, fx.accent, time, &mut sprites, &mut shadows, &mut outlines, &mut cues, &a.shadow);
             continue;
         }
         let (tex, half, bottom) = match e.kind[i] {
@@ -1182,17 +1460,37 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         if e.kind[i] == EnemyKind::Chochin {
             draw_circle(pos.x, pos.y - 4.0, 11.0, Color::new(1.0, 0.6, 0.25, 0.14));
         } else if e.kind[i] == EnemyKind::Nopperabo && e.ai_state[i] != 0 {
-            // Fading out before a blink (state 1), fading back in after it (state 2).
-            let t = if e.ai_state[i] == 1 { e.ai_timer[i] / 0.5 } else { 1.0 - e.ai_timer[i] / sim::content::NOPPERABO_FADE_IN };
-            tint.a = t.clamp(0.1, 1.0) * 0.85;
+            tint.a = blink_alpha(e, i);
         }
         if out_of_reach {
             tint = dimmed(tint);
         }
-        sprites.push(tex, (pos.x - half).round(), (pos.y - bottom).round(), tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
+        let (x, y) = ((pos.x - half).round(), (pos.y - bottom).round());
+        let rarity = e.kind[i].rarity();
+        if let (EnemyKind::Oni, Some(c)) = (e.kind[i], outline_tint(rarity, tint.a)) {
+            for (dx, dy) in OUTLINE_OFFSETS {
+                outlines.push(&a.oni_outline, x + dx, y + dy, c, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
+            }
+            cues.push((pos.x, y, rarity, tint.a));
+        }
+        sprites.push(tex, x, y, tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
     }
     shadows.flush();
+    outlines.flush();
     sprites.flush();
+    for (x, top, rarity, alpha) in cues {
+        draw_rarity_cue(x, top, rarity, alpha);
+    }
+    for i in 0..e.len() {
+        if let Some(k) = e.carry[i] {
+            let pos = e.pos[i];
+            if near(&view, pos.x, pos.y, 48.0) {
+                let bob = (time as f32 * 6.0 + i as f32).sin() * 2.0;
+                let tint = Color::new(1.0, 1.0, 1.0, blink_alpha(e, i));
+                draw_texture_ex(a.pickup(k), (pos.x - 6.0).round(), (pos.y - 40.0 + bob).round(), tint, DrawTextureParams { dest_size: Some(vec2(12.0, 12.0)), ..Default::default() });
+            }
+        }
+    }
 
     // Player: walk cycle while moving, blink during i-frames.
     let pl = &world.player;
@@ -1581,15 +1879,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     }
     sprites.flush();
-    for (c, r, age) in &fx.smokes {
-        let k = age / 0.5;
-        for i in 0..7 {
-            let a = i as f32 * 0.9 + c.x * 0.05;
-            let d = r * 0.5 * k.sqrt();
-            let pr = r * (0.35 + 0.35 * k) * (0.8 + 0.2 * ((i * 37 % 10) as f32 / 10.0));
-            draw_circle(c.x + a.cos() * d, c.y - 6.0 + a.sin() * d * 0.7 - k * 6.0, pr, Color::new(0.85, 0.88, 0.95, 0.45 * (1.0 - k)));
-        }
-    }
+    draw_smokes(&fx.smokes);
     for t in &world.tethers {
         if let Some(j) = world.enemies.id.iter().position(|id| *id == t.enemy) {
             let e = world.enemies.pos[j];
@@ -1658,94 +1948,15 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0 * k, Color::new(1.0, 0.75, 0.75, k));
     }
     draw_blasts(world, time as f32);
-    for (c, r, age, style) in &fx.bursts {
-        let k = age / burst_life(*style);
-        let rr = r * (0.3 + 0.7 * k.sqrt());
-        let fade = 1.0 - k;
-        let (fill, edge, width) = match *style {
-            1 => (Color::new(1.0, 0.7, 0.2, 0.35 * fade), Color::new(1.0, 0.9, 0.5, 0.9 * fade), 5.0),
-            style::SEAL => (Color::new(1.0, 0.85, 0.3, 0.3 * fade), Color::new(1.0, 0.95, 0.6, fade), 2.0),
-            style::METEOR => (Color::new(1.0, 0.45, 0.1, 0.5 * fade), Color::new(1.0, 0.85, 0.4, fade), 7.0),
-            style::FOX => (Color::new(1.0, 0.55, 0.15, 0.35 * fade), Color::new(1.0, 0.85, 0.4, fade), 2.5),
-            style::SKYBOLT => (Color::new(0.7, 0.85, 1.0, 0.4 * fade), Color::new(1.0, 1.0, 1.0, fade), 3.0),
-            style::COMET => (Color::new(0.3, 0.6, 1.0, 0.45 * fade), Color::new(0.85, 0.95, 1.0, fade), 4.0),
-            style::QUAKE => (Color::new(1.0, 0.6, 0.2, 0.25 * fade), Color::new(1.0, 0.85, 0.4, fade), 6.0),
-            style::SPINE => (Color::new(0.4, 0.02, 0.06, 0.35 * fade), Color::new(0.9, 0.2, 0.25, fade), 2.0),
-            16 => (Color::new(0.2, 0.35, 0.9, 0.35 * fade), Color::new(0.75, 0.88, 1.0, fade), 3.0),
-            21 => (Color::new(1.0, 0.6, 0.75, 0.3 * fade), Color::new(1.0, 0.9, 0.95, fade), 2.0),
-            style::YINYANG => (Color::new(1.0, 1.0, 1.0, 0.3 * fade), Color::new(1.0, 0.4, 0.45, fade), 4.0),
-            style::PURIFY => (Color::new(1.0, 0.92, 0.65, 0.4 * fade), Color::new(1.0, 0.35, 0.4, fade), 9.0),
-            17 => (Color::new(0.45, 0.8, 1.0, 0.3 * fade), Color::new(0.9, 0.97, 1.0, fade), 2.5),
-            18 => (Color::new(0.55, 0.25, 1.0, 0.4 * fade), Color::new(0.9, 0.75, 1.0, fade), 7.0),
-            style::VENOM => (Color::new(0.3, 0.75, 0.2, 0.35 * fade), Color::new(0.6, 1.0, 0.4, fade), 2.0),
-            style::FRENZY => (Color::new(0.5, 0.0, 0.08, 0.4 * fade), Color::new(1.0, 0.25, 0.3, fade), 6.0),
-            2 => (Color::new(0.6, 0.0, 0.1, 0.4 * fade), Color::new(1.0, 0.3, 0.3, 0.9 * fade), 3.0),
-            3 => (Color::new(0.25, 0.0, 0.05, 0.55 * fade), Color::new(1.0, 0.15, 0.2, fade), 8.0),
-            _ => (Color::new(0.3, 0.65, 1.0, 0.35 * fade), Color::new(0.8, 0.95, 1.0, 0.9 * fade), 2.0),
-        };
-        draw_circle(c.x, c.y, rr, fill);
-        match *style {
-            style::SEAL => {
-                // A spinning seal glyph: square inside the ring.
-                let a = k * 3.0;
-                let q = rr * 0.6;
-                for i in 0..4 {
-                    let (a0, a1) = (a + i as f32 * std::f32::consts::FRAC_PI_2, a + (i + 1) as f32 * std::f32::consts::FRAC_PI_2);
-                    draw_line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, Color::new(1.0, 0.3, 0.25, fade));
-                }
-            }
-            style::METEOR => {
-                draw_circle(c.x, c.y, rr * 0.55, Color::new(1.0, 0.95, 0.7, 0.7 * fade));
-                for i in 0..12 {
-                    let a = i as f32 * 0.52 + c.x;
-                    let d = rr * (0.4 + 0.8 * k);
-                    draw_rectangle(c.x + a.cos() * d, c.y + a.sin() * d * 0.7, 3.0, 3.0, Color::new(0.4, 0.2, 0.1, fade));
-                }
-            }
-            style::SKYBOLT => {
-                // The bolt column from the top of the sky.
-                let mut prev = vec2(c.x, c.y - 300.0);
-                for s in 1..=8 {
-                    let y = c.y - 300.0 + 300.0 * s as f32 / 8.0;
-                    let x = if s < 8 { c.x + ((s as f32 * 5.3 + c.y).sin()) * 10.0 } else { c.x };
-                    draw_line(prev.x, prev.y, x, y, 6.0 * fade, Color::new(0.6, 0.8, 1.0, 0.7 * fade));
-                    draw_line(prev.x, prev.y, x, y, 2.5 * fade, Color::new(1.0, 1.0, 1.0, fade));
-                    prev = vec2(x, y);
-                }
-            }
-            style::QUAKE => {
-                draw_circle_lines(c.x, c.y, rr * 0.6, 3.0, Color::new(1.0, 0.4, 0.3, 0.8 * fade));
-            }
-            style::SPINE => draw_spine_burst(vec2(c.x, c.y), *r, k),
-            style::FRENZY => {
-                // Thousand-Leg Burst: a crown of spikes radiating out.
-                for i in 0..28 {
-                    let a = i as f32 / 28.0 * std::f32::consts::TAU;
-                    let r0 = rr * 0.35;
-                    let r1 = rr * (0.85 + 0.15 * ((i * 7 % 5) as f32 / 5.0));
-                    let base = vec2(c.x, c.y);
-                    let l = base + vec2((a - 0.05).cos(), (a - 0.05).sin()) * r0;
-                    let rgt = base + vec2((a + 0.05).cos(), (a + 0.05).sin()) * r0;
-                    let tip = base + vec2(a.cos(), a.sin()) * r1;
-                    draw_triangle(l, rgt, tip, Color::new(0.75, 0.08, 0.15, fade));
-                }
-            }
-            _ => {}
-        }
-        if *style == style::PURIFY {
-            draw_circle_lines(c.x, c.y, rr * 0.8, 5.0, Color::new(1.0, 0.95, 0.75, fade));
-            draw_circle_lines(c.x, c.y, rr * 0.55, 3.0, Color::new(1.0, 0.5, 0.6, fade));
-        }
-        if *style == 3 {
-            draw_circle(c.x, c.y, rr * 0.6, Color::new(0.05, 0.0, 0.02, 0.5 * fade));
-            draw_circle_lines(c.x, c.y, rr * 0.8, 4.0, Color::new(0.9, 0.05, 0.1, 0.7 * fade));
-        }
-        draw_circle_lines(c.x, c.y, rr, width, edge);
-    }
+    draw_bursts(&fx.bursts);
+    draw_hazards(world, time as f32, true);
+    draw_art(world, time as f32);
+    draw_bursts(&fx.free_bursts);
+    draw_smokes(&fx.free_smokes);
 
     // Enemy fireballs: drawn above everything so they always read as danger.
-    draw_hazards(world, time as f32);
-    draw_art(world, time as f32);
+    draw_hazards(world, time as f32, false);
+    draw_mask(world, time as f32);
     for s in &world.shots {
         let r = sim::content::SHOT_RADIUS;
         let flick = 0.8 + 0.2 * (time as f32 * 20.0 + s.pos.x).sin();
@@ -1884,8 +2095,19 @@ fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
     }
 }
 
+/// Seconds a scattering crew flickers after its Leader falls.
+const SCATTER_CUE: f32 = 0.5;
+
+/// Client-only burst style: a Leader's banner collapsing.
+const LEADER_FELL: u8 = 22;
+
+fn leader_color() -> Color {
+    crate::ui::enemy_rarity_color(EnemyRarity::Leader).unwrap_or(WHITE)
+}
+
 fn burst_life(st: u8) -> f32 {
     match st {
+        LEADER_FELL => 0.7,
         style::SPINE => 0.45,
         16 => 0.45,
         21 => 0.3,
@@ -2017,6 +2239,16 @@ fn draw_blasts(world: &World, t: f32) {
             }
             style::SKYBOLT => {
                 draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k), 1.5, Color::new(0.8, 0.9, 1.0, 0.8));
+            }
+            style::SEAL => {
+                let gold = Color::new(1.0, 0.85, 0.3, 0.5 + 0.5 * k);
+                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.6 * k), 1.5, Color::new(1.0, 0.4, 0.3, 0.3 + 0.5 * k));
+                let (spin, q) = (t * 3.0, 9.0);
+                for i in 0..4 {
+                    let (a0, a1) = (spin + i as f32 * std::f32::consts::FRAC_PI_2, spin + (i + 1) as f32 * std::f32::consts::FRAC_PI_2);
+                    draw_line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, gold);
+                }
+                draw_circle(c.x, c.y, 2.0, gold);
             }
             style::YINYANG => {
                 draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k) + 4.0, 2.0, Color::new(1.0, 0.5, 0.6, 0.4 + 0.5 * k));
@@ -2303,7 +2535,7 @@ fn draw_domain(world: &World, t: f32) {
     let p = world.player.pos;
     let left = world.player.form;
     let open = ((sim::content::DOMAIN_DURATION - left) / 0.6).min(1.0);
-    let r = sim::content::DOMAIN_RADIUS * open;
+    let r = world.domain_radius() * open;
     // Darken everything (a very large rect around the player).
     draw_rectangle(p.x - 2000.0, p.y - 2000.0, 4000.0, 4000.0, Color::new(0.0, 0.0, 0.04, 0.45 * open));
     draw_circle(c.x, c.y, r, Color::new(0.02, 0.03, 0.12, 0.65));
@@ -2414,9 +2646,33 @@ fn draw_divine(world: &World, t: f32) {
     // Final Purification charging: the circle swells and brightens.
     if left <= sim::content::DIVINE_FINALE_CHARGE {
         let k = 1.0 - left / sim::content::DIVINE_FINALE_CHARGE;
-        let fr = sim::content::DIVINE_FINALE_RADIUS * (0.2 + 0.8 * k);
+        let fr = world.reach_cap(sim::content::DIVINE_FINALE_RADIUS) * (0.2 + 0.8 * k);
         draw_circle(c.x, c.y, fr, Color::new(1.0, 0.85, 0.6, 0.08 + 0.12 * k));
         draw_circle_lines(c.x, c.y, fr, 3.0, Color::new(1.0, 0.45, 0.5, 0.5 + 0.5 * k));
     }
     let _ = world;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boss_banner_survives_a_leader_in_the_same_batch() {
+        let mut fx = Fx::new();
+        fx.absorb(&[Event::BossSpawned(EnemyKind::GreatOni), Event::LeaderSpawned { kind: EnemyKind::Oni }], sim::Vec2::ZERO, 192.0);
+        assert!(fx.banner.as_ref().is_some_and(|(t, _)| t.contains("APPROACHES")), "{:?}", fx.banner);
+    }
+
+    #[test]
+    fn every_enemy_has_its_own_sprite() {
+        use EnemyKind::*;
+        // GreatOni is the oni texture drawn at double size with a tint, so it has no art path either.
+        let own_texture = [Wisp, Kasa, Chochin, Nopperabo, NightLord, Oni, GreatOni];
+        for k in sim::content::ALL_ENEMIES {
+            if !own_texture.contains(&k) {
+                assert!(world_enemy_src(k).is_some(), "{k:?} falls back to the oni sprite");
+            }
+        }
+    }
 }

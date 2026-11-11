@@ -439,6 +439,7 @@ async fn main() {
                 }
                 Shrine => world.shrine = Some(world.player.pos + sim::Vec2::new(0.0, 40.0)),
                 ClearEnemies => world.debug_clear_enemies(),
+                Newcomers => world.debug_spawn_newcomers(),
                 _ => {}
             }
             audio.play(synth::Sfx::Buy);
@@ -483,7 +484,7 @@ async fn main() {
                 let t_s = get_time();
                 world.step(input);
                 perf_parts[0] += (get_time() - t_s) * 1000.0;
-                fx.absorb(&world.events, world.player.pos);
+                fx.absorb(&world.events, world.player.pos, world.reach_half().x);
                 audio.absorb(&world.events);
                 // Delivered exactly once, even if the sim steps several times this frame.
                 input.special = false;
@@ -735,6 +736,11 @@ fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
         }
         Sen => profile.sen += 10_000,
         Dust => profile.dust += 5_000,
+        MeetAll => {
+            for k in &mut profile.enemy_kills {
+                *k = (*k).max(1);
+            }
+        }
         _ => {}
     }
 }

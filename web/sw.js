@@ -1,5 +1,5 @@
-// Offline play: cache the whole game on install; online, always fetch the latest and refresh
-// the cache, offline, serve from it.
+// Offline play: cache the whole game on install. Pages and code come from the network when it
+// answers (see networkFirst); everything else is served from the cache.
 // scripts/build-web.sh fills in __BUILD__ (a hash of dist/) and __FILES__ (every file in dist/),
 // so each deploy gets a fresh cache and the old one is dropped.
 var CACHE = "kizuna-__BUILD__";
@@ -15,18 +15,41 @@ self.addEventListener("activate", function (e) {
   }).then(function () { return self.clients.claim(); }));
 });
 
+// A stale cached build must not run once and resave the profile, so the page and the game's code
+// try the network first and only fall back to the cache offline.
+function networkFirst(path, mode) {
+  return mode === "navigate" || /\.(wasm|js)$/.test(path);
+}
+
+// A stalled connection never rejects, so give up on it after a few seconds and try the cache.
+var NETWORK_TIMEOUT_MS = 4000;
+
+function timeout(p, ms) {
+  return new Promise(function (resolve, reject) {
+    var t = setTimeout(reject, ms);
+    p.then(function (v) { clearTimeout(t); resolve(v); }, function (err) { clearTimeout(t); reject(err); });
+  });
+}
+
 self.addEventListener("fetch", function (e) {
+  // Supabase and other hosts go straight to the network.
   if (e.request.method !== "GET" || new URL(e.request.url).origin !== location.origin) return;
   // Pages open the game, except the sign-in return page, which must load as itself.
   var key = e.request.mode === "navigate" && e.request.url.indexOf("auth-callback") < 0 ? "./" : e.request;
-  // Network first, so a new deploy is used on the next load (the browser's HTTP cache keeps
-  // unchanged files cheap); the cache is only the offline fallback.
-  e.respondWith(fetch(e.request).then(function (r) {
-    if (r.ok) { var copy = r.clone(); caches.open(CACHE).then(function (c) { c.put(key, copy); }); }
-    return r;
-  }).catch(function () {
-    return caches.open(CACHE).then(function (c) { return c.match(key, { ignoreSearch: true }); }).then(function (hit) {
-      return hit || Response.error();
+  var fromCache = function (c) { return c.match(key, { ignoreSearch: true }); };
+  if (networkFirst(new URL(e.request.url).pathname, e.request.mode)) {
+    var net = fetch(e.request).then(function (res) {
+      if (!res.ok) return res;
+      var copy = res.clone();
+      caches.open(CACHE).then(function (c) { return c.put(key, copy); });
+      return res;
     });
+    e.respondWith(timeout(net, NETWORK_TIMEOUT_MS).catch(function () {
+      return caches.open(CACHE).then(fromCache).then(function (hit) { return hit || net; });
+    }));
+    return;
+  }
+  e.respondWith(caches.open(CACHE).then(function (c) {
+    return fromCache(c).then(function (hit) { return hit || fetch(e.request); });
   }));
 });

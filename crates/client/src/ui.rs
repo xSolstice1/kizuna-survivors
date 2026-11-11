@@ -39,6 +39,11 @@ pub fn element_color(e: Element) -> Color {
 
 const MIN_ELEMENT_SIZE: f32 = 14.0;
 
+/// Rarity and element labels grow to 16 on a phone's short screen, where 14 reads as ~7 CSS px.
+fn readable(size: f32) -> f32 {
+    if macroquad::window::screen_height() < 560.0 { size.max(16.0) } else { size }
+}
+
 fn matchups(e: Element) -> (Option<Element>, Option<Element>) {
     let strong = match e {
         Element::Light => Some(Element::Darkness),
@@ -54,13 +59,13 @@ pub fn element_pip(e: Element, x: f32, y: f32, r: f32) {
 }
 
 pub fn element_tag_width(e: Element, size: f32) -> f32 {
-    let size = size.max(MIN_ELEMENT_SIZE);
+    let size = readable(size.max(MIN_ELEMENT_SIZE));
     size * 0.6 + 6.0 + kit::measure(e.name(), size as u16).width
 }
 
 /// Pip then name in the element colour; `y` is the text baseline. Returns the width drawn.
 pub fn element_tag(e: Element, x: f32, y: f32, size: f32) -> f32 {
-    let size = size.max(MIN_ELEMENT_SIZE);
+    let size = readable(size.max(MIN_ELEMENT_SIZE));
     element_tag_at(e, x, y, size);
     element_tag_width(e, size)
 }
@@ -81,6 +86,7 @@ pub fn affinity_bonus_text() -> String {
 
 /// "Strong vs ◆Earth · Weak vs ◆Ice", each name behind its pip. Returns the width drawn.
 fn matchup_line(e: Element, x: f32, y: f32, size: f32) -> f32 {
+    let size = readable(size);
     let (strong, weak) = matchups(e);
     let mut cx = x;
     let mut part = |label: &str, el: Element| {
@@ -349,11 +355,18 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
         };
         kit::panel_ex(bx - 10.0, 90.0 + by, bw + 20.0, BOSS_PANEL_BOTTOM - 90.0 - by, Color::new(0.12, 0.03, 0.06, 0.92), Color::new(1.0, 0.35, 0.35, 0.5));
         let name_c = Color::new(1.0, 0.75, 0.75, 1.0);
-        let tag_w = element_tag_width(kind.element(), 14.0) + 10.0;
-        let name_w = kit::measure(&name, 14).width.min(bw - tag_w);
-        let nx = w / 2.0 - (name_w + tag_w) / 2.0;
-        kit::text_fit(&name, nx, 106.0 + by, name_w, 14.0, name_c);
-        element_tag(kind.element(), nx + name_w + 10.0, 106.0 + by, 14.0);
+        let r = kind.rarity();
+        let prefix = enemy_rarity_color(r).map(|c| (format!("{}  ·  ", r.name().to_uppercase()), c));
+        let fs = readable(14.0);
+        let prefix_w = prefix.as_ref().map_or(0.0, |(p, _)| kit::measure(p, fs as u16).width);
+        let tag_w = element_tag_width(kind.element(), fs) + 10.0;
+        let name_w = kit::measure(&name, fs as u16).width.min(bw - tag_w - prefix_w);
+        let nx = w / 2.0 - (prefix_w + name_w + tag_w) / 2.0;
+        if let Some((p, c)) = &prefix {
+            kit::text(p, nx, 106.0 + by, fs, *c);
+        }
+        kit::text_fit(&name, nx + prefix_w, 106.0 + by, name_w, fs, name_c);
+        element_tag(kind.element(), nx + prefix_w + name_w + 10.0, 106.0 + by, fs);
         // Phase pips for bosses that fight in phases.
         let phases = sim::content::boss_phases(kind, world.cfg.difficulty.extra_phases());
         if kind != EnemyKind::NightLord && kind != EnemyKind::GreatOni && phases > 1 {
@@ -494,7 +507,9 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
     let hint = if touch { "choose one" } else { "Arrows choose  ·  Enter take" };
     centered(&format!("Level {}  ·  {hint}", world.player.level), h * 0.13 + 66.0, 15.0, DIM);
 
-    let (cw, ch, gap) = (290.0, 250.0, 26.0);
+    let (ch, gap) = (250.0, 26.0);
+    // Phone labels are bigger, so the cards widen to keep the matchup line on one row.
+    let cw = if readable(14.0) > 14.0 { ((w - 2.0 * kit::MARGIN - 2.0 * gap) / 3.0).min(340.0) } else { 290.0 };
     let total = offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap;
     let x0 = (w - total) / 2.0;
     let y0 = h * 0.30;
@@ -539,9 +554,10 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
         let max = u.max_level();
         kit::icon_slot(x + 16.0, y + 24.0, 60.0, Some(assets.icon(u)), lvl.saturating_sub(1), if sim::content::MAXED_FALLBACKS.contains(&u) { 0 } else { max }, false);
         kit::text_fit(u.name(), x + 90.0, y + 50.0, cw - 140.0, 22.0, INK);
-        let tw = (kit::measure(&tag, 13).width + 16.0).min(cw - 104.0);
+        let ps = readable(13.0);
+        let tw = (kit::measure(&tag, ps as u16).width + 16.0).min(cw - 104.0);
         kit::rounded(x + 90.0, y + 60.0, tw, 20.0, 10.0, Color::new(frame.r, frame.g, frame.b, 0.22));
-        kit::text_fit(&tag, x + 98.0, y + 75.0, tw - 16.0, 13.0, frame);
+        kit::text_fit(&tag, x + 98.0, y + 75.0, tw - 16.0, ps, frame);
         let mut ly = y + 116.0;
         if let Upgrade::Weapon(k) = u {
             let e = k.element();
@@ -705,15 +721,30 @@ pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize) -> Opti
     picked
 }
 
+/// Outline and label colour of an enemy rarity, shared with the gear tiers; Common has none.
+pub fn enemy_rarity_color(r: sim::enemies::EnemyRarity) -> Option<Color> {
+    use sim::enemies::EnemyRarity::*;
+    use sim::gear::Rarity;
+    let tier = match r {
+        Common => return None,
+        Uncommon => Rarity::Uncommon,
+        Elite => Rarity::Rare,
+        Leader => Rarity::Epic,
+        SubBoss => Rarity::Legendary,
+        Boss => Rarity::Mythic,
+    };
+    Some(crate::armory::rarity_color(tier))
+}
+
 /// `below_boss_bar` drops the banner under the boss panel so both stay readable.
 pub fn banner(text: &str, left: f32, below_boss_bar: bool) {
     let a = (left / 0.5).min(1.0);
     let (w, h) = (screen_width(), screen_height());
-    let d = kit::measure(text, 30);
-    let bw = d.width + 80.0;
+    let text_w = kit::measure(text, 30).width.min(w - 2.0 * kit::MARGIN - 80.0);
+    let bw = text_w + 80.0;
     let y = if below_boss_bar { BOSS_PANEL_BOTTOM + 6.0 + 36.0 } else { h * 0.22 };
     kit::panel_ex((w - bw) / 2.0, y - 36.0, bw, 52.0, Color::new(0.10, 0.05, 0.08, 0.85 * a), Color::new(1.0, 0.82, 0.42, 0.6 * a));
-    centered(text, y, 30.0, Color::new(1.0, 0.86, 0.5, a));
+    kit::text_fit_centered(text, w / 2.0, y, text_w, 30.0, Color::new(1.0, 0.86, 0.5, a));
 }
 
 // ───────────────────────── Title / loading ─────────────────────────
@@ -850,10 +881,16 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev
     let st = world.stage();
     let at = |s: f32| tx + tw2 * (s / st.limit).min(1.0);
     kit::bar(tx, ty, tw2, 10.0, world.time / st.limit, Color::new(0.55, 0.45, 0.95, 1.0), Color::new(1.0, 1.0, 1.0, 0.08));
-    let mark = |x: f32, label: &str, c: Color, up: bool| {
+    let mut low_end = f32::MIN;
+    let mut mark = |x: f32, label: &str, c: Color, up: bool| {
         draw_line(x, ty - 4.0, x, ty + 14.0, 2.0, c);
         let d = kit::measure(label, 12);
-        kit::text(label, x - d.width / 2.0, if up { ty - 8.0 } else { ty + 30.0 }, 12.0, c);
+        let left = x - d.width / 2.0;
+        let down = !up && left >= low_end + 4.0;
+        if down {
+            low_end = left + d.width;
+        }
+        kit::text(label, left, if down { ty + 30.0 } else { ty - 8.0 }, 12.0, c);
     };
     for &r in st.shrine_rounds {
         mark(at(st.round_start(r)), "shrine", Color::new(1.0, 0.85, 0.5, 0.6), true);
@@ -1243,6 +1280,22 @@ mod tests {
             for (name, c) in &others {
                 let d = distance(element_color(e), *c);
                 assert!(d >= 0.12, "{} vs {name}: {d:.3}", e.name());
+            }
+        }
+    }
+
+    #[test]
+    fn enemy_rarity_colors_match_gear_tiers() {
+        use sim::enemies::EnemyRarity::*;
+        use sim::gear::Rarity;
+        assert!(enemy_rarity_color(Common).is_none());
+        let tiers = [(Uncommon, Rarity::Uncommon), (Elite, Rarity::Rare), (Leader, Rarity::Epic), (SubBoss, Rarity::Legendary), (Boss, Rarity::Mythic)];
+        for (i, (r, g)) in tiers.iter().enumerate() {
+            let c = enemy_rarity_color(*r).expect("coloured");
+            assert_eq!(c, crate::armory::rarity_color(*g), "{r:?}");
+            for (o, _) in &tiers[i + 1..] {
+                let d = distance(c, enemy_rarity_color(*o).unwrap());
+                assert!(d >= 0.12, "{r:?} vs {o:?}: {d:.3}");
             }
         }
     }
