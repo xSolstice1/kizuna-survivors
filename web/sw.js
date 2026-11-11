@@ -14,10 +14,39 @@ self.addEventListener("activate", function (e) {
   }).then(function () { return self.clients.claim(); }));
 });
 
+// A stale cached build must not run once and resave the profile, so the page and the game's code
+// try the network first and only fall back to the cache offline.
+function networkFirst(path, mode) {
+  return mode === "navigate" || /\.(wasm|js)$/.test(path);
+}
+
+// A stalled connection never rejects, so give up on it after a few seconds and try the cache.
+var NETWORK_TIMEOUT_MS = 4000;
+
+function timeout(p, ms) {
+  return new Promise(function (resolve, reject) {
+    var t = setTimeout(reject, ms);
+    p.then(function (v) { clearTimeout(t); resolve(v); }, function (err) { clearTimeout(t); reject(err); });
+  });
+}
+
 self.addEventListener("fetch", function (e) {
   if (e.request.method !== "GET") return;
   var key = e.request.mode === "navigate" ? "./" : e.request;
+  var fromCache = function (c) { return c.match(key, { ignoreSearch: true }); };
+  if (networkFirst(new URL(e.request.url).pathname, e.request.mode)) {
+    var net = fetch(e.request).then(function (res) {
+      if (!res.ok) return res;
+      var copy = res.clone();
+      caches.open(CACHE).then(function (c) { return c.put(key, copy); });
+      return res;
+    });
+    e.respondWith(timeout(net, NETWORK_TIMEOUT_MS).catch(function () {
+      return caches.open(CACHE).then(fromCache).then(function (hit) { return hit || net; });
+    }));
+    return;
+  }
   e.respondWith(caches.open(CACHE).then(function (c) {
-    return c.match(key, { ignoreSearch: true }).then(function (hit) { return hit || fetch(e.request); });
+    return fromCache(c).then(function (hit) { return hit || fetch(e.request); });
   }));
 });

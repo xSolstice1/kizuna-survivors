@@ -32,6 +32,7 @@ pub enum DevAction {
     GrantSet,
     Sen,
     Dust,
+    MeetAll,
     // In a run.
     SkipMini,
     SkipBoss,
@@ -45,6 +46,7 @@ pub enum DevAction {
     Pickup,
     Shrine,
     ClearEnemies,
+    Newcomers,
     Stress,
     // Both.
     ToggleFps,
@@ -93,6 +95,7 @@ impl DevMenu {
                 ("Drop a pickup", Pickup),
                 ("Shrine underfoot", Shrine),
                 ("Clear all enemies", ClearEnemies),
+                ("Spawn Leader + Uncommons", Newcomers),
                 ("Stress test on/off", Stress),
                 ("Show fps on/off", ToggleFps),
             ]
@@ -106,6 +109,7 @@ impl DevMenu {
                 ("Grant Set pieces (selected world)", GrantSet),
                 ("+10,000 Sen", Sen),
                 ("+5,000 Spirit Dust", Dust),
+                ("Mark every Otherworlder met", MeetAll),
                 ("Show fps on/off", ToggleFps),
             ]
         };

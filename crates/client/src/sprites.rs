@@ -43,6 +43,26 @@ pub fn art(path: &str) -> Texture2D {
     sprite(path).texture()
 }
 
+/// A texture and its outline silhouette, decoded once.
+pub fn art_and_outline(path: &str) -> (Texture2D, Texture2D) {
+    let s = sprite(path);
+    (s.texture(), silhouette(&s))
+}
+
+/// The sprite's shape in flat white: tinted and offset behind it, it draws an outline. Faint
+/// halo pixels in the art are dropped so the outline hugs the figure.
+pub fn silhouette(s: &Sprite) -> Texture2D {
+    const HALO: u8 = 48;
+    let mut rgba = s.rgba.clone();
+    rgba.chunks_exact_mut(4).for_each(|p| {
+        p[..3].fill(255);
+        if p[3] < HALO {
+            p[3] = 0;
+        }
+    });
+    Sprite { w: s.w, h: s.h, rgba, hd: s.hd }.texture()
+}
+
 /// A seamless ground tile by art path.
 pub fn art_tile(path: &str) -> Texture2D {
     sprite(path).tile_texture()

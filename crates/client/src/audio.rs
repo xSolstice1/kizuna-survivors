@@ -183,7 +183,7 @@ impl Audio {
                 Event::PlayerHurt => Sfx::Hurt,
                 Event::LevelUp => Sfx::LevelUp,
                 Event::SpecialUsed { .. } => Sfx::Special,
-                Event::BossSpawned(_) | Event::EliteWave | Event::RoundStarted { headline: Some(_), .. } => Sfx::Gong,
+                Event::BossSpawned(_) | Event::LeaderSpawned { .. } | Event::EliteWave | Event::RoundStarted { headline: Some(_), .. } => Sfx::Gong,
                 Event::BossTelegraph => Sfx::Rumble,
                 Event::Awakened(_) => Sfx::Awaken,
                 Event::Bolt { .. } => Sfx::Zap,
@@ -262,6 +262,9 @@ impl Audio {
                     sim::content::PickupKind::Hourglass => Sfx::Warble,
                     _ => Sfx::LevelUp,
                 },
+                Event::PickupStolen { .. } => Sfx::Card,
+                Event::LeaderFell { .. } => Sfx::ChestBurst,
+                Event::HazardWarn { .. } => Sfx::Click,
                 Event::Devour { .. } => Sfx::Chomp,
                 Event::MukadeAwakened { .. } => Sfx::Roar,
             };

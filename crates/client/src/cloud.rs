@@ -285,7 +285,9 @@ mod tests {
 
     #[test]
     fn cloud_state_round_trips() {
-        let mut p = Profile { sen: 1234, dust: 77, ..Default::default() };
+        let mut p = Profile::default();
+        p.sen = 1234;
+        p.dust = 77;
         let mut rng = Rng::new(3);
         let a = p.add_item(roll_item(&mut rng, Some(Slot::Ring), Rarity::Epic, 12));
         p.add_item(roll_item(&mut rng, None, Rarity::Legendary, 30));
