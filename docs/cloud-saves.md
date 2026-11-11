@@ -18,21 +18,32 @@ game keeps saving to the browser only.
     `sync_state(...)` (one transaction: profile, item upserts and deletions, loadout) and
     `record_run(...)`. They trust the client today; add validation inside them later
     (server-rolled loot, run replay, trades) without changing the client or the data.
-- **Browser** (`web/cloud.js`): sign-in through Supabase Auth's REST API (Google, Discord or an
-  email link), and local-first sync: the game hands over its state on every save, the plugin
+- **Browser** (`web/cloud.js`): sign-in through Supabase Auth's REST API: email + password
+  (sign-up takes a unique username), password reset, Google, Discord or an email link. All
+  forms and messages are drawn in the game; `web/input.js` places real `<input>`s over the
+  game's field boxes so mobile keyboards and password managers work. Sync is local-first: the game hands over its state on every save, the plugin
   sends only the difference (debounced), keeps a queue of runs while offline, and on sign-in
   reconciles: upload a new account, take the cloud copy if only the cloud changed, or ask the
-  player (Settings → Account) when both changed.
+  player (on the sign-in screen) when both changed. Google sign-in opens in a popup window that
+  closes itself; the game tab picks the session up through a `storage` event. Emailed links
+  (confirm, sign-in, password reset) open the game directly, already signed in.
 - **Game** (`crates/client/src/cloud.rs`): converts the save to and from the database shape;
-  Settings → Account shows sign-in buttons, sync status, sign-out and the conflict choice.
+  Settings → Account shows username, email, sign-in method, member-since date, sync status and
+  Sign out; the main menu has an account chip that opens it.
 
 ## Setting it up
 
 1. Create a Supabase project.
-2. Run the migration: Supabase dashboard → SQL Editor → paste the file and run it (or
-   `supabase db push` with the Supabase CLI linked to the project).
+2. Run the migrations in order: Supabase dashboard → SQL Editor → paste each file in
+   `supabase/migrations/` and run it (or `supabase db push` with the Supabase CLI).
+   `…_usernames.sql` adds unique usernames for email + password accounts.
 3. Authentication → URL Configuration: set **Site URL** to `https://kizuna-survivors.vercel.app`
-   and add it (plus `http://localhost:8000` for local testing) to **Redirect URLs**.
+   and add to **Redirect URLs** (path wildcards matter: emailed links open the game itself,
+   and the Google popup returns to `auth-callback.html`, which hands the session to the game
+   tab and closes):
+   - `https://kizuna-survivors.vercel.app/**`
+   - `https://kizuna-survivors-git-*-xsolstice1s-projects.vercel.app/**` (preview deploys)
+   - `http://localhost:8000/**` (local testing)
 4. Authentication → Providers: enable the ones you want.
    - Google: create an OAuth client in Google Cloud Console; authorised redirect URI is
      `https://<project>.supabase.co/auth/v1/callback`.

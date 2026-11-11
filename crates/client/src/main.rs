@@ -17,6 +17,7 @@ mod save;
 mod sprites;
 mod stage;
 mod synth;
+mod textinput;
 mod touch;
 mod ui;
 mod voice;
@@ -47,6 +48,8 @@ fn perf_real() -> bool {
 
 #[derive(PartialEq)]
 enum Screen {
+    /// Sign-in (mandatory when cloud saves are configured).
+    Login,
     Menu,
     /// Map select (world + difficulty), before character select.
     Stages,
@@ -107,7 +110,8 @@ async fn main() {
     let assets = Assets::load();
     let stage_art = stage::StageArt::load();
     let mut fx = Fx::new();
-    let mut screen = Screen::Menu;
+    // Accounts are mandatory where cloud saves are set up (web builds with a Supabase config).
+    let mut screen = if cloud::status() == cloud::Status::Off { Screen::Menu } else { Screen::Login };
     let mut stress: Option<Stress> = None;
     let mut profile = save::load();
     // Hand the cloud plugin our state so it can reconcile with the account (if signed in).
@@ -130,6 +134,7 @@ async fn main() {
     let mut draw_state = armory::DrawState::default();
     let mut dev = devmenu::DevMenu::default();
     let mut stats_scroll = menu::StripScroll::default();
+    let mut login_state = menu::LoginState::default();
     let mut world_rt: Option<RenderTarget> = None;
     let mut dev_pending: Option<devmenu::DevAction> = None;
     // The big map view is open (the run pauses meanwhile).
@@ -234,6 +239,10 @@ async fn main() {
                 audio.play(synth::Sfx::Awaken);
             }
         }
+        // Signed out (or the cloud and this device disagree): back to the login screen.
+        if screen != Screen::Login && !matches!(screen, Screen::Playing | Screen::Paused) && matches!(cloud::status(), cloud::Status::SignedOut | cloud::Status::Conflict) {
+            screen = Screen::Login;
+        }
         let out_of_run = !matches!(screen, Screen::Playing | Screen::Paused);
         if out_of_run && dev.open {
             menu::backdrop(now);
@@ -249,6 +258,11 @@ async fn main() {
 
         // --- Out-of-run screens ---
         match screen {
+            Screen::Login => {
+                if menu::login(&mut login_state, &assets, now) {
+                    screen = Screen::Menu;
+                }
+            }
             Screen::Menu => match menu::main_menu(&profile, &assets, &stage_art, now, dev.unlocked) {
                 Some(menu::MenuAction::Dev) => dev.open = true,
                 Some(menu::MenuAction::Start) => screen = Screen::Stages,

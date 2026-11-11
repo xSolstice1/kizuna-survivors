@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Kizuna Survivors · Signing in</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    @font-face { font-family: KzNunito; src: url(Nunito-Bold.ttf); font-weight: 700; }
+    html, body { margin: 0; height: 100%; background: radial-gradient(circle at 70% 20%, #3a1d46, #120d22 70%); color: #f4f0ff; font-family: KzNunito, system-ui, sans-serif; }
+    .card { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, 88vw); padding: 32px; border-radius: 18px;
+            background: rgba(15, 12, 28, 0.94); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); border: 1px solid rgba(255, 210, 107, 0.25); text-align: center; }
+    h1 { margin: 0 0 4px; font-size: 26px; color: #ff73a6; letter-spacing: 1px; }
+    h2 { margin: 18px 0 8px; font-size: 20px; }
+    p { margin: 0 0 18px; color: #c9c0e6; line-height: 1.45; }
+    a.btn { display: inline-block; padding: 12px 22px; border-radius: 10px; background: #cc3d4c; color: #fff; text-decoration: none; }
+    .err h2 { color: #ff7a7a; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <h1>KIZUNA SURVIVORS</h1>
+    <h2 id="title">Signing you in…</h2>
+    <p id="text"></p>
+  </div>
+  <script>
+    // The Google sign-in popup returns here: hand the session to the game tab (web/cloud.js
+    // listens for it) and close. Opened any other way (e.g. a link from an older email), go
+    // straight into the game, which signs in from the same URL.
+    (function () {
+      if (!window.opener) { location.replace("./" + location.search + location.hash); return; }
+      var q = new URLSearchParams(location.hash.replace(/^#/, "") || location.search.replace(/^\?/, ""));
+      var token = q.get("access_token");
+      try {
+        // Only the game tab that opened this sign-in knows the state (web/cloud.js).
+        var want = localStorage.getItem("kz_cloud_oauth_state");
+        localStorage.removeItem("kz_cloud_oauth_state");
+        if (!want || new URLSearchParams(location.search).get("state") !== want) token = null;
+        if (token) {
+          localStorage.setItem("kz_cloud_recovery", "0");
+          localStorage.setItem("kz_cloud_session", JSON.stringify({
+            access_token: token,
+            refresh_token: q.get("refresh_token"),
+            expires_at: Date.now() / 1000 + Number(q.get("expires_in") || 3600),
+            user: null,
+          }));
+        }
+      } catch (e) {}
+      history.replaceState(null, "", location.pathname);
+      document.getElementById("title").textContent = token ? "You're signed in" : "Couldn't sign you in";
+      document.getElementById("text").textContent = token ? "You can close this window." : "Please close this window and try again from the game.";
+      window.close();
+    })();
+  </script>
+</body>
+</html>

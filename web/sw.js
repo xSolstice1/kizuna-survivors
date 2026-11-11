@@ -1,4 +1,5 @@
-// Offline play: cache the whole game on install, then serve it from the cache.
+// Offline play: cache the whole game on install. Pages and code come from the network when it
+// answers (see networkFirst); everything else is served from the cache.
 // scripts/build-web.sh fills in __BUILD__ (a hash of dist/) and __FILES__ (every file in dist/),
 // so each deploy gets a fresh cache and the old one is dropped.
 var CACHE = "kizuna-__BUILD__";
@@ -31,8 +32,10 @@ function timeout(p, ms) {
 }
 
 self.addEventListener("fetch", function (e) {
-  if (e.request.method !== "GET") return;
-  var key = e.request.mode === "navigate" ? "./" : e.request;
+  // Supabase and other hosts go straight to the network.
+  if (e.request.method !== "GET" || new URL(e.request.url).origin !== location.origin) return;
+  // Pages open the game, except the sign-in return page, which must load as itself.
+  var key = e.request.mode === "navigate" && e.request.url.indexOf("auth-callback") < 0 ? "./" : e.request;
   var fromCache = function (c) { return c.match(key, { ignoreSearch: true }); };
   if (networkFirst(new URL(e.request.url).pathname, e.request.mode)) {
     var net = fetch(e.request).then(function (res) {

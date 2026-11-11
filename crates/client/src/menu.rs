@@ -388,6 +388,24 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
         action = Some(MenuAction::Start);
     }
 
+    // Account chip: who's signed in; opens Settings → Account.
+    let acct = crate::cloud::account();
+    if crate::cloud::status() != crate::cloud::Status::Off && !(acct.username.is_empty() && acct.email.is_empty()) {
+        let name = if acct.username.is_empty() { acct.email.clone() } else { acct.username.clone() };
+        let nw = kit::measure(&name, 15).width.min(260.0);
+        let r = Rect::new(w - kit::MARGIN - nw - 62.0, h - kit::MARGIN - 34.0 - 22.0, nw + 62.0, 34.0);
+        let hover = r.contains(mouse_position().into());
+        kit::rounded(r.x, r.y, r.w, r.h, 17.0, Color::new(0.06, 0.05, 0.11, if hover { 0.95 } else { 0.8 }));
+        kit::rounded_outline(r.x, r.y, r.w, r.h, 17.0, 1.2, if hover { GOLD } else { Color::new(1.0, 1.0, 1.0, 0.18) });
+        draw_circle(r.x + 17.0, r.y + 17.0, 12.0, ACCENT);
+        let initial: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+        kit::text_fit_centered(&initial, r.x + 17.0, r.y + 22.0, 20.0, 14.0, WHITE);
+        kit::text_fit(&name, r.x + 36.0, r.y + 22.0, nw + 4.0, 15.0, kit::INK);
+        draw_triangle(vec2(r.x + r.w - 18.0, r.y + 14.0), vec2(r.x + r.w - 10.0, r.y + 14.0), vec2(r.x + r.w - 14.0, r.y + 20.0), DIM);
+        if hover && is_mouse_button_pressed(MouseButton::Left) {
+            action = Some(MenuAction::Settings);
+        }
+    }
     if dev && kit::button(Rect::new(kit::MARGIN, h - kit::MARGIN - 36.0, 100.0, 36.0), "Dev", true, kit::Style::Danger) {
         action = Some(MenuAction::Dev);
     }
@@ -857,59 +875,416 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
     changed |= slider("Sound effects", h * 0.36 + 70.0, &mut profile.sfx_volume);
     fullscreen_button(Rect::new((screen_width() - 300.0) / 2.0, h * 0.36 + 140.0, 300.0, 46.0));
     centered("All music and sound effects are generated in code.", h * 0.36 + 210.0, 16.0, DIM);
-    account_panel(h * 0.36 + 228.0);
-    if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 352.0, 200.0, 48.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
+    account_panel(h * 0.36 + 222.0);
+    if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 380.0, 200.0, 46.0), "Back", true) || is_key_pressed(KeyCode::Escape) {
         return Some(SettingsAction::Back);
     }
     changed.then_some(SettingsAction::Changed)
 }
 
-/// Cloud saves: sign in, sync status, sign out, and settling a conflict between devices.
+/// Which sign-in form is showing.
+#[derive(Default)]
+pub struct LoginState {
+    /// false = sign in, true = create account.
+    pub create: bool,
+    /// The "Forgot password?" form is open.
+    pub forgot: bool,
+    /// The reset link was sent (the form shows "Check your inbox").
+    pub forgot_sent: bool,
+    /// Where the reset link went.
+    sent_to: String,
+    /// Copies the sign-in box's email into the reset form once it exists.
+    prefill: Option<String>,
+    /// A problem found before asking the server (e.g. passwords that don't match).
+    error: String,
+}
+
+/// A clickable text link; returns true when clicked.
+fn link(label: &str, x: f32, y: f32, size: f32, right_align: bool) -> bool {
+    let d = kit::measure(label, size as u16);
+    let x = if right_align { x - d.width } else { x };
+    let r = Rect::new(x - 2.0, y - size, d.width + 4.0, size + 6.0);
+    let hover = r.contains(mouse_position().into());
+    let c = if hover { GOLD } else { Color::new(1.0, 0.82, 0.55, 0.85) };
+    kit::text(label, x, y, size, c);
+    if hover {
+        draw_line(x, y + 3.0, x + d.width, y + 3.0, 1.0, c);
+    }
+    hover && is_mouse_button_pressed(MouseButton::Left)
+}
+
+/// The four-colour "G" for the Google button.
+fn google_mark(cx: f32, cy: f32, r: f32) {
+    let segs = [(Color::from_rgba(234, 67, 53, 255), 200.0, 110.0), (Color::from_rgba(251, 188, 5, 255), 130.0, 70.0), (Color::from_rgba(52, 168, 83, 255), 60.0, 90.0), (Color::from_rgba(66, 133, 244, 255), -30.0, 90.0)];
+    for (c, start, arc) in segs {
+        draw_arc(cx, cy, 24, r, start, r * 0.42, arc, c);
+    }
+    draw_rectangle(cx, cy - r * 0.21, r * 1.0, r * 0.42, Color::from_rgba(66, 133, 244, 255));
+}
+
+fn google_button(r: Rect, enabled: bool) -> bool {
+    let hover = enabled && r.contains(mouse_position().into());
+    kit::rounded(r.x + 2.0, r.y + 3.0, r.w, r.h, 10.0, Color::new(0.0, 0.0, 0.0, 0.3));
+    kit::rounded(r.x, r.y, r.w, r.h, 10.0, if hover { Color::new(1.0, 1.0, 1.0, 1.0) } else { Color::new(0.95, 0.95, 0.97, 1.0) });
+    let label = "Continue with Google";
+    let d = kit::measure(label, 17);
+    let total = d.width + 30.0;
+    let x0 = r.x + (r.w - total) / 2.0;
+    google_mark(x0 + 9.0, r.y + r.h / 2.0, 9.0);
+    kit::text(label, x0 + 30.0, r.y + r.h / 2.0 + 6.0, 17.0, Color::new(0.17, 0.17, 0.2, if enabled { 1.0 } else { 0.5 }));
+    hover && is_mouse_button_pressed(MouseButton::Left)
+}
+
+/// The sign-in / sign-up screen (accounts are mandatory). Returns true once the player is
+/// signed in and their save is loaded.
+pub fn login(st: &mut LoginState, assets: &Assets, time: f64) -> bool {
+    use crate::cloud::{self, Status};
+    use crate::textinput as ti;
+    let status = cloud::status();
+    let recovery = cloud::recovery();
+    if matches!(status, Status::Off | Status::Synced | Status::Syncing | Status::Error) && !recovery {
+        // Leaving the login screen: hide its text fields; next time it opens on Sign in.
+        st.forgot = false;
+        st.forgot_sent = false;
+        st.error.clear();
+        ti::begin();
+        ti::end();
+        return true;
+    }
+    scenery(time, Color::new(1.0, 0.45, 0.65, 1.0));
+    let (w, h) = (screen_width(), screen_height());
+    let t = time as f32;
+    let (cw, ch) = (900.0f32.min(w - 40.0), 520.0f32.min(h - 40.0));
+    let (cx, cy) = ((w - cw) / 2.0, (h - ch) / 2.0);
+    kit::rounded(cx + 6.0, cy + 10.0, cw, ch, 18.0, Color::new(0.0, 0.0, 0.0, 0.45));
+    kit::rounded(cx, cy, cw, ch, 18.0, Color::new(0.06, 0.05, 0.11, 0.97));
+    let aw = 380.0f32.min(cw * 0.42);
+    login_art(assets, Rect::new(cx + 8.0, cy + 8.0, aw, ch - 16.0), t);
+
+    let fx = cx + 8.0 + aw + 44.0;
+    let y = cy + 56.0;
+    ti::begin();
+    let (msg, kind) = if st.error.is_empty() { cloud::message() } else { (st.error.clone(), 1) };
+    let f = Form { x: fx, w: cx + cw - 44.0 - fx, t, pending: cloud::pending(), msg, kind };
+    match (status, recovery) {
+        (_, true) => new_password_form(st, &f, y),
+        (Status::Connecting, _) => connecting(&f, y),
+        (Status::Conflict, _) => conflict(&f, y),
+        _ if st.forgot => forgot_form(st, &f, y),
+        _ => account_forms(st, &f, y),
+    }
+    ti::end();
+    kit::text_fit_centered("(c) 2026 xSolstice1", w / 2.0, h - 10.0, 300.0, 12.0, Color::new(1.0, 1.0, 1.0, 0.35));
+    false
+}
+
+/// The right-hand column of the login screen and this frame's feedback line.
+struct Form {
+    x: f32,
+    w: f32,
+    t: f32,
+    pending: bool,
+    msg: String,
+    /// 0 info, 1 error, 2 success, 3 "use Google".
+    kind: u32,
+}
+
+impl Form {
+    fn show_msg(&self, y: f32) {
+        if self.msg.is_empty() {
+            return;
+        }
+        let c = match self.kind {
+            1 | 3 => Color::new(1.0, 0.45, 0.45, 1.0),
+            2 => kit::JADE,
+            _ => DIM,
+        };
+        for (k, l) in kit::wrap(&self.msg, self.w, 14).iter().take(2).enumerate() {
+            kit::text(l, self.x, y + k as f32 * 18.0, 14.0, c);
+        }
+    }
+}
+
+/// Left half of the login card: title, moon, drifting petals and the heroes.
+fn login_art(assets: &Assets, r: Rect, t: f32) {
+    let (ax, ay, aw, ah) = (r.x, r.y, r.w, r.h);
+    gradient(ax, ay, aw, ah, Color::new(0.42, 0.14, 0.32, 1.0), Color::new(0.09, 0.06, 0.18, 1.0));
+    draw_circle(ax + aw * 0.72, ay + 92.0, 44.0, Color::new(1.0, 0.95, 0.85, 0.85));
+    draw_circle(ax + aw * 0.72, ay + 92.0, 70.0, Color::new(1.0, 0.92, 0.8, 0.08));
+    for k in 0..18 {
+        let fx = (k as f32 * 0.618).fract();
+        let y = ay + ah - ((t * (14.0 + k as f32) + k as f32 * 53.0) % ah);
+        draw_circle(ax + fx * aw, y, 2.0, Color::new(1.0, 0.7, 0.85, 0.5));
+    }
+    kit::text_shadow("KIZUNA", ax + 30.0, ay + 190.0, 52.0, ACCENT);
+    kit::text_shadow("SURVIVORS", ax + 30.0, ay + 240.0, 52.0, ACCENT);
+    for (k, l) in kit::wrap("Heroes of many stories. Five worlds. One night each.", aw - 60.0, 16).iter().enumerate() {
+        kit::text(l, ax + 32.0, ay + 272.0 + k as f32 * 20.0, 16.0, Color::new(1.0, 0.92, 0.96, 0.85));
+    }
+    draw_rectangle(ax, ay + ah - 70.0, aw, 70.0, Color::new(0.04, 0.03, 0.08, 0.55));
+    let heroes = [sim::content::HeroId::Ren, sim::content::HeroId::Riku, sim::content::HeroId::Shun, sim::content::HeroId::Toya, sim::content::HeroId::Kuon];
+    let step = (aw - 40.0) / heroes.len() as f32;
+    for (k, hid) in heroes.iter().enumerate() {
+        let bob = (t * 2.0 + k as f32).sin() * 2.0;
+        let x = ax + 20.0 + step * (k as f32 + 0.5) - 30.0;
+        draw_texture_ex(&assets.hero(*hid)[0], x, ay + ah - 104.0 + bob, WHITE, DrawTextureParams { dest_size: Some(vec2(60.0, 80.0)), ..Default::default() });
+    }
+}
+
+/// Opened from a password-reset link.
+fn new_password_form(st: &mut LoginState, f: &Form, mut y: f32) {
+    use crate::textinput::{self as ti, Key, Kind};
+    let (fx, fw, pending) = (f.x, f.w, f.pending);
+    kit::text("Choose a new password", fx, y + 6.0, 28.0, kit::INK);
+    kit::text_fit(&format!("For {}", crate::cloud::account().email), fx, y + 38.0, fw, 15.0, DIM);
+    y += 84.0;
+    ti::field(6, Kind::NewPassword, Rect::new(fx, y, fw, 44.0), "New password", "At least 8 characters");
+    y += 44.0 + 30.0;
+    ti::field(8, Kind::NewPassword, Rect::new(fx, y, fw, 44.0), "Confirm new password", "Re-enter your new password");
+    f.show_msg(y + 64.0);
+    y += 44.0 + 48.0;
+    let key = ti::key();
+    if let Key::Tab(6) = key {
+        ti::focus(8);
+    }
+    let go = kit::button(Rect::new(fx, y, fw, 48.0), if pending { "Saving..." } else { "Save password" }, !pending, kit::Style::Primary);
+    if (go || matches!(key, Key::Enter(6) | Key::Enter(8))) && !pending {
+        let (a, b) = (ti::value(6), ti::value(8));
+        st.error.clear();
+        if a.chars().count() < 8 {
+            st.error = "Password must be at least 8 characters.".into();
+        } else if a != b {
+            st.error = "Passwords don't match.".into();
+        } else {
+            crate::cloud::set_password(&a);
+        }
+    }
+}
+
+fn connecting(f: &Form, y: f32) {
+    kit::text("Signing in", f.x, y + 120.0, 30.0, kit::INK);
+    kit::text("Loading your save...", f.x, y + 150.0, 16.0, DIM);
+    for k in 0..8 {
+        let a = f.t * 4.0 + k as f32 * std::f32::consts::TAU / 8.0;
+        let alpha = 0.2 + 0.8 * ((k as f32 / 8.0 + f.t * 0.6).fract());
+        draw_circle(f.x + 24.0 + a.cos() * 16.0, y + 200.0 + a.sin() * 16.0, 3.5, Color::new(1.0, 0.82, 0.42, alpha));
+    }
+}
+
+/// This device and the account both changed since they last agreed.
+fn conflict(f: &Form, y: f32) {
+    let (fx, fw) = (f.x, f.w);
+    kit::text("Choose which progress to keep", fx, y + 40.0, 28.0, GOLD);
+    for (k, l) in kit::wrap("This device and your account each have progress the other doesn't. Pick one to keep; the other will be replaced.", fw, 15).iter().enumerate() {
+        kit::text(l, fx, y + 76.0 + k as f32 * 20.0, 15.0, DIM);
+    }
+    if kit::button(Rect::new(fx, y + 150.0, fw, 46.0), "Use my account's progress", true, kit::Style::Primary) {
+        crate::cloud::resolve(true);
+    }
+    if kit::button(Rect::new(fx, y + 206.0, fw, 46.0), "Use this device's progress", true, kit::Style::Secondary) {
+        crate::cloud::resolve(false);
+    }
+}
+
+/// "Forgot password?": ask for the email, then show "Check your inbox".
+fn forgot_form(st: &mut LoginState, f: &Form, mut y: f32) {
+    use crate::cloud;
+    use crate::textinput::{self as ti, Key, Kind};
+    let (fx, fw, pending) = (f.x, f.w, f.pending);
+    if link("< Back to sign in", fx, y - 14.0, 14.0, false) {
+        st.forgot = false;
+        st.forgot_sent = false;
+        cloud::clear_message();
+    }
+    y += 30.0;
+    if f.kind == 2 && !f.msg.is_empty() {
+        st.forgot_sent = true;
+    }
+    if !st.forgot_sent {
+        kit::text("Reset your password", fx, y + 6.0, 28.0, kit::INK);
+        for (k, l) in kit::wrap("Enter the email address for your account and we'll send you a link to reset your password.", fw, 15).iter().enumerate() {
+            kit::text(l, fx, y + 38.0 + k as f32 * 20.0, 15.0, DIM);
+        }
+        y += 112.0;
+        ti::field(7, Kind::Email, Rect::new(fx, y, fw, 44.0), "Email", "you@example.com");
+        if let Some(v) = st.prefill.take() {
+            ti::set(7, &v);
+            ti::focus(7);
+        }
+        f.show_msg(y + 64.0);
+        y += 44.0 + 48.0;
+        let go = kit::button(Rect::new(fx, y, fw, 48.0), if pending { "Sending..." } else { "Send reset link" }, !pending, kit::Style::Primary);
+        if (go || matches!(ti::key(), Key::Enter(7))) && !pending {
+            st.sent_to = ti::value(7).trim().to_string();
+            cloud::reset_password(&st.sent_to);
+        }
+        return;
+    }
+    // Sent: an envelope, what happens next, and a way to send it again.
+    let (ex, ey) = (fx + 26.0, y + 30.0);
+    kit::rounded(ex - 26.0, ey - 26.0, 52.0, 52.0, 26.0, Color::new(0.2, 0.75, 0.55, 0.18));
+    kit::rounded_outline(ex - 15.0, ey - 10.0, 30.0, 21.0, 3.0, 2.0, kit::JADE);
+    draw_line(ex - 14.0, ey - 9.0, ex, ey + 2.0, 2.0, kit::JADE);
+    draw_line(ex + 14.0, ey - 9.0, ex, ey + 2.0, 2.0, kit::JADE);
+    kit::text("Check your inbox", fx + 68.0, ey + 9.0, 28.0, kit::INK);
+    y += 86.0;
+    let email = st.sent_to.clone();
+    let body = format!(
+        "If an account exists for {}, you'll get an email with a link to reset your password. Didn't get it? Check your spam folder, or resend it below.",
+        email
+    );
+    for (k, l) in kit::wrap(&body, fw, 15).iter().enumerate() {
+        kit::text(l, fx, y + k as f32 * 21.0, 15.0, DIM);
+    }
+    y += 112.0;
+    if kit::button(Rect::new(fx, y, fw, 46.0), if pending { "Sending..." } else { "Resend email" }, !pending, kit::Style::Secondary) {
+        cloud::reset_password(&email);
+    }
+    if kit::button(Rect::new(fx, y + 58.0, fw, 46.0), "Back to sign in", true, kit::Style::Primary) {
+        st.forgot = false;
+        st.forgot_sent = false;
+        cloud::clear_message();
+    }
+}
+
+/// The Sign in / Create account tabs, the active form, then Google and the email link.
+fn account_forms(st: &mut LoginState, f: &Form, mut y: f32) {
+    let (fx, fw) = (f.x, f.w);
+    let tw = fw / 2.0;
+    kit::rounded(fx, y - 30.0, fw, 38.0, 10.0, Color::new(0.03, 0.02, 0.06, 0.9));
+    for (k, label) in ["Sign in", "Create account"].iter().enumerate() {
+        let r = Rect::new(fx + 3.0 + k as f32 * tw, y - 27.0, tw - 6.0, 32.0);
+        let on = st.create == (k == 1);
+        if on {
+            kit::rounded(r.x, r.y, r.w, r.h, 8.0, Color::new(0.2, 0.13, 0.3, 1.0));
+        }
+        kit::text_fit_centered(label, r.x + r.w / 2.0, r.y + 22.0, r.w - 10.0, 15.0, if on { kit::INK } else { DIM });
+        if r.contains(mouse_position().into()) && is_mouse_button_pressed(MouseButton::Left) && !on {
+            st.create = k == 1;
+            st.error.clear();
+            crate::cloud::clear_message();
+        }
+    }
+    y += 40.0;
+    y = if st.create { sign_up_form(f, y) } else { sign_in_form(st, f, y) };
+    other_ways_in(st, f, y);
+}
+
+/// Returns the y below the form.
+fn sign_in_form(st: &mut LoginState, f: &Form, mut y: f32) -> f32 {
+    use crate::textinput::{self as ti, Key, Kind};
+    let (fx, fw, pending, field_h) = (f.x, f.w, f.pending, 44.0);
+    kit::text("Welcome back", fx, y + 6.0, 26.0, kit::INK);
+    y += 48.0;
+    ti::field(1, Kind::Text, Rect::new(fx, y, fw, field_h), "Username or email", "Enter your username or email");
+    y += field_h + 30.0;
+    ti::field(2, Kind::Password, Rect::new(fx, y, fw, field_h), "Password", "Enter your password");
+    if link("Forgot password?", fx + fw, y - 8.0, 13.0, true) {
+        st.forgot = true;
+        st.forgot_sent = false;
+        let v = ti::value(1);
+        st.prefill = Some(if v.contains('@') { v } else { String::new() });
+        st.error.clear();
+        crate::cloud::clear_message();
+    }
+    f.show_msg(y + field_h + 20.0);
+    y += field_h + 44.0;
+    let key = ti::key();
+    if let Key::Tab(1) = key {
+        ti::focus(2);
+    }
+    let go = kit::button(Rect::new(fx, y, fw, 46.0), if pending { "Signing in..." } else { "Sign in" }, !pending, kit::Style::Primary);
+    if (go || matches!(key, Key::Enter(1) | Key::Enter(2))) && !pending {
+        crate::cloud::password_sign_in(&ti::value(1), &ti::value(2));
+    }
+    y + 62.0
+}
+
+/// Returns the y below the form.
+fn sign_up_form(f: &Form, mut y: f32) -> f32 {
+    use crate::textinput::{self as ti, Key, Kind};
+    let (fx, fw, pending, field_h) = (f.x, f.w, f.pending, 44.0);
+    kit::text("Create your account", fx, y + 6.0, 26.0, kit::INK);
+    y += 44.0;
+    ti::field(3, Kind::Text, Rect::new(fx, y, fw, field_h), "Username", "3 to 16 letters, numbers or _");
+    y += field_h + 28.0;
+    ti::field(4, Kind::Email, Rect::new(fx, y, fw, field_h), "Email", "you@example.com");
+    y += field_h + 28.0;
+    ti::field(5, Kind::NewPassword, Rect::new(fx, y, fw, field_h), "Password", "At least 8 characters");
+    f.show_msg(y + field_h + 20.0);
+    y += field_h + 40.0;
+    let key = ti::key();
+    match key {
+        Key::Tab(3) => ti::focus(4),
+        Key::Tab(4) => ti::focus(5),
+        _ => {}
+    }
+    let go = kit::button(Rect::new(fx, y, fw, 46.0), if pending { "Creating..." } else { "Create account" }, !pending, kit::Style::Primary);
+    if (go || matches!(key, Key::Enter(3) | Key::Enter(4) | Key::Enter(5))) && !pending {
+        crate::cloud::sign_up(&ti::value(3), &ti::value(4), &ti::value(5));
+    }
+    y + 60.0
+}
+
+/// The "or" divider, Continue with Google, and (on Sign in) the emailed sign-in link.
+fn other_ways_in(st: &LoginState, f: &Form, mut y: f32) {
+    use crate::cloud;
+    let (fx, fw) = (f.x, f.w);
+    let (g, _, e) = cloud::providers();
+    if g {
+        draw_line(fx, y, fx + fw / 2.0 - 20.0, y, 1.0, Color::new(1.0, 1.0, 1.0, 0.15));
+        draw_line(fx + fw / 2.0 + 20.0, y, fx + fw, y, 1.0, Color::new(1.0, 1.0, 1.0, 0.15));
+        kit::text_fit_centered("or", fx + fw / 2.0, y + 5.0, 30.0, 13.0, kit::FAINT);
+        let gr = Rect::new(fx, y + 16.0, fw, 44.0);
+        if f.kind == 3 {
+            // The message says "use Google": ring the button.
+            let a = 0.55 + 0.45 * (f.t * 4.0).sin();
+            kit::rounded_outline(gr.x - 4.0, gr.y - 4.0, gr.w + 8.0, gr.h + 8.0, 13.0, 2.5, Color::new(1.0, 0.82, 0.42, a));
+        }
+        if google_button(gr, !f.pending) {
+            cloud::sign_in("google");
+        }
+        y += 76.0;
+    }
+    if e && !st.create && link("Email me a sign-in link instead", fx + fw / 2.0 - kit::measure("Email me a sign-in link instead", 13).width / 2.0, y + 4.0, 13.0, false) {
+        cloud::magic_link(&crate::textinput::value(1));
+    }
+}
+
+/// The signed-in player's account: username, email, sign-in method, member since, cloud sync
+/// state, and Sign out.
 fn account_panel(y: f32) {
     use crate::cloud::{self, Status};
     let w = screen_width();
-    let (pw, ph) = (560.0f32.min(w - 40.0), 110.0);
+    let (pw, ph) = (600.0f32.min(w - 40.0), 144.0);
     let px = (w - pw) / 2.0;
     kit::panel(px, y, pw, ph);
     kit::panel_title("ACCOUNT", px + 16.0, y + 28.0, 16.0, GOLD);
-    let user = cloud::user();
-    let line = |t: &str, c: Color| kit::text_fit(t, px + 18.0, y + 54.0, pw - 36.0, 15.0, c);
-    let by = y + 66.0;
-    match cloud::status() {
-        Status::Off => line("Cloud saves aren't set up on this build. Progress is saved in this browser.", DIM),
-        Status::SignedOut => {
-            line("Sign in to keep your progress in the cloud and play on any device.", kit::INK);
-            let (g, d, e) = cloud::providers();
-            let opts: Vec<(&str, &str)> = [("Google", "google", g), ("Discord", "discord", d), ("Email link", "email", e)].into_iter().filter(|o| o.2).map(|o| (o.0, o.1)).collect();
-            let bw = ((pw - 36.0 - 10.0 * (opts.len() as f32 - 1.0)) / opts.len().max(1) as f32).min(170.0);
-            for (i, (label, key)) in opts.iter().enumerate() {
-                if kit::button(Rect::new(px + 18.0 + i as f32 * (bw + 10.0), by, bw, 34.0), label, true, kit::Style::Primary) {
-                    cloud::sign_in(key);
-                }
-            }
-        }
-        Status::Conflict => {
-            line("This device and your cloud save have both changed. Which one do you want to keep?", GOLD);
-            let bw = (pw - 46.0) / 2.0;
-            if kit::button(Rect::new(px + 18.0, by, bw, 34.0), "Keep cloud save", true, kit::Style::Primary) {
-                cloud::resolve(true);
-            }
-            if kit::button(Rect::new(px + 28.0 + bw, by, bw, 34.0), "Keep this device", true, kit::Style::Secondary) {
-                cloud::resolve(false);
-            }
-        }
-        st => {
-            let state = match st {
-                Status::Synced => "saved to the cloud",
-                Status::Syncing | Status::Connecting => "syncing...",
-                _ => "offline, will retry",
-            };
-            let who = if user.is_empty() { "Signed in".to_string() } else { format!("Signed in as {user}") };
-            line(&format!("{who}  ·  {state}"), if st == Status::Error { DIM } else { kit::JADE });
-            if kit::button(Rect::new(px + pw - 138.0, by, 120.0, 34.0), "Sign out", true, kit::Style::Secondary) {
-                cloud::sign_out();
-            }
-        }
+    let st = cloud::status();
+    if st == Status::Off {
+        kit::text_fit("Cloud saves aren't set up on this build. Progress is saved in this browser.", px + 18.0, y + 62.0, pw - 36.0, 15.0, DIM);
+        return;
+    }
+    let a = cloud::account();
+    let (sync, c) = match st {
+        Status::Synced => ("Saved to the cloud", kit::JADE),
+        Status::Syncing | Status::Connecting => ("Syncing...", GOLD),
+        Status::Conflict => ("Waiting for you to pick a save", GOLD),
+        Status::SignedOut => ("Signed out", DIM),
+        _ => ("Offline: will sync when you're back online", DIM),
+    };
+    let dash = |v: &str| if v.is_empty() { "-".to_string() } else { v.to_string() };
+    let rows = [("Username", dash(&a.username)), ("Email", dash(&a.email)), ("Signed in with", dash(&a.method)), ("Member since", dash(&a.since))];
+    let colw = (pw - 190.0) / 2.0;
+    for (i, (label, value)) in rows.iter().enumerate() {
+        let (cx, cy) = (px + 18.0 + (i % 2) as f32 * colw, y + 54.0 + (i / 2) as f32 * 36.0);
+        kit::text(label, cx, cy, 12.0, kit::FAINT);
+        kit::text_fit(value, cx, cy + 17.0, colw - 14.0, 15.0, kit::INK);
+    }
+    draw_circle(px + 22.0, y + ph - 16.0, 4.0, c);
+    kit::text_fit(sync, px + 32.0, y + ph - 11.0, pw - 200.0, 13.0, c);
+    if kit::button(Rect::new(px + pw - 150.0, y + 50.0, 132.0, 38.0), "Sign out", true, kit::Style::Danger) {
+        cloud::sign_out();
     }
 }
 
