@@ -1303,7 +1303,8 @@ impl World {
         }
         let d = enemy_def(kind);
         let hp = if kind.is_boss() {
-            d.hp * BOSS_HP * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
+            let final_share = if kind.rank() == Rank::Final { FINAL_BOSS_HP } else { 1.0 };
+            d.hp * BOSS_HP * final_share * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
         } else {
             d.hp * self.enemy_hp_scale() * self.mods.enemy_hp
         };
@@ -1315,7 +1316,8 @@ impl World {
             Ai::Boss => 2.0,
             _ => 3.0,
         };
-        let speed = d.speed * self.rng.range(0.9, 1.1) * self.mods.enemy_speed;
+        let ramp = if kind.is_boss() { 1.0 } else { speed_scale(self.round_pace()) };
+        let speed = d.speed * ramp * self.rng.range(0.9, 1.1) * self.mods.enemy_speed;
         let e = &mut self.enemies;
         e.id.push(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
@@ -6872,7 +6874,9 @@ mod tests {
         step_to(&mut w, at + 0.1);
         assert_eq!(w.chests.len(), chests + 1);
         assert!(count_of(&w, st.uncommon[0]) + count_of(&w, st.uncommon[1]) >= 20);
-        assert!(count_of(&w, st.fodder_b) <= cranes + 2);
+        // The round's uncommons replace the usual top-up; only the director's normal refill trickle
+        // (a few per tick, more since the density ramp) adds cranes.
+        assert!(count_of(&w, st.fodder_b) <= cranes + 6, "cranes {} -> {}", cranes, count_of(&w, st.fodder_b));
     }
 
     #[test]
@@ -7146,6 +7150,9 @@ mod tests {
         for k in 0..30 {
             let a = k as f32 / 30.0 * std::f32::consts::TAU;
             w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * (60.0 + (k % 3) as f32 * 40.0));
+            // Base HP: this checks the form's attacks, not the run's HP curve.
+            let last = w.enemies.len() - 1;
+            w.enemies.hp[last] = enemy_def(EnemyKind::Oni).hp;
         }
         w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
         w.player.special = 1.0;
@@ -7434,6 +7441,9 @@ mod tests {
         // Domain: enemies inside freeze, take damage, and the finale lance fires.
         for k in 0..20 {
             w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(k as f32) * 90.0);
+            // Base HP: this checks the domain's waves, not the run's HP curve.
+            let last = w.enemies.len() - 1;
+            w.enemies.hp[last] = enemy_def(EnemyKind::Oni).hp;
         }
         w.player.special = 1.0;
         w.step(Input { special: true, ..Default::default() });

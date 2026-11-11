@@ -1174,7 +1174,8 @@ mod exotic_tests {
             let mut it = gear::roll_item(&mut rng, Some(Slot::Arsenal), Rarity::Legendary, 20);
             it.art = Some(art);
             let mut w = World::new(WorldConfig { gear: gear::Loadout::from_items(&[&it]), ..Default::default() });
-            w.time = 300.0;
+            // Early (1:00): this checks the art fires and kills, not the late HP curve.
+            w.time = 60.0;
             w.round_seen = w.round();
             for _ in 0..900 {
                 let i = w.bot_input();

@@ -31,7 +31,9 @@ pub const MIGHT_RIKU: f32 = 2.8;
 pub const MIGHT_REN: f32 = 1.4;
 pub const MIGHT_KUON: f32 = 1.6;
 /// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
-pub const BOSS_HP: f32 = 0.5;
+pub const BOSS_HP: f32 = 2.0;
+/// Final bosses take this share of `BOSS_HP` (they must fall before dawn).
+pub const FINAL_BOSS_HP: f32 = 0.35;
 
 /// The Night Lord arrives at RUN_SECONDS; if still alive at this time, dawn takes the player.
 pub const DAWN_LIMIT: f32 = 17.0 * 60.0;
@@ -1586,7 +1588,7 @@ impl Default for Modifiers {
 // ───────────────────────── Progression & pacing ─────────────────────────
 
 /// Attacks only land inside the reach box, so kills are rarer; each gem is worth more to keep levelling on pace.
-pub const XP_GAIN: f32 = 2.2;
+pub const XP_GAIN: f32 = 2.0;
 
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;
@@ -1596,15 +1598,15 @@ pub fn xp_needed(level: u32) -> u32 {
 /// Minimum enemies alive at time `t` (seconds). Linear between keyframes.
 pub fn min_alive(t: f32) -> usize {
     const KEYS: [(f32, f32); 9] = [
-        (0.0, 25.0),
-        (60.0, 70.0),
-        (180.0, 150.0),
-        (300.0, 220.0),
-        (480.0, 380.0),
-        (660.0, 700.0),
-        (780.0, 1100.0),
-        (870.0, 1700.0),
-        (900.0, 2000.0),
+        (0.0, 28.0),
+        (60.0, 80.0),
+        (180.0, 175.0),
+        (300.0, 260.0),
+        (480.0, 450.0),
+        (660.0, 820.0),
+        (780.0, 1250.0),
+        (870.0, 1850.0),
+        (900.0, 2200.0),
     ];
     let m = t.min(900.0);
     for w in KEYS.windows(2) {
@@ -1616,9 +1618,9 @@ pub fn min_alive(t: f32) -> usize {
     KEYS[KEYS.len() - 1].1 as usize
 }
 
-/// Max new enemies per tick when below `min_alive`: 4 at the start, 24 by 15:00.
+/// Max new enemies per tick when below `min_alive`: 5 at the start, 30 by 15:00.
 pub fn refill_per_tick(t: f32) -> usize {
-    4 + (t / 45.0) as usize
+    5 + (t / 36.0) as usize
 }
 
 /// Spawn ladder rung: 0 until 5:00, 1 until 10:00, then 2. From rung 1 the basic fodder
@@ -1629,7 +1631,7 @@ pub fn ladder_rung(t: f32) -> usize {
 /// Ranged / blinker share multiplier per rung.
 pub const LADDER_LIFT: [f32; 3] = [1.0, 2.0, 3.0];
 /// Alive-count multiplier per rung; tougher kinds keep total enemy HP about the same.
-pub const LADDER_COUNT: [f32; 3] = [1.0, 0.6, 0.6];
+pub const LADDER_COUNT: [f32; 3] = [1.0, 0.85, 0.85];
 
 /// Share of new spawns that are Kasa (umbrella) instead of Wisp.
 pub fn kasa_share(t: f32) -> f32 {
@@ -1643,15 +1645,32 @@ pub fn kasa_share(t: f32) -> f32 {
 /// Extra enemy HP and damage step for each headline round reached.
 pub const HEADLINE_BUMP: f32 = 1.01;
 
-/// Enemy HP multiplier over the run.
+/// Enemy HP (x base) at 0:00, rising to `HP_START` by `HP_START_BY` pace-minutes: the first
+/// minute still gives a few quick levels, then fodder takes several hits from a fresh weapon.
+pub const HP_OPEN: f32 = 1.5;
+pub const HP_START: f32 = 5.0;
+pub const HP_START_BY: f32 = 3.0;
+/// Extra enemy HP per minute after `HP_RAMP_FROM` minutes (compounding), so enemies keep up
+/// with a build that has come together instead of melting from mid-run on.
+pub const HP_RAMP: f32 = 0.17;
+pub const HP_RAMP_FROM: f32 = 1.0;
+
+/// Enemy HP multiplier over the run (`t` in pace seconds).
 pub fn hp_scale(t: f32) -> f32 {
     let m = t / 60.0;
-    1.0 + 0.15 * m + 0.03 * m * m
+    let start = HP_OPEN + (HP_START - HP_OPEN) * (m / HP_START_BY).min(1.0);
+    (start + 0.2 * m + 0.03 * m * m) * (1.0 + HP_RAMP).powf((m - HP_RAMP_FROM).max(0.0))
 }
 
-/// Enemy contact-damage multiplier over the run: 1x at the start, 2.5x by 15:00.
+/// Enemy move-speed multiplier over the run (non-bosses): +3.5% per pace-minute, capped at
+/// +50% by 15:00 so the fastest fodder (~58 base) still stays under the player's base 110.
+pub fn speed_scale(t: f32) -> f32 {
+    (1.0 + 0.035 * t / 60.0).min(1.5)
+}
+
+/// Enemy contact-damage multiplier over the run: 1x at the start, 4.75x by 15:00.
 pub fn damage_scale(t: f32) -> f32 {
-    1.0 + t / 600.0
+    1.0 + t / 240.0
 }
 
 /// Seconds between Oni elites: every 2 minutes, every minute from 10:00.
@@ -1751,8 +1770,8 @@ mod tests {
             assert!(n >= prev, "min_alive dropped at {s}s");
             prev = n;
         }
-        assert_eq!(min_alive(0.0), 25);
-        assert_eq!(min_alive(900.0), 2000);
+        assert_eq!(min_alive(0.0), 28);
+        assert_eq!(min_alive(900.0), 2200);
     }
 
     #[test]
