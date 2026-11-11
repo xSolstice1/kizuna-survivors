@@ -170,7 +170,6 @@
       username = st.username || username;
       if (!st.exists) return push(true, Number(st.version || 0), null);
       server = st;
-      username = st.username || "";
       var theirs = pick(st);
       var sameUser = get(LS.user) === session.user.id;
       var base = syncedState();
@@ -258,7 +257,7 @@
   }
 
   // ───────────── Bridge to the game ─────────────
-  var outText = new Uint8Array(0), outUser = new Uint8Array(0), outMsg = new Uint8Array(0), outAcct = new Uint8Array(0);
+  var outText = new Uint8Array(0), outMsg = new Uint8Array(0), outAcct = new Uint8Array(0);
   function readStr(ptr, len) { return new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, ptr, len)); }
   miniquad_add_plugin({
     name: "kz_cloud",
@@ -285,7 +284,11 @@
       env.kz_cloud_sign_in = function (ptr, len) {
         if (!status) return;
         var provider = readStr(ptr, len);
-        var url = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back(true));
+        // auth-callback.html only accepts a session that comes back with this value, so a page
+        // can't push its own account into the game by opening the callback with a token.
+        var state = Array.prototype.map.call(crypto.getRandomValues(new Uint8Array(16)), function (b) { return (b + 256).toString(16).slice(1); }).join("");
+        set("kz_cloud_oauth_state", state);
+        var url = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back(true) + "?state=" + state);
         // A sign-in window; this tab signs in by itself when it finishes. Blocked popups fall back
         // to signing in in this tab.
         var w = 480, h = 640, x = (screen.width - w) / 2, y = (screen.height - h) / 2;
@@ -405,11 +408,6 @@
         return outText.length;
       };
       env.kz_cloud_incoming = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outText.subarray(0, len)); };
-      env.kz_cloud_user_len = function () {
-        outUser = new TextEncoder().encode(username || (session && session.user ? session.user.email || "" : ""));
-        return outUser.length;
-      };
-      env.kz_cloud_user = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outUser.subarray(0, len)); };
     },
   });
 })();

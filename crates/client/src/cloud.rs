@@ -40,8 +40,6 @@ mod backend {
         fn kz_cloud_resolve(choice: u32);
         fn kz_cloud_incoming_len() -> u32;
         fn kz_cloud_incoming(ptr: *mut u8, len: u32);
-        fn kz_cloud_user_len() -> u32;
-        fn kz_cloud_user(ptr: *mut u8, len: u32);
         fn kz_cloud_password_sign_in(e: *const u8, el: u32, p: *const u8, pl: u32);
         fn kz_cloud_sign_up(u: *const u8, ul: u32, e: *const u8, el: u32, p: *const u8, pl: u32);
         fn kz_cloud_magic_link(e: *const u8, el: u32);
@@ -132,15 +130,6 @@ mod backend {
         let n = unsafe { kz_cloud_incoming_len() };
         (n > 0).then(|| take(n, kz_cloud_incoming))
     }
-    #[allow(dead_code)]
-    pub fn user() -> String {
-        let n = unsafe { kz_cloud_user_len() };
-        if n == 0 {
-            String::new()
-        } else {
-            take(n, kz_cloud_user)
-        }
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -158,10 +147,6 @@ mod backend {
     pub fn resolve(_: u32) {}
     pub fn incoming() -> Option<String> {
         None
-    }
-    #[allow(dead_code)]
-    pub fn user() -> String {
-        String::new()
     }
     pub fn password_sign_in(_: &str, _: &str) {}
     pub fn sign_up(_: &str, _: &str, _: &str) {}
@@ -267,12 +252,6 @@ pub fn account() -> Account {
         _ => "Email and password".to_string(),
     };
     Account { username, email, method, since }
-}
-
-/// The signed-in account's username (or email).
-#[allow(dead_code)]
-pub fn user() -> String {
-    backend::user()
 }
 
 /// Offers the current state for syncing (cheap no-op when the cloud is off).

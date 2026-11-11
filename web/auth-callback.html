@@ -31,6 +31,10 @@
       var q = new URLSearchParams(location.hash.replace(/^#/, "") || location.search.replace(/^\?/, ""));
       var token = q.get("access_token");
       try {
+        // Only the game tab that opened this sign-in knows the state (web/cloud.js).
+        var want = localStorage.getItem("kz_cloud_oauth_state");
+        localStorage.removeItem("kz_cloud_oauth_state");
+        if (!want || new URLSearchParams(location.search).get("state") !== want) token = null;
         if (token) {
           localStorage.setItem("kz_cloud_recovery", "0");
           localStorage.setItem("kz_cloud_session", JSON.stringify({

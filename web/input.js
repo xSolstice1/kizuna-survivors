@@ -88,7 +88,14 @@
         if (f.el.placeholder !== ph) f.el.placeholder = ph;
       };
       env.kz_input_end = function () {
-        for (var id in fields) if (!fields[id].seen) { fields[id].el.style.display = "none"; if (document.activeElement === fields[id].el) fields[id].el.blur(); }
+        for (var id in fields) {
+          var el = fields[id].el;
+          if (fields[id].seen || el.style.display === "none") continue;
+          // Hidden fields drop what was typed, so passwords don't linger in the page.
+          el.style.display = "none";
+          el.value = "";
+          if (document.activeElement === el) el.blur();
+        }
       };
       env.kz_input_focus = function (id) { if (fields[id]) fields[id].el.focus(); };
       env.kz_input_focused = function () {

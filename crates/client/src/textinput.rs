@@ -68,7 +68,6 @@ mod backend {
         unsafe { kz_input_get(buf.as_mut_ptr(), n) };
         String::from_utf8(buf).unwrap_or_default()
     }
-    #[allow(dead_code)]
     pub fn set(id: u32, s: &str) {
         unsafe { kz_input_set(id, s.as_ptr(), s.len() as u32) }
     }
@@ -131,7 +130,6 @@ mod backend {
     pub fn value(id: u32) -> String {
         VALUES.with(|v| v.borrow().get(&id).cloned().unwrap_or_default())
     }
-    #[allow(dead_code)]
     pub fn set(id: u32, s: &str) {
         VALUES.with(|v| {
             v.borrow_mut().insert(id, s.to_string());
@@ -178,7 +176,6 @@ pub fn value(id: u32) -> String {
     backend::value(id)
 }
 
-#[allow(dead_code)]
 pub fn set(id: u32, s: &str) {
     backend::set(id, s);
 }
