@@ -6682,6 +6682,28 @@ mod tests {
     }
 
     #[test]
+    fn blessings_stack_onto_weapon_damage() {
+        // The maxed-out Kizuna Blessing card: +3% damage per pick, compounding, on real shots.
+        let shot = |blessings: u32| -> f32 {
+            let mut w = World::new(WorldConfig { seed: 9, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+            for _ in 0..blessings {
+                w.apply_upgrade(Upgrade::Blessing);
+            }
+            w.spawn_enemy(EnemyKind::Oni, Vec2::new(60.0, 0.0));
+            for _ in 0..240 {
+                w.step(Input::default());
+                if let Some(d) = w.projectiles.damage.first() {
+                    return *d;
+                }
+            }
+            panic!("no talisman fired");
+        };
+        let (base, blessed) = (shot(0), shot(20));
+        let want = BLESSING_DAMAGE.powi(20);
+        assert!((blessed / base - want).abs() < 1e-3, "20 blessings: x{:.3}, want x{want:.3}", blessed / base);
+    }
+
+    #[test]
     fn walking_away_from_a_shrine_changes_nothing() {
         let mut w = World::new(WorldConfig::default());
         w.shrine_offer = Some(vec![ShrineEvent::GlassBlade, ShrineEvent::Offering]);
