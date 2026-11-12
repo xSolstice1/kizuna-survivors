@@ -34,7 +34,7 @@ pub const MIGHT_KUON: f32 = 1.82;
 /// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
 pub const BOSS_HP: f32 = 2.0;
 /// Final bosses take this share of `BOSS_HP` (they must fall before dawn).
-pub const FINAL_BOSS_HP: f32 = 0.35;
+pub const FINAL_BOSS_HP: f32 = 0.25;
 
 /// The Night Lord arrives at RUN_SECONDS; if still alive at this time, dawn takes the player.
 pub const DAWN_LIMIT: f32 = 17.0 * 60.0;
@@ -1661,11 +1661,11 @@ pub const HEADLINE_BUMP: f32 = 1.01;
 /// Enemy HP (x base) at 0:00, rising to `HP_START` by `HP_START_BY` pace-minutes: the first
 /// minute still gives a few quick levels, then fodder takes several hits from a fresh weapon.
 pub const HP_OPEN: f32 = 1.5;
-pub const HP_START: f32 = 5.0;
+pub const HP_START: f32 = 3.5;
 pub const HP_START_BY: f32 = 3.0;
 /// Extra enemy HP per minute after `HP_RAMP_FROM` minutes (compounding), so enemies keep up
 /// with a build that has come together instead of melting from mid-run on.
-pub const HP_RAMP: f32 = 0.17;
+pub const HP_RAMP: f32 = 0.15;
 pub const HP_RAMP_FROM: f32 = 1.0;
 
 /// Enemy HP multiplier over the run (`t` in pace seconds).

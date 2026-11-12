@@ -1340,7 +1340,7 @@ impl World {
 
     /// Enemy damage multiplier now (contact, bullets, hazards).
     pub fn enemy_damage_scale(&self) -> f32 {
-        damage_scale(self.round_pace()) * self.headline_bump() * self.cfg.difficulty.damage() * (1.0 + 0.12 * self.cfg.ascension as f32)
+        damage_scale(self.round_pace()) * self.headline_bump() * self.stage().damage_tier * self.cfg.difficulty.damage() * (1.0 + 0.12 * self.cfg.ascension as f32)
     }
 
     fn spawn_enemy(&mut self, kind: EnemyKind, pos: Vec2) {
@@ -1349,7 +1349,7 @@ impl World {
         }
         let d = enemy_def(kind);
         let hp = if kind.is_boss() {
-            let final_share = if kind.rank() == Rank::Final { FINAL_BOSS_HP } else { 1.0 };
+            let final_share = if kind.rank() == Rank::Final { FINAL_BOSS_HP * self.stage().final_tier } else { 1.0 };
             d.hp * BOSS_HP * final_share * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
         } else {
             let hardened = if self.asc_trait(1) && (kind.rank() >= Rank::Elite || kind.is_leader()) { ASC_ELITE_HP } else { 1.0 };

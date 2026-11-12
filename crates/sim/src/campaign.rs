@@ -288,6 +288,10 @@ pub struct StageDef {
     pub ranged_mult: f32,
     /// Multiplier on every enemy's HP (later worlds are tougher).
     pub tier: f32,
+    /// Enemy damage multiplier for this stage (the Prologue is gentler).
+    pub damage_tier: f32,
+    /// Final boss HP multiplier for this stage (on top of `tier`).
+    pub final_tier: f32,
     /// Extra HP growth over a long run: hp x (1 + late_hp * (t / final_at)^2).
     pub late_hp: f32,
     /// Nightmare-clear reward.
@@ -386,6 +390,8 @@ const fn world(
         mechanic,
         ranged_mult,
         tier,
+        damage_tier: 1.0,
+        final_tier: 1.0,
         late_hp: 0.6,
         relic: Some(relic),
     }
@@ -415,7 +421,10 @@ pub static STAGES: [StageDef; 6] = [
         ring_rounds: &[7, 13, 18],
         mechanic: Mechanic::None,
         ranged_mult: 1.0,
-        tier: 1.0,
+        // The tutorial night every new player starts on: gentler than the worlds.
+        tier: 0.7,
+        damage_tier: 0.7,
+        final_tier: 0.7,
         late_hp: 0.0,
         relic: None,
     },
