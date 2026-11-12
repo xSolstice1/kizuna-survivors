@@ -21,15 +21,16 @@ pub const REACH_MELEE: f32 = 0.8;
 /// Reach stays at least this far inside the visible edge.
 pub const REACH_EDGE: f32 = 24.0;
 pub const DEFAULT_VIEW_HALF: Vec2 = Vec2::new(320.0, 180.0);
-/// Melee reach covers far fewer enemies, so melee heroes hit harder; hybrids keep pace without help.
-pub const MIGHT_MELEE: f32 = 2.3;
-pub const MIGHT_TOYA: f32 = 3.0;
+/// Hero damage multipliers, set so every hero's three best weapons land near one strength
+/// (`skill_strength`): ranged ~3600, hybrid ~3900, melee ~4150 (melee stands in the crowd, so it
+/// keeps a small edge). Before this Riku and Toya were ~3x Ren.
+pub const MIGHT_MELEE: f32 = 2.04;
+pub const MIGHT_TOYA: f32 = 1.65;
 /// Effect duration and range gained per Persistence level.
 pub const PERSISTENCE_PER_LEVEL: f32 = 0.12;
-pub const MIGHT_RIKU: f32 = 2.8;
-/// Ranged heroes after the per-pool weapon band (phase 7 task 9) cut their strongest weapons.
-pub const MIGHT_REN: f32 = 1.4;
-pub const MIGHT_KUON: f32 = 1.6;
+pub const MIGHT_RIKU: f32 = 1.73;
+pub const MIGHT_REN: f32 = 2.07;
+pub const MIGHT_KUON: f32 = 1.82;
 /// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
 pub const BOSS_HP: f32 = 2.0;
 /// Final bosses take this share of `BOSS_HP` (they must fall before dawn).
@@ -1735,8 +1736,8 @@ mod tests {
     fn hero_levers_are_per_hero() {
         assert_eq!(hero_def(HeroId::Riku).reach_might, MIGHT_RIKU);
         assert_eq!(hero_def(HeroId::Toya).reach_might, MIGHT_TOYA);
-        assert_eq!(hero_def(HeroId::Shun).reach_might, 2.3);
-        assert_eq!(hero_def(HeroId::Haru).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Shun).reach_might, MIGHT_MELEE);
+        assert_eq!(hero_def(HeroId::Haru).reach_might, MIGHT_MELEE);
         assert_eq!(hero_def(HeroId::Kaede).reach_might, 1.0);
         assert_eq!(hero_def(HeroId::Ren).reach_might, MIGHT_REN);
         assert_eq!(hero_def(HeroId::Kuon).reach_might, MIGHT_KUON);
