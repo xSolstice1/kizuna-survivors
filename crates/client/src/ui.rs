@@ -216,6 +216,11 @@ fn dim_screen(a: f32) {
 fn portrait(assets: &Assets, world: &World, cx: f32, cy: f32, r: f32) {
     let form = world.form_kind().is_some();
     draw_circle(cx, cy, r, Color::new(0.10, 0.08, 0.18, 1.0));
+    if world.cfg.hero == sim::content::HeroId::Ren && !form {
+        let d = r * 2.0 - 4.0;
+        draw_texture_ex(&assets.ren_face, cx - d / 2.0, cy - d / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(d, d)), ..Default::default() });
+        return;
+    }
     let tex = assets.portrait(world.cfg.hero, form);
     let s = r * 2.0 / 18.0; // show the top 18 rows (the head)
     draw_texture_ex(

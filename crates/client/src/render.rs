@@ -89,6 +89,68 @@ fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
     })
 }
 
+/// A hero's generated animation set (tools/ai/anim.py): walk + idle loops and a walking
+/// throw, all on one canvas so switching never jumps. Values come from art/hd/<hero>_anim.txt.
+pub struct HeroAnim {
+    pub walk: Vec<Texture2D>,
+    pub idle: Vec<Texture2D>,
+    pub wattack: Vec<Texture2D>,
+    /// Standing throw.
+    pub attack: Vec<Texture2D>,
+    /// Frame (in each throw) where the projectile leaves the hand.
+    pub attack_release: usize,
+    pub wattack_release: usize,
+    pub fps: f32,
+    /// Walk frame closest to the idle pose (start walking from here).
+    pub walk_start: usize,
+    /// Walk frame to continue from after the walking throw.
+    pub resume: usize,
+    /// Frame size in world units (feet at the bottom edge).
+    pub size: Vec2,
+}
+
+impl HeroAnim {
+    fn load(hero: &str, meta: &str) -> Self {
+        let val = |k: &str| -> Vec<f32> {
+            meta.lines()
+                .find_map(|l| l.strip_prefix(k).filter(|r| r.starts_with(' ')).map(|r| r.split_whitespace().filter_map(|x| x.parse().ok()).collect()))
+                .unwrap_or_default()
+        };
+        let set = |name: &str| -> Vec<Texture2D> { (0..val(name)[0] as usize).map(|i| sprites::hi_art(&format!("{hero}_anim_{name}_{i}"))).collect() };
+        let size = val("size");
+        HeroAnim {
+            walk: set("walk"),
+            idle: set("idle"),
+            wattack: set("wattack"),
+            attack: set("attack"),
+            attack_release: val("attack_release")[0] as usize,
+            wattack_release: val("wattack_release")[0] as usize,
+            fps: val("fps")[0],
+            walk_start: val("walk_start")[0] as usize,
+            resume: val("wattack_resume")[0] as usize,
+            size: vec2(size[0], size[1]),
+        }
+    }
+
+    /// Seconds a throw lasts, and from its start to the release.
+    fn throw_times(&self, walking: bool) -> (f64, f64) {
+        let (frames, release) = if walking { (self.wattack.len(), self.wattack_release) } else { (self.attack.len(), self.attack_release) };
+        (frames as f64 / self.fps as f64, release as f64 / self.fps as f64)
+    }
+}
+
+/// What the animated hero is doing.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub enum AnimMode {
+    #[default]
+    Idle,
+    Walk,
+    /// Standing throw.
+    Attack,
+    /// Throw mid-stride.
+    WalkAttack,
+}
+
 pub struct Assets {
     /// Per hero (in `ALL_HEROES` order): idle, walk A, walk B.
     heroes: Vec<[Texture2D; 3]>,
@@ -99,6 +161,10 @@ pub struct Assets {
     toya_mukade: [Texture2D; 3],
     kuon_domain: [Texture2D; 3],
     ren_divine: [Texture2D; 3],
+    /// Ren's rigged animation (tools/ai/rig.py): walk cycle and breathing idle.
+    pub ren_anim: HeroAnim,
+    /// Head crop of the front view, for the HUD portrait circle.
+    pub ren_face: Texture2D,
     cleaver: Texture2D,
     cleaver_hannya: Texture2D,
     cleaver_rest: Texture2D,
@@ -161,7 +227,11 @@ impl Assets {
                 HeroId::Shun => frames(sprites::sprite("shun")),
                 HeroId::Toya => frames(sprites::sprite("toya")),
                 HeroId::Kuon => frames(sprites::sprite("kuon")),
-                HeroId::Ren => frames(sprites::sprite("ren")),
+                // Front view for portraits, the armory and menus (in a run she uses ren_anim).
+                HeroId::Ren => {
+                    let front = sprites::hi_art("ren_front");
+                    [front.clone(), front.clone(), front]
+                }
                 _ => frames(sprites::parse(&sprites::recolor(base, hero_palette(*h)))),
             })
             .collect();
@@ -172,6 +242,8 @@ impl Assets {
             toya_mukade: frames(sprites::sprite("toya_mukade")),
             kuon_domain: frames(sprites::sprite("kuon_domain")),
             ren_divine: frames(sprites::sprite("ren_divine")),
+            ren_anim: HeroAnim::load("ren", include_str!("../../../art/hd/ren_anim.txt")),
+            ren_face: sprites::hi_art("ren_face"),
             cleaver: sprites::art("cleaver"),
             cleaver_hannya: sprites::art("cleaver_hannya"),
             cleaver_rest: sprites::art("cleaver_rest"),
@@ -445,6 +517,8 @@ struct Particle {
 /// Purely visual state derived from sim events.
 #[derive(Default)]
 pub struct Fx {
+    /// The animated hero's state: mode, when it began (s), and the walk frame it started on.
+    pub anim: (AnimMode, f64, usize),
     numbers: Vec<DamageNumber>,
     particles: Vec<Particle>,
     /// Expanding barrier rings: (centre, age).
@@ -686,6 +760,7 @@ impl Fx {
                     self.say(self.lines().revived);
                     self.shake = self.shake.max(0.3);
                 }
+                // A weapon fired: throw (unless mid-throw; a short gap keeps it from flailing).
                 Event::Bolt { from, to } => self.bolts.push((vec2(from.x, from.y), vec2(to.x, to.y), 0.0)),
                 Event::Slash { pos, dir, radius, full } => {
                     self.slashes.push((vec2(pos.x, pos.y), vec2(dir.x, dir.y), radius, full, 0.0));
@@ -810,6 +885,49 @@ impl Fx {
             self.trail_tick = 0.05;
             let p = world.player.pos;
             self.trail.push((vec2(p.x, p.y), world.player.facing.x < 0.0, 0.0));
+        }
+    }
+
+    /// Advances the animated hero (once per frame, before drawing). Walk and idle loop. A throw
+    /// (standing or mid-stride) starts early enough that its release frame lands exactly when
+    /// the signature weapon fires (the sim reports its timer), then the walk resumes on the
+    /// matching frame.
+    pub fn animate(&mut self, anim: &HeroAnim, world: &World, now: f64) {
+        let moving = world.player.moving;
+        let (mode, since, _) = self.anim;
+        let throwing = matches!(mode, AnimMode::Attack | AnimMode::WalkAttack);
+        if throwing && now - since < anim.throw_times(mode == AnimMode::WalkAttack).0 {
+            return;
+        }
+        let next = world.next_fire_in(sim::content::hero_def(world.cfg.hero).signature);
+        let (_, lead) = anim.throw_times(moving);
+        self.anim = match next {
+            Some(t) if !world.paused() && (t as f64) <= lead => {
+                // Start partway in if the shot is sooner than the wind-up.
+                (if moving { AnimMode::WalkAttack } else { AnimMode::Attack }, now - (lead - t as f64), 0)
+            }
+            _ if throwing => {
+                if moving {
+                    (AnimMode::Walk, now, anim.resume)
+                } else {
+                    (AnimMode::Idle, now, 0)
+                }
+            }
+            _ if mode == AnimMode::Idle && moving => (AnimMode::Walk, now, anim.walk_start),
+            _ if mode == AnimMode::Walk && !moving => (AnimMode::Idle, now, 0),
+            _ => self.anim,
+        };
+    }
+
+    /// The animated hero's current frame.
+    pub fn anim_frame<'a>(&self, anim: &'a HeroAnim, now: f64) -> &'a Texture2D {
+        let (mode, since, start) = self.anim;
+        let n = ((now - since).max(0.0) * anim.fps as f64) as usize;
+        match mode {
+            AnimMode::Idle => &anim.idle[n % anim.idle.len()],
+            AnimMode::Walk => &anim.walk[(start + n) % anim.walk.len()],
+            AnimMode::Attack => &anim.attack[n.min(anim.attack.len() - 1)],
+            AnimMode::WalkAttack => &anim.wattack[n.min(anim.wattack.len() - 1)],
         }
     }
 
@@ -1308,6 +1426,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let p = world.player.pos;
     let view = view_rect(cam);
 
+    // The hero, when its art is too detailed for the world target (drawn at the end of this fn).
+    let mut hires_player: Option<(Texture2D, f32, f32, Color, DrawTextureParams)> = None;
+
     // Sakura Field sits on the ground under everything.
     for w in &world.weapons {
         if w.kind == WeaponKind::SakuraField {
@@ -1589,6 +1710,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_circle_lines(p.x, p.y + 3.0, 20.0 + 60.0 * k, 3.0 * (1.0 - k) + 1.0, Color::new(1.0, 0.9, 0.5, 0.8 * (1.0 - k)));
     }
     draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+    // Ren: generated animation set (walk / idle / throws), see Fx::animate.
+    let animated = (world.cfg.hero == HeroId::Ren && !divine).then(|| fx.anim_frame(&a.ren_anim, time));
     let tex = if fox {
         &a.riku_fox[frame]
     } else if hannya {
@@ -1599,11 +1722,15 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         &a.kuon_domain[frame]
     } else if divine {
         &a.ren_divine[frame]
+    } else if let Some(tex) = animated {
+        tex
     } else {
         &a.hero(world.cfg.hero)[frame]
     };
-    let (x, y) = ((p.x - 12.0).round(), (p.y - 26.0).round());
-    let params = DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: pl.facing.x < 0.0, ..Default::default() };
+    // Centred on the player, feet 6 units below the position (24x32 sprites: -12, -26).
+    let size = if animated.is_some() { a.ren_anim.size } else { crate::sprites::nat(tex) };
+    let (x, y) = ((p.x - size.x / 2.0).round(), (p.y + 6.0 - size.y).round());
+    let params = DrawTextureParams { dest_size: Some(size), flip_x: pl.facing.x < 0.0, ..Default::default() };
     if fox || hannya || mukade || domain || divine {
         // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread / star-blue), offset around.
         let flare = 0.45 + 0.25 * (t * 9.0).sin();
@@ -1625,7 +1752,12 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if shun && !swinging {
         draw_blade(a, p, flip, hannya, None);
     }
-    draw_texture_ex(tex, x, y, tint, params);
+    if animated.is_some() && target.is_some() {
+        // Hi-res art: drawn after the world target is on screen, at full device resolution.
+        hires_player = Some((tex.clone(), x, y, tint, params));
+    } else {
+        draw_texture_ex(tex, x, y, tint, params);
+    }
     if shun && swinging {
         draw_blade(a, p, flip, hannya, Some(fx.swing));
     }
@@ -1995,6 +2127,12 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if let Some(rt) = target {
         set_default_camera();
         draw_texture_ex(&rt.texture, 0.0, 0.0, WHITE, DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() });
+        if let Some((tex, x, y, tint, params)) = hires_player.take() {
+            let direct = Camera2D { target: cam.target, zoom: cam.zoom, offset: cam.offset, rotation: cam.rotation, render_target: None, viewport: cam.viewport };
+            set_camera(&direct);
+            draw_texture_ex(&tex, x, y, tint, params);
+            set_default_camera();
+        }
     }
     // Damage numbers are drawn in screen space so the text stays crisp.
     // Screen-space overlays use the virtual UI space so they scale with the rest of the UI.

@@ -1671,7 +1671,7 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
     let mut action = None;
     // The active hero (chosen in the Armory).
     let hdef = hero_def(profile.selected);
-    draw_texture_ex(&assets.hero(profile.selected)[0], hero_x, py + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(36.0, 48.0)), ..Default::default() });
+    { let t = &assets.hero(profile.selected)[0]; let w = 48.0 * t.width() / t.height(); draw_texture_ex(t, hero_x + 18.0 - w / 2.0, py + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(w, 48.0)), ..Default::default() }); }
     kit::text_fit(hdef.name.split(' ').next().unwrap_or(""), hero_x, py + 78.0, 80.0, 14.0, DIM);
     crate::ui::element_tag(hdef.element, hero_x, py + 98.0, 14.0);
     if button(Rect::new(px + pw - 196.0, py + 14.0, 180.0, 48.0), "Begin the night", profile.stage_open(sid)) || is_key_pressed(KeyCode::Enter) {
