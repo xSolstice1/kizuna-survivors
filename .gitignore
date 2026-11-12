@@ -12,3 +12,9 @@ __pycache__/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Local secrets (API keys)
+.env
+
+# AI image generation: raw outputs and spend log stay local
+art/ai/

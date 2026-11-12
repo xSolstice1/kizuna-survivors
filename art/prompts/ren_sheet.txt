@@ -1,0 +1,7 @@
+Character reference sheet for an ORIGINAL character in a 2D anime action game (top-down survivors-like). Two full-body views side by side, same character, same scale: (1) front view, (2) three-quarter view facing RIGHT, mid-stride walking.
+
+Character: Ren Amane, 17-year-old shrine keeper girl. Long loose pink hair (soft rose pink, flowing, a few tapered locks), bright blue eyes, calm deadpan-but-earnest expression. Navy blue sailor-style school uniform with white stripes on the collar, a red ribbon tie, navy pleated skirt, dark navy knee socks, brown loafers. A small brown leather satchel at her hip with white paper talismans (red ink marks) sticking out. One pale-gold glowing moon orb with a crescent highlight floats beside her. Small gold crescent-moon hairpin.
+
+Style: polished modern anime game character art, clean confident lineart with varied line weight, soft cel shading with 2-3 tones, subtle rim light, vibrant but tasteful colours, slightly stylised proportions (about 3.5 heads tall, not super-deformed), crisp edges suitable for a game sprite. Not pixel art.
+
+Background: perfectly flat solid pure green (#00FF00) everywhere, no gradient, no floor, no shadow, no text, no labels, no watermark. Characters must not touch the image edges.
