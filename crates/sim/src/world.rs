@@ -804,6 +804,11 @@ pub struct World {
     rng: Rng,
     grid: Grid,
     scratch: Vec<u32>,
+    /// Enemies hit so far by the current area attack (reset by `query_circle` and per source);
+    /// see `area_falloff`.
+    area_hits: u32,
+    /// Specials and stage hazards are screen-clears by design: no area falloff while they run.
+    area_exempt: bool,
     dead: Vec<usize>,
 }
 
@@ -946,6 +951,8 @@ impl World {
             rng,
             grid: Grid::new(cell, dim),
             scratch: Vec::new(),
+            area_hits: 0,
+            area_exempt: false,
             dead: Vec::new(),
         }
     }
@@ -971,19 +978,26 @@ impl World {
         self.move_enemies();
         self.update_weapons();
         self.update_signatures();
+        self.area_exempt = true;
         self.update_fox();
         self.update_hannya();
         self.update_mukade();
         self.update_domain();
         self.update_divine();
+        self.area_exempt = false;
+        self.area_hits = 0;
         self.update_clones();
+        self.area_hits = 0;
         self.update_spirit_arts();
+        self.area_hits = 0;
         self.update_effects();
         self.move_projectiles_and_hit();
         if input.special || self.wants_auto_special() {
             let before = self.player.form;
             let used = self.specials_used;
+            self.area_exempt = true;
             self.use_special();
+            self.area_exempt = false;
             if before <= 0.0 && self.player.form > 0.0 {
                 self.player.form += 2.0 * self.cfg.gear.unique(Unique::Overflow);
             }
@@ -993,7 +1007,10 @@ impl World {
         }
         self.contact_damage();
         self.update_shots();
+        self.area_exempt = true;
         self.update_hazards();
+        self.area_exempt = false;
+        self.area_hits = 0;
         self.update_gear();
         self.update_pickups();
         self.tick_statuses();
@@ -2126,6 +2143,7 @@ impl World {
         let p = self.player.pos;
         let might = self.might();
         for wi in 0..self.weapons.len() {
+            self.area_hits = 0;
             let w = self.weapons[wi];
             let every = signature_every(w.kind);
             if !w.awakened || every <= 0.0 {
@@ -3124,6 +3142,8 @@ impl World {
         if !self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
             return;
         }
+        let amount = if self.area_exempt { amount } else { amount * area_falloff(self.area_hits) };
+        self.area_hits += 1;
         self.apply_hit(j, amount, dir, elem);
         if let Some(elem) = elem {
             let chance = if elem == Element::Wind && self.has_set6(StageId::EmberLeaf) { 2.0 * PROC_CHANCE } else { PROC_CHANCE };
@@ -3255,6 +3275,7 @@ impl World {
     /// Indices of enemies whose body overlaps a circle, into `self.scratch`.
     fn query_circle(&mut self, c: Vec2, r: f32) {
         self.scratch.clear();
+        self.area_hits = 0;
         let e = &self.enemies;
         let out = &mut self.scratch;
         self.grid.for_each_near(c, r + MAX_ENEMY_RADIUS, |j| {
@@ -3829,6 +3850,7 @@ impl World {
     fn update_weapons(&mut self) {
         let (might, haste) = (self.might(), self.haste());
         for wi in 0..self.weapons.len() {
+            self.area_hits = 0;
             let w = self.weapons[wi];
             let s = self.stats_of(&w);
             let elem = Some(w.kind.element());
@@ -7672,7 +7694,8 @@ mod tests {
             let leader_kills: u32 = ALL_ENEMIES.iter().filter(|k| k.is_leader()).map(|k| w.kills_by_kind[k.index()]).sum();
             let eligible: u32 = ALL_ENEMIES.iter().filter(|k| matches!(k.rank(), Rank::Mini | Rank::Boss | Rank::Final)).map(|k| w.kills_by_kind[k.index()]).sum();
             println!(
-                "seed {seed} [boss {nl}] uncommon_kills {uncommon_kills} leader_kills {leader_kills} gear_drops {gear_drops} set_eligible_kills {eligible} bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  maxed_offers {}  first_maxed {:?}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                "seed {seed} blessing_mult {:.2} [boss {nl}] uncommon_kills {uncommon_kills} leader_kills {leader_kills} gear_drops {gear_drops} set_eligible_kills {eligible} bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  maxed_offers {}  first_maxed {:?}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                w.mods.damage,
                 w.bosses_down,
                 w.state,
                 w.time,

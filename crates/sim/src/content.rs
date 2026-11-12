@@ -1662,6 +1662,22 @@ pub fn hp_scale(t: f32) -> f32 {
     (start + 0.2 * m + 0.03 * m * m) * (1.0 + HP_RAMP).powf((m - HP_RAMP_FROM).max(0.0))
 }
 
+/// Enemies one area attack hits at full damage; each further enemy takes `AREA_FALLOFF` less,
+/// down to `AREA_FLOOR`. Big crowds stop being free damage for screen-wide weapons, while
+/// single-target and few-target hits (and boss fights) are untouched.
+pub const AREA_FULL: u32 = 6;
+pub const AREA_FALLOFF: f32 = 0.07;
+pub const AREA_FLOOR: f32 = 0.3;
+
+/// Damage share for the `n`-th enemy (0-based) one area attack hits.
+pub fn area_falloff(n: u32) -> f32 {
+    if n < AREA_FULL {
+        1.0
+    } else {
+        (1.0 - AREA_FALLOFF * (n - AREA_FULL + 1) as f32).max(AREA_FLOOR)
+    }
+}
+
 /// Enemy move-speed multiplier over the run (non-bosses): +3.5% per pace-minute, capped at
 /// +50% by 15:00 so the fastest fodder (~58 base) still stays under the player's base 110.
 pub fn speed_scale(t: f32) -> f32 {
@@ -1760,6 +1776,14 @@ mod tests {
         let weights = ALL_TIERS.map(Tier::weight);
         assert_eq!(weights, [1.0, 0.8, 0.6, 0.4, 0.25, 0.15]);
         assert!(weights.windows(2).all(|w| w[0] > w[1]));
+    }
+
+    #[test]
+    fn area_falloff_spares_small_groups() {
+        assert!((0..AREA_FULL).all(|n| area_falloff(n) == 1.0));
+        assert!(area_falloff(AREA_FULL) < 1.0);
+        assert!((AREA_FULL..200).all(|n| area_falloff(n + 1) <= area_falloff(n)));
+        assert_eq!(area_falloff(500), AREA_FLOOR);
     }
 
     #[test]
