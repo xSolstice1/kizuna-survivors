@@ -17,6 +17,8 @@ type WorldSet = [Texture2D; 8];
 pub struct StageArt {
     tex: Vec<(&'static str, Texture2D)>,
     worlds: Vec<WorldSet>,
+    /// Baked terrain chunks for the current campaign world (made on first use).
+    baker: std::cell::RefCell<Option<crate::terrain_bake::Baker>>,
     vignette: Texture2D,
     /// Soft white radial falloff, tinted per light.
     glow: Texture2D,
@@ -162,7 +164,7 @@ impl StageArt {
         });
         let glow = radial(64, [255, 255, 255], |d| (1.0 - d).max(0.0).powi(2));
         let dark = radial(128, [2, 3, 8], |d| ((d - 0.22) / 0.4).clamp(0.0, 1.0) * 0.86);
-        StageArt { tex, worlds, vignette, glow, dark }
+        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), vignette, glow, dark }
     }
 
     fn get(&self, name: &str) -> &Texture2D {
@@ -226,10 +228,20 @@ impl StageArt {
     pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, time: f64) {
         let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
         let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
+        if terrain.on {
+            let mut baker = self.baker.borrow_mut();
+            if baker.as_ref().is_none_or(|b| b.stage() != stage) {
+                *baker = Some(crate::terrain_bake::Baker::new(stage));
+            }
+            let b = baker.as_mut().unwrap();
+            let view = Rect::new(x0, y0, sw, sh);
+            b.update(cam.target, view);
+            b.draw(view);
+        }
         let (tx0, ty0) = ((x0 / TILE).floor() as i32, (y0 / TILE).floor() as i32);
         let (prop_glows, decal_glow) = world_glows(stage);
         let mut decals = Vec::new();
-        for ty in ty0..=ty0 + (sh / TILE) as i32 + 1 {
+        for ty in (ty0..=ty0 + (sh / TILE) as i32 + 1).filter(|_| !terrain.on) {
             for tx in tx0..=tx0 + (sw / TILE) as i32 + 1 {
                 let (t, decal) = self.tile(stage, tx, ty);
                 // Inset half a texel: tiles live in the shared atlas, and linear filtering must not

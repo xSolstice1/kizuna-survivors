@@ -46,6 +46,12 @@ pub fn free_art(path: &str) -> Texture2D {
     Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true }.texture()
 }
 
+/// The decoded RGBA image of art/hd/<path>.png (for CPU-side work like the terrain bake).
+pub fn hd_image(path: &str) -> Image {
+    let bytes = index::png(path).unwrap_or_else(|| panic!("missing art/hd/{path}.png"));
+    Image::from_file_with_format(bytes, Some(ImageFormat::Png)).expect("bad png")
+}
+
 /// A hi-res generated sprite (art/hd/<path>.png), with mipmaps so it stays clean when drawn
 /// smaller than its texture.
 pub fn hi_art(path: &str) -> Texture2D {

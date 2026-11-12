@@ -18,6 +18,7 @@ mod save;
 mod sprites;
 mod stage;
 mod synth;
+mod terrain_bake;
 mod textinput;
 mod touch;
 mod ui;

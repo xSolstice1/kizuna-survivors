@@ -2,8 +2,11 @@
 //!
 //! The map is endless and a pure function of (stage, cell): every run of a stage has the same
 //! hills and valleys. Each 16-unit cell has a level (0 low, 1 ground, 2 high) from smooth noise
-//! flattened into plateaus. A cell higher than any neighbour is a **cliff**: a wall for players
-//! and enemies alike (nobody falls off; projectiles fly over). The only way between levels is a
+//! flattened into plateaus. Where the level changes there is a **cliff**: a wall for players
+//! and enemies alike (nobody falls off; projectiles fly over). In the top-down view a drop to
+//! the south shows its rock face below the edge, so that wall is the lower cell under the
+//! face; drops to the other sides are walled on the higher cell (its rim). Either way every
+//! pair of side-by-side cells at different levels has a wall between them. The only way between levels is a
 //! **road**: wavy roads run every `ROAD_EVERY` cells in both directions and ramp over every
 //! level change they cross. The start is a clearing on a road crossing, so the player is always
 //! connected to the road network and can never be sealed in. Plateaus too small for a road are
@@ -16,7 +19,11 @@
 use std::collections::VecDeque;
 
 use crate::campaign::StageId;
-use crate::stage::{chunk_props as props_raw, hash, Prop, CHUNK};
+use crate::stage::{chunk_props as props_raw, hash, Prop, PropKind, CHUNK};
+
+/// Props per chunk with terrain: the stage's scatter (up to 2) plus trailside lanterns.
+pub const PROPS: usize = 4;
+pub type ChunkProps = ([Prop; PROPS], usize);
 use crate::Vec2;
 
 pub const CELL: f32 = 16.0;
@@ -47,7 +54,7 @@ fn smooth(t: f32) -> f32 {
 }
 
 /// Value noise in 0..1 on a lattice of size 1.
-fn noise(x: f32, y: f32, salt: u32) -> f32 {
+pub fn noise(x: f32, y: f32, salt: u32) -> f32 {
     let (xi, yi) = (x.floor() as i32, y.floor() as i32);
     let (fx, fy) = (smooth(x - xi as f32), smooth(y - yi as f32));
     let v = |dx: i32, dy: i32| (hash(xi + dx, yi + dy, salt) & 0xFFFF) as f32 / 65535.0;
@@ -60,23 +67,56 @@ fn salt(stage: StageId) -> u32 {
     0x5EED_0000 + stage.index() as u32 * 977
 }
 
+/// Level thresholds on the height field.
+pub const LOW_BELOW: f32 = 0.34;
+pub const HIGH_ABOVE: f32 = 0.62;
+
+/// The continuous height field at a point in cell units (cells sample it at their corner).
+/// The client draws its contour lines; the sim rounds it to cells.
+pub fn height_cells(stage: StageId, x: f32, y: f32) -> f32 {
+    let s = salt(stage);
+    let n = noise(x / 15.0, y / 15.0, s) * 0.7 + noise(x / 6.0, y / 6.0, s + 1) * 0.3;
+    // Flat around the start.
+    let d = (x * x + y * y).sqrt();
+    if d < CLEAR + 8.0 {
+        let k = smooth(((d - CLEAR) / 8.0).clamp(0.0, 1.0));
+        0.5 + (n - 0.5) * k
+    } else {
+        n
+    }
+}
+
+/// The height field at a world position.
+pub fn height(stage: StageId, p: Vec2) -> f32 {
+    height_cells(stage, p.x / CELL, p.y / CELL)
+}
+
+/// Distance (cells, continuous) from a world position to the nearest road centre line.
+pub fn road_distance(stage: StageId, p: Vec2) -> f32 {
+    let s = salt(stage);
+    let (x, y) = (p.x / CELL, p.y / CELL);
+    let mut best = f32::MAX;
+    for (c, t, off) in [(x, y, 11u32), (y, x, 23u32)] {
+        let k0 = (c / ROAD_EVERY as f32).round();
+        for dk in -1..=1 {
+            let k = k0 + dk as f32;
+            let wob = (noise(t / 18.0, k * 3.7, s + off) - 0.5) * 9.0;
+            best = best.min((c - (k * ROAD_EVERY as f32 + wob + 0.5)).abs());
+        }
+    }
+    best
+}
+
 /// The raw level of a cell, before cliffs and roads.
 fn level_raw(stage: StageId, cx: i32, cy: i32) -> u8 {
     if !enabled(stage) {
         return 1;
     }
-    let s = salt(stage);
-    let (x, y) = (cx as f32, cy as f32);
-    let mut n = noise(x / 15.0, y / 15.0, s) * 0.7 + noise(x / 6.0, y / 6.0, s + 1) * 0.3;
-    // Flat around the start.
-    let d = (x * x + y * y).sqrt();
-    if d < CLEAR + 8.0 {
-        let k = smooth(((d - CLEAR) / 8.0).clamp(0.0, 1.0));
-        n = 0.5 + (n - 0.5) * k;
-    }
-    if n > 0.62 {
+    // Sampled at the cell's centre, so cells match the drawn contours.
+    let n = height_cells(stage, cx as f32 + 0.5, cy as f32 + 0.5);
+    if n > HIGH_ABOVE {
         2
-    } else if n < 0.34 {
+    } else if n < LOW_BELOW {
         0
     } else {
         1
@@ -105,16 +145,31 @@ fn clear(cx: i32, cy: i32) -> bool {
 
 /// A cell's flags, computed from scratch (see `Terrain::cell` for the cached version).
 pub fn cell_raw(stage: StageId, cx: i32, cy: i32) -> u8 {
-    let lv = level_raw(stage, cx, cy);
-    let mut f = lv;
-    let road = is_road(stage, cx, cy);
-    let lower = (-1..=1).any(|dy| (-1..=1).any(|dx| (dx, dy) != (0, 0) && level_raw(stage, cx + dx, cy + dy) < lv));
+    let mut n = [[0u8; 3]; 3];
+    for (j, row) in n.iter_mut().enumerate() {
+        for (i, v) in row.iter_mut().enumerate() {
+            *v = level_raw(stage, cx + i as i32 - 1, cy + j as i32 - 1);
+        }
+    }
+    flags(n, is_road(stage, cx, cy), clear(cx, cy))
+}
+
+/// A cell's flags from its 3x3 neighbourhood of levels (`n[1][1]` is the cell; `n[0]` is the
+/// row above, i.e. north).
+fn flags(n: [[u8; 3]; 3], road: bool, clear: bool) -> u8 {
+    let me = n[1][1];
+    let mut f = me;
+    // Rim: lower ground to the north, west or east (or diagonally above).
+    let rim = [n[0][0], n[0][1], n[0][2], n[1][0], n[1][2]].iter().any(|&l| l < me);
+    // Under a south-facing rock face: higher ground right above.
+    let under_face = n[0][1] > me;
+    let change = n.iter().flatten().any(|&l| l != me);
     if road {
         f |= ROAD;
-        if lower || (-1..=1).any(|dy| (-1..=1).any(|dx| level_raw(stage, cx + dx, cy + dy) > lv)) {
+        if change {
             f |= RAMP;
         }
-    } else if lower && !clear(cx, cy) {
+    } else if (rim || under_face) && !clear {
         f |= WALL;
     }
     f
@@ -140,7 +195,7 @@ pub struct Terrain {
     /// Props per chunk over the cached window, minus any that would sit on a cliff or road.
     props_origin: (i32, i32),
     props_n: i32,
-    props: Vec<([Prop; 2], usize)>,
+    props: Vec<ChunkProps>,
 }
 
 impl Terrain {
@@ -177,27 +232,14 @@ impl Terrain {
         self.cells = vec![0; (CACHE * CACHE) as usize];
         for j in 1..n - 1 {
             for i in 1..n - 1 {
-                let l = lv[j * n + i];
-                let mut lower = false;
-                let mut higher = false;
-                for dj in [-1i32, 0, 1] {
-                    for di in [-1i32, 0, 1] {
-                        let m = lv[(j as i32 + dj) as usize * n + (i as i32 + di) as usize];
-                        lower |= m < l;
-                        higher |= m > l;
+                let mut nb = [[0u8; 3]; 3];
+                for (dj, row) in nb.iter_mut().enumerate() {
+                    for (di, v) in row.iter_mut().enumerate() {
+                        *v = lv[(j + dj - 1) * n + (i + di - 1)];
                     }
                 }
                 let (x, y) = (self.origin.0 + i as i32 - 1, self.origin.1 + j as i32 - 1);
-                let mut f = l;
-                if road[j * n + i] {
-                    f |= ROAD;
-                    if lower || higher {
-                        f |= RAMP;
-                    }
-                } else if lower && !clear(x, y) {
-                    f |= WALL;
-                }
-                self.cells[(j - 1) * CACHE as usize + (i - 1)] = f;
+                self.cells[(j - 1) * CACHE as usize + (i - 1)] = flags(nb, road[j * n + i], clear(x, y));
             }
         }
         // Props for every chunk fully inside the window.
@@ -208,32 +250,62 @@ impl Terrain {
         self.props = (0..n * n).map(|k| self.filtered_props(c0.0 + k % n, c0.1 + k / n)).collect();
     }
 
-    /// A chunk's props, without the ones whose footprint (plus a cell of margin) touches a cliff
-    /// or a road.
-    fn filtered_props(&self, cx: i32, cy: i32) -> ([Prop; 2], usize) {
+    /// A chunk's props: the stage's scatter minus any whose footprint (plus a cell of margin)
+    /// touches a cliff or a road, then up to two lanterns (prop A) standing beside a trail.
+    fn filtered_props(&self, cx: i32, cy: i32) -> ChunkProps {
         let (ps, n) = props_raw(self.stage, cx, cy);
+        let mut out = [ps[0]; PROPS];
         if !self.on {
-            return (ps, n);
+            out[..n].copy_from_slice(&ps[..n]);
+            return (out, n);
         }
-        let mut out = ps;
-        let mut m = 0;
-        for p in &ps[..n] {
+        let clear_of = |p: &Prop, flags: u8| {
             let (min, max) = p.footprint();
             let (x0, y0) = cell_of(min);
             let (x1, y1) = cell_of(max);
-            let clear = (y0 - 1..=y1 + 1).all(|y| (x0 - 1..=x1 + 1).all(|x| self.cell(x, y) & (WALL | ROAD) == 0));
-            if clear {
+            (y0 - 1..=y1 + 1).all(|y| (x0 - 1..=x1 + 1).all(|x| self.cell(x, y) & flags == 0))
+        };
+        let mut m = 0;
+        for p in &ps[..n] {
+            if clear_of(p, WALL | ROAD) {
                 out[m] = *p;
                 m += 1;
+            }
+        }
+        // Trailside lanterns: candidate spots on a coarse grid, kept if a road is 2 cells away
+        // and the spot itself is clear. Footprints stay inside the chunk.
+        let per = (CHUNK / CELL) as i32;
+        let (bx, by) = (cx * per, cy * per);
+        let mut placed = 0;
+        let start = (hash(cx, cy, 61) % 9) as i32;
+        for k in 0..9 {
+            if placed == 2 || m == PROPS {
+                break;
+            }
+            let s = (start + k * 4) % 9;
+            let (gx, gy) = (bx + 2 + (s % 3) * 4, by + 3 + (s / 3) * 4);
+            let near_road = [(-2, 0), (2, 0), (0, -2), (0, 2)].iter().any(|(dx, dy)| self.cell(gx + dx, gy + dy) & ROAD != 0);
+            if !near_road {
+                continue;
+            }
+            let p = Prop { kind: PropKind::A, pos: Vec2::new(gx as f32 * CELL + CELL / 2.0, gy as f32 * CELL + CELL / 2.0) };
+            let too_close = out[..m].iter().any(|q| (q.pos - p.pos).length() < 40.0);
+            if !too_close && clear_of(&p, WALL | ROAD) {
+                out[m] = p;
+                m += 1;
+                placed += 1;
             }
         }
         (out, m)
     }
 
     /// A chunk's props (cached when inside the window).
-    pub fn chunk_props(&self, cx: i32, cy: i32) -> ([Prop; 2], usize) {
+    pub fn chunk_props(&self, cx: i32, cy: i32) -> ChunkProps {
         if !self.on {
-            return props_raw(self.stage, cx, cy);
+            let (ps, n) = props_raw(self.stage, cx, cy);
+            let mut out = [ps[0]; PROPS];
+            out[..n].copy_from_slice(&ps[..n]);
+            return (out, n);
         }
         let (i, j) = (cx - self.props_origin.0, cy - self.props_origin.1);
         if i >= 0 && j >= 0 && i < self.props_n && j < self.props_n {
@@ -513,6 +585,24 @@ mod tests {
         let inside = Vec2::new(x as f32 * CELL + 8.0, y as f32 * CELL + 8.0);
         let out = t.resolve(inside, 6.0);
         assert!((out - inside).length() > 1.0);
+    }
+
+    /// Writes each world's cell flags around the start, for debugging the layout:
+    /// `KZ_TERRAIN_DUMP=/tmp cargo test -p sim dump_terrain -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_terrain() {
+        let dir = std::env::var("KZ_TERRAIN_DUMP").unwrap_or_else(|_| "/tmp".into());
+        for stage in crate::campaign::ALL_STAGES.into_iter().filter(|s| enabled(*s)) {
+            let t = Terrain::new(stage);
+            let mut s = String::from("-80 -45 160 90\n");
+            for y in -45..45 {
+                let row: Vec<String> = (-80..80).map(|x| t.cell(x, y).to_string()).collect();
+                s += &row.join(" ");
+                s.push('\n');
+            }
+            std::fs::write(format!("{dir}/terrain_w{}.txt", stage.index()), s).unwrap();
+        }
     }
 
     /// Prints a map of the start area (cargo test -p sim terrain::tests::map -- --nocapture).
