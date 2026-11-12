@@ -1723,6 +1723,23 @@ pub const ASC_SPEED: f32 = 1.15;
 pub const ASC_BULLET_SPEED: f32 = 1.3;
 pub const ASC_CROWD: f32 = 1.2;
 
+/// Champions: ordinary enemies that sometimes spawn as a tougher, bigger version and split
+/// into `CHAMPION_SPLIT` ordinary copies when they fall. They give 5x XP for the trouble.
+pub const CHAMPION_HP: f32 = 4.0;
+pub const CHAMPION_SIZE: f32 = 1.3;
+pub const CHAMPION_SPEED: f32 = 1.15;
+pub const CHAMPION_DAMAGE: f32 = 1.5;
+pub const CHAMPION_KNOCK: f32 = 0.3;
+pub const CHAMPION_XP: u32 = 5;
+pub const CHAMPION_SPLIT: usize = 3;
+pub const CHAMPION_NIGHTMARE: f32 = 1.5;
+
+/// Share of ordinary spawns that are Champions: none before pace-minute 4, then up to 6% by 15:00.
+pub fn champion_share(t: f32) -> f32 {
+    let m = t / 60.0;
+    (0.06 * (m - 4.0) / 11.0).clamp(0.0, 0.06)
+}
+
 /// Enemy move-speed multiplier over the run (non-bosses): +3.5% per pace-minute, capped at
 /// +50% by 15:00 so the fastest fodder (~58 base) still stays under the player's base 110.
 pub fn speed_scale(t: f32) -> f32 {

@@ -415,6 +415,8 @@ pub struct Enemies {
     /// A Tool Thief's stolen pickup, and seconds left fleeing the player with it.
     pub carry: Vec<Option<PickupKind>>,
     pub flee: Vec<f32>,
+    /// A Champion: a tougher, bigger version that splits into three when it falls.
+    pub champion: Vec<bool>,
 }
 
 impl Enemies {
@@ -458,6 +460,7 @@ impl Enemies {
         self.scatter.swap_remove(i);
         self.scatter_from.swap_remove(i);
         self.carry.swap_remove(i);
+        self.champion.swap_remove(i);
         self.flee.swap_remove(i);
     }
 }
@@ -1398,6 +1401,20 @@ impl World {
         e.scatter_from.push(Vec2::ZERO);
         e.carry.push(None);
         e.flee.push(0.0);
+        e.champion.push(false);
+    }
+
+    /// Turns enemy `i` into a Champion (see `CHAMPION_*`).
+    fn make_champion(&mut self, i: usize) {
+        let e = &mut self.enemies;
+        e.champion[i] = true;
+        e.hp[i] *= CHAMPION_HP;
+        e.max_hp[i] *= CHAMPION_HP;
+        e.radius[i] *= CHAMPION_SIZE;
+        e.speed[i] *= CHAMPION_SPEED;
+        e.damage[i] *= CHAMPION_DAMAGE;
+        e.knock[i] *= CHAMPION_KNOCK;
+        e.xp[i] *= CHAMPION_XP;
     }
 
     fn spawn_boss(&mut self, kind: EnemyKind) {
@@ -1506,7 +1523,13 @@ impl World {
             };
             let r = self.cfg.spawn_radius + self.rng.range(0.0, 80.0);
             let p = self.ring_point(r);
+            let before = self.enemies.len();
             self.spawn_enemy(kind, p);
+            let share = champion_share(pace) * if self.cfg.difficulty == Difficulty::Nightmare { CHAMPION_NIGHTMARE } else { 1.0 };
+            // Only roll once Champions can appear, so early runs keep their random sequence.
+            if share > 0.0 && self.enemies.len() > before && self.rng.f32() < share {
+                self.make_champion(before);
+            }
         }
 
         if self.cfg.stress.is_none() {
@@ -3778,6 +3801,12 @@ impl World {
                 self.player.special = (self.player.special + self.mods.special_rate * (1.0 + self.bonus.special_charge) / SPECIAL_KILLS).min(1.0);
             }
             self.events.push(Event::Kill { pos, kind });
+            if self.enemies.champion[i] {
+                for k in 0..CHAMPION_SPLIT {
+                    let a = k as f32 * std::f32::consts::TAU / CHAMPION_SPLIT as f32;
+                    self.pending_spawns.push((kind, pos + Vec2::from_angle(a) * 14.0));
+                }
+            }
             if self.asc_trait(2) && !kind.is_boss() && self.hazards.len() < 120 && self.rng.f32() < ASC_BURST_CHANCE {
                 let damage = 10.0 * self.enemy_damage_scale();
                 self.hazards.push(Hazard { pos, radius: 30.0, warn: 0.9, life: 0.0, kind: HazardKind::Blast { damage }, tick: 0.0, friendly: false, spare_enemies: true });
@@ -6847,6 +6876,20 @@ mod tests {
         let w = at(3);
         assert!(w.asc_trait(0) && w.asc_trait(1) && w.asc_trait(2) && !w.asc_trait(3));
         assert!((0..ASCENSION_TRAITS.len()).all(|k| at(6).asc_trait(k)));
+    }
+
+    #[test]
+    fn champions_are_tougher_and_split() {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.spawn_enemy(EnemyKind::Wisp, Vec2::new(200.0, 0.0));
+        let (hp, r) = (w.enemies.hp[0], w.enemies.radius[0]);
+        w.make_champion(0);
+        assert!((w.enemies.hp[0] - hp * CHAMPION_HP).abs() < 1e-3 && w.enemies.radius[0] > r);
+        w.enemies.hp[0] = 0.0;
+        w.remove_dead_enemies();
+        assert_eq!(w.pending_spawns.iter().filter(|(k, _)| *k == EnemyKind::Wisp).count(), CHAMPION_SPLIT);
+        assert_eq!(champion_share(0.0), 0.0);
+        assert!(champion_share(900.0) > 0.0);
     }
 
     #[test]

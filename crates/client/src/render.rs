@@ -1397,6 +1397,15 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let c = leader_color();
             draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 3.0, 1.0, Color::new(c.r, c.g, c.b, 0.45));
         }
+        // Champions: a pulsing crimson-gold aura and a warm tint.
+        let tint = if e.champion[i] {
+            let pulse = 0.5 + 0.5 * (time as f32 * 6.0 + i as f32).sin();
+            draw_circle(pos.x, pos.y - 4.0, e.radius[i] + 6.0, Color::new(1.0, 0.35, 0.2, 0.12 + 0.08 * pulse));
+            draw_circle_lines(pos.x, pos.y - 4.0, e.radius[i] + 4.0, 1.5, Color::new(1.0, 0.75, 0.3, 0.55 + 0.3 * pulse));
+            if e.flash[i] > 0 { tint } else { Color::new(1.0, 0.78, 0.6, 1.0) }
+        } else {
+            tint
+        };
         let flip = e.kind[i] != EnemyKind::Wisp && pos.x > p.x;
         let out_of_reach = !world.in_reach(pos, e.radius[i]);
         if e.kind[i] == EnemyKind::GreatOni {
