@@ -98,9 +98,14 @@ void main() {
     } else if (L(vec2(0.0, -26.0)) - lv > 0.5) {
         c *= 1.0 - 0.38 * (1.0 - r);
     }
-    // Stairs where a trail climbs.
-    float climb = abs(L(vec2(0.0, -10.0)) - L(vec2(0.0, 10.0))) + abs(L(vec2(-10.0, 0.0)) - L(vec2(10.0, 0.0)));
-    if (r > 0.3 && climb > 0.5) { c = mix(c, texture2D(StairsTex, w / 32.0).rgb, 0.9 * r); }
+    // Stairs where a trail climbs, turned so the top step faces uphill (the texture climbs
+    // towards its top edge; the slope's direction is snapped to one of four).
+    float gx = L(vec2(10.0, 0.0)) - L(vec2(-10.0, 0.0));
+    float gy = L(vec2(0.0, 10.0)) - L(vec2(0.0, -10.0));
+    if (r > 0.3 && abs(gx) + abs(gy) > 0.5) {
+        vec2 st = abs(gx) > abs(gy) ? vec2(w.y, gx > 0.0 ? -w.x : w.x) : vec2(w.x, gy > 0.0 ? -w.y : w.y);
+        c = mix(c, texture2D(StairsTex, st / 32.0).rgb, 0.9 * r);
+    }
     // Dark rims where the ground drops north, west or east; a light lip atop south faces.
     if (r < 0.5) {
         if (lv - L(vec2(0.0, -5.0)) > 0.5 || lv - L(vec2(-5.0, 0.0)) > 0.5 || lv - L(vec2(5.0, 0.0)) > 0.5) { c *= 0.55; }
@@ -175,7 +180,7 @@ impl Baker {
         let mut textures = Vec::new();
         let material = match material {
             Ok(m) => {
-                for (name, file, contrast) in [("LowTex", "low", 0.6), ("GroundA", "ground_a", 0.6), ("GroundB", "ground_b", 0.6), ("HighTex", "high", 0.6), ("TrailTex", "trail", 1.0), ("StairsTex", "stairs", 1.0), ("CliffTex", "cliff", 1.0)] {
+                for (name, file, contrast) in [("LowTex", "low", 0.6), ("GroundA", "ground_a", 0.6), ("GroundB", "ground_b", 0.6), ("HighTex", "high", 0.6), ("TrailTex", "trail", 0.7), ("StairsTex", "stairs", 1.0), ("CliffTex", "cliff", 1.0)] {
                     let t = ground_texture(&format!("w{w}/{file}"), contrast);
                     m.set_texture(name, t.clone());
                     textures.push(t);

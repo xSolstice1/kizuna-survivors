@@ -44,6 +44,15 @@ const CACHE: i32 = 256;
 const FLOW: i32 = 112;
 const UNREACHED: u16 = u16::MAX;
 
+/// City worlds (Rainward 13, Shatterline Crossing) lay out as city blocks: straight streets
+/// and square raised plazas or sunken lots. The others are organic hills and hollows.
+pub fn city(stage: StageId) -> bool {
+    matches!(stage, StageId::Rainward | StageId::Shatterline)
+}
+
+/// City block size, in cells (a road runs every 3 blocks).
+const BLOCK: f32 = 8.0;
+
 /// Whether a stage has terrain (the prologue streets stay flat).
 pub fn enabled(stage: StageId) -> bool {
     stage != StageId::Shotengai
@@ -75,7 +84,13 @@ pub const HIGH_ABOVE: f32 = 0.62;
 /// The client draws its contour lines; the sim rounds it to cells.
 pub fn height_cells(stage: StageId, x: f32, y: f32) -> f32 {
     let s = salt(stage);
-    let n = noise(x / 15.0, y / 15.0, s) * 0.7 + noise(x / 6.0, y / 6.0, s + 1) * 0.3;
+    let n = if city(stage) {
+        // One height per city block (sampled at its centre), so levels change on block lines.
+        let (bx, by) = ((x / BLOCK).floor() + 0.5, (y / BLOCK).floor() + 0.5);
+        noise(bx / 2.2, by / 2.2, s) * 0.75 + noise(bx / 0.9, by / 0.9, s + 1) * 0.25
+    } else {
+        noise(x / 15.0, y / 15.0, s) * 0.7 + noise(x / 6.0, y / 6.0, s + 1) * 0.3
+    };
     // Flat around the start.
     let d = (x * x + y * y).sqrt();
     if d < CLEAR + 8.0 {
@@ -100,7 +115,7 @@ pub fn road_distance(stage: StageId, p: Vec2) -> f32 {
         let k0 = (c / ROAD_EVERY as f32).round();
         for dk in -1..=1 {
             let k = k0 + dk as f32;
-            let wob = (noise(t / 18.0, k * 3.7, s + off) - 0.5) * 9.0;
+            let wob = if city(stage) { 0.0 } else { (noise(t / 18.0, k * 3.7, s + off) - 0.5) * 9.0 };
             best = best.min((c - (k * ROAD_EVERY as f32 + wob + 0.5)).abs());
         }
     }
@@ -125,6 +140,9 @@ fn level_raw(stage: StageId, cx: i32, cy: i32) -> u8 {
 
 /// Sideways offset (cells) of road `k` at position `t` along it.
 fn wobble(stage: StageId, k: i32, t: i32, salt_off: u32) -> i32 {
+    if city(stage) {
+        return 0; // straight streets
+    }
     ((noise(t as f32 / 18.0, k as f32 * 3.7, salt(stage) + salt_off) - 0.5) * 9.0).round() as i32
 }
 
@@ -607,8 +625,26 @@ mod tests {
 
     /// Prints a map of the start area (cargo test -p sim terrain::tests::map -- --nocapture).
     #[test]
+    fn city_worlds_connect_too() {
+        for stage in [StageId::Rainward, StageId::Shatterline] {
+            let mut t = Terrain::new(stage);
+            t.update_flow(Vec2::ZERO);
+            let (mut road, mut reached) = (0, 0);
+            for y in -40..40 {
+                for x in -40..40 {
+                    if t.cell(x, y) & ROAD != 0 {
+                        road += 1;
+                        reached += t.distance(Vec2::new(x as f32 * CELL + 1.0, y as f32 * CELL + 1.0)).is_some() as u32;
+                    }
+                }
+            }
+            assert!(road > 100 && reached as f32 > road as f32 * 0.97, "{stage:?}: {reached}/{road} road cells reachable");
+        }
+    }
+
+    #[test]
     fn map() {
-        let t = Terrain::new(W1);
+        let t = Terrain::new(std::env::var("KZ_MAP_W5").map_or(W1, |_| StageId::Shatterline));
         let mut s = String::new();
         for y in -30..30 {
             for x in -60..60 {
