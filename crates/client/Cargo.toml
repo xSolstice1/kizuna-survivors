@@ -7,6 +7,8 @@ edition = "2021"
 sim = { path = "../sim" }
 macroquad = "0.4"
 serde_json = "1"
+# macroquad decodes images with this crate; JPEG is added for the (opaque) terrain textures.
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
 
 # Audio is always on in the browser. Natively it needs libasound, so it's opt-in:
 # `cargo run -p client --features native-audio`.

@@ -4,8 +4,8 @@
 //! hills and valleys. Each 16-unit cell has a level (0 low, 1 ground, 2 high) from smooth noise
 //! flattened into plateaus. Where the level changes there is a **cliff**: a wall for players
 //! and enemies alike (nobody falls off; projectiles fly over). In the top-down view a drop to
-//! the south shows its rock face below the edge, so that wall is the lower cell under the
-//! face; drops to the other sides are walled on the higher cell (its rim). Either way every
+//! the south shows its rock face below the edge (`FACE_CELLS` tall), so that wall is the
+//! lower cells under the face; drops to the other sides are walled on the higher cell (its rim). Either way every
 //! pair of side-by-side cells at different levels has a wall between them. The only way between levels is a
 //! **road**: wavy roads run every `ROAD_EVERY` cells in both directions and ramp over every
 //! level change they cross. The start is a clearing on a road crossing, so the player is always
@@ -28,6 +28,8 @@ use crate::Vec2;
 
 pub const CELL: f32 = 16.0;
 pub const ROAD_EVERY: i32 = 24;
+/// A south-facing rock face is this many cells tall (drawn below the edge, walled in the sim).
+pub const FACE_CELLS: i32 = 2;
 /// Roads are this many cells wide on each side of their centre line (3 cells = 48 units).
 const ROAD_HALF: i32 = 1;
 /// The start clearing (cells): never a cliff.
@@ -89,10 +91,22 @@ pub fn height_cells(stage: StageId, x: f32, y: f32) -> f32 {
         let (bx, by) = ((x / BLOCK).floor() + 0.5, (y / BLOCK).floor() + 0.5);
         noise(bx / 2.2, by / 2.2, s) * 0.75 + noise(bx / 0.9, by / 0.9, s + 1) * 0.25
     } else {
-        noise(x / 15.0, y / 15.0, s) * 0.7 + noise(x / 6.0, y / 6.0, s + 1) * 0.3
+        // Each octave on its own turned lattice, with a gentle warp, so contours wind
+        // organically instead of following the noise grid.
+        let rot = |a: f32, x: f32, y: f32| (x * a.cos() - y * a.sin(), x * a.sin() + y * a.cos());
+        let wx = (noise(x / 9.0, y / 9.0, s + 5) - 0.5) * 3.0;
+        let wy = (noise(x / 9.0, y / 9.0, s + 6) - 0.5) * 3.0;
+        let (ax, ay) = rot(0.62, x + wx, y + wy);
+        let (bx, by) = rot(-1.13, x + wx, y + wy);
+        noise(ax / 15.0, ay / 15.0, s) * 0.7 + noise(bx / 6.0, by / 6.0, s + 1) * 0.3
     };
-    // Flat around the start.
-    let d = (x * x + y * y).sqrt();
+    // Flat around the start (in cities, judged per block so block edges stay straight).
+    let d = if city(stage) {
+        let (bx, by) = (((x / BLOCK).floor() + 0.5) * BLOCK, ((y / BLOCK).floor() + 0.5) * BLOCK);
+        (bx * bx + by * by).sqrt()
+    } else {
+        (x * x + y * y).sqrt()
+    };
     if d < CLEAR + 8.0 {
         let k = smooth(((d - CLEAR) / 8.0).clamp(0.0, 1.0));
         0.5 + (n - 0.5) * k
@@ -108,18 +122,25 @@ pub fn height(stage: StageId, p: Vec2) -> f32 {
 
 /// Distance (cells, continuous) from a world position to the nearest road centre line.
 pub fn road_distance(stage: StageId, p: Vec2) -> f32 {
+    let (v, h) = road_distances(stage, p);
+    v.min(h)
+}
+
+/// Distances (cells, continuous) to the nearest north-south road and the nearest east-west
+/// road centre lines.
+pub fn road_distances(stage: StageId, p: Vec2) -> (f32, f32) {
     let s = salt(stage);
     let (x, y) = (p.x / CELL, p.y / CELL);
-    let mut best = f32::MAX;
-    for (c, t, off) in [(x, y, 11u32), (y, x, 23u32)] {
+    let mut best = [f32::MAX; 2];
+    for (i, (c, t, off)) in [(x, y, 11u32), (y, x, 23u32)].into_iter().enumerate() {
         let k0 = (c / ROAD_EVERY as f32).round();
         for dk in -1..=1 {
             let k = k0 + dk as f32;
             let wob = if city(stage) { 0.0 } else { (noise(t / 18.0, k * 3.7, s + off) - 0.5) * 9.0 };
-            best = best.min((c - (k * ROAD_EVERY as f32 + wob + 0.5)).abs());
+            best[i] = best[i].min((c - (k * ROAD_EVERY as f32 + wob + 0.5)).abs());
         }
     }
-    best
+    (best[0], best[1])
 }
 
 /// The raw level of a cell, before cliffs and roads.
@@ -169,18 +190,18 @@ pub fn cell_raw(stage: StageId, cx: i32, cy: i32) -> u8 {
             *v = level_raw(stage, cx + i as i32 - 1, cy + j as i32 - 1);
         }
     }
-    flags(n, is_road(stage, cx, cy), clear(cx, cy))
+    flags(n, level_raw(stage, cx, cy - 2), is_road(stage, cx, cy), clear(cx, cy))
 }
 
 /// A cell's flags from its 3x3 neighbourhood of levels (`n[1][1]` is the cell; `n[0]` is the
-/// row above, i.e. north).
-fn flags(n: [[u8; 3]; 3], road: bool, clear: bool) -> u8 {
+/// row above, i.e. north; `above2` is the level two cells north).
+fn flags(n: [[u8; 3]; 3], above2: u8, road: bool, clear: bool) -> u8 {
     let me = n[1][1];
     let mut f = me;
     // Rim: lower ground to the north, west or east (or diagonally above).
     let rim = [n[0][0], n[0][1], n[0][2], n[1][0], n[1][2]].iter().any(|&l| l < me);
-    // Under a south-facing rock face: higher ground right above.
-    let under_face = n[0][1] > me;
+    // Under a south-facing rock face (FACE_CELLS tall): higher ground one or two cells above.
+    let under_face = n[0][1] > me || above2 > me;
     let change = n.iter().flatten().any(|&l| l != me);
     if road {
         f |= ROAD;
@@ -236,28 +257,28 @@ impl Terrain {
             return;
         }
         self.origin = (cx - CACHE / 2, cy - CACHE / 2);
-        // Levels first (with a 1-cell border), then flags from neighbours: one noise read per cell.
-        let n = (CACHE + 2) as usize;
+        // Levels first (with a 2-cell border), then flags from neighbours: one noise read per cell.
+        let n = (CACHE + 4) as usize;
         let mut lv = vec![0u8; n * n];
         let mut road = vec![false; n * n];
         for j in 0..n {
             for i in 0..n {
-                let (x, y) = (self.origin.0 + i as i32 - 1, self.origin.1 + j as i32 - 1);
+                let (x, y) = (self.origin.0 + i as i32 - 2, self.origin.1 + j as i32 - 2);
                 lv[j * n + i] = level_raw(self.stage, x, y);
                 road[j * n + i] = is_road(self.stage, x, y);
             }
         }
         self.cells = vec![0; (CACHE * CACHE) as usize];
-        for j in 1..n - 1 {
-            for i in 1..n - 1 {
+        for j in 2..n - 2 {
+            for i in 2..n - 2 {
                 let mut nb = [[0u8; 3]; 3];
                 for (dj, row) in nb.iter_mut().enumerate() {
                     for (di, v) in row.iter_mut().enumerate() {
                         *v = lv[(j + dj - 1) * n + (i + di - 1)];
                     }
                 }
-                let (x, y) = (self.origin.0 + i as i32 - 1, self.origin.1 + j as i32 - 1);
-                self.cells[(j - 1) * CACHE as usize + (i - 1)] = flags(nb, road[j * n + i], clear(x, y));
+                let (x, y) = (self.origin.0 + i as i32 - 2, self.origin.1 + j as i32 - 2);
+                self.cells[(j - 2) * CACHE as usize + (i - 2)] = flags(nb, lv[(j - 2) * n + i], road[j * n + i], clear(x, y));
             }
         }
         // Props for every chunk fully inside the window.

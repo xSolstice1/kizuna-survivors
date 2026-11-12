@@ -7189,7 +7189,8 @@ mod tests {
 
     #[test]
     fn leader_brings_a_crew() {
-        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, ..Default::default() });
+        // The flat prologue, so no cliff moves a crew member off its ring.
+        let mut w = World::new(WorldConfig { stage: StageId::Shotengai, ..Default::default() });
         let st = w.stage();
         w.spawn_leader();
         assert_eq!(live_leaders(&w), 1);
@@ -7777,7 +7778,7 @@ mod tests {
         // A reachable cell whose walking distance is much longer than the straight line.
         use crate::terrain::CELL;
         let mut start = None;
-        'search: for r in 12..30 {
+        'search: for r in 12..48 {
             for k in 0..64 {
                 let p = Vec2::from_angle(k as f32 / 64.0 * std::f32::consts::TAU) * (r as f32 * CELL);
                 if let Some(d) = w.terrain.distance(p) {

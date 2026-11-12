@@ -2,12 +2,16 @@
 //!
 //! The sim keeps high and low ground as 16-unit cells (collision); this draws the smooth field
 //! behind them (`sim::terrain::height`), so edges are organic. For each 256-unit chunk the CPU
-//! samples the field on a coarse grid (one texel every 4 units, ~1 ms) into a small "mask"
-//! texture: level, trail share and a slow patch value. The GPU does the per-pixel work, reading
-//! the mask with hardware interpolation: the level's ground texture (soft edges), patches and
-//! brightness variation, winding trails with stairs where they climb, a rock face below every
-//! south-facing edge with a shadow at its foot, and a dark rim on the other edges.
-//! `tools/ai/terrain_bake.py` is the same recipe in numpy, for trying changes quickly.
+//! samples the field on a coarse grid (one texel every 4 units) into a small "mask" texture:
+//! the height around each of the two level thresholds (R: low/ground, B: ground/high, scaled so
+//! 8 bits are precise near the contour), the distance to a road (G) and a slow patch value (A).
+//! Hardware interpolation turns those into smooth fields, so the GPU gets clean, anti-aliased
+//! contours at any zoom: signed distance = field / gradient. Per pixel it draws the level's
+//! ground (low ground darker and cooler, high ground brighter), a rock face below every edge
+//! that has higher ground to the north (its depth found by marching up the field, so the face
+//! texture is continuous), a shadow at its foot, a lip of light on top, dark rims and soft
+//! shadows on the other edges, and roads that become one flight of stairs where they cross.
+//! Textures come from art/hd/<world>/terrain (see `tools/ai/terrain_hd.py`).
 //!
 //! Material uniforms apply per pipeline when the batch flushes, so nothing here is set per
 //! chunk: the vertex shader passes the world position, and each chunk's mask sits in its
@@ -18,20 +22,22 @@ use std::collections::HashMap;
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation, TextureWrap};
 use macroquad::prelude::*;
 use sim::campaign::StageId;
-use sim::terrain::{height, road_distance, HIGH_ABOVE, LOW_BELOW};
+use sim::terrain::{height, road_distances, HIGH_ABOVE, LOW_BELOW};
 
 use crate::sprites;
 
 /// World units per chunk.
 pub const CHUNK: f32 = 256.0;
-/// Mask: one texel every STEP units, with MARGIN units around the chunk (edge effects look
-/// up to ~26 units away).
+/// Mask: one texel every STEP units, with MARGIN units around the chunk (faces look up to
+/// FACE + 16 units north).
 const STEP: f32 = 4.0;
-const MARGIN: f32 = 32.0;
+const MARGIN: f32 = 56.0;
+/// Height around a threshold is stored as (h - threshold) * K + 0.5.
+const K: f32 = 8.0;
 const G: usize = ((CHUNK + 2.0 * MARGIN) / STEP) as usize;
 const KEEP: usize = 48;
 /// New masks per frame (each ~1 ms).
-const PER_FRAME: usize = 3;
+const PER_FRAME: usize = 2;
 
 const VERTEX: &str = r#"#version 100
 attribute vec3 position;
@@ -67,60 +73,134 @@ uniform sampler2D HighTex;
 uniform sampler2D TrailTex;
 uniform sampler2D StairsTex;
 uniform sampler2D CliffTex;
+uniform sampler2D PatchTex;
 uniform vec2 MaskScale;
+uniform float Exposure;
+
+// A south rock face is FACE units tall (2 sim cells); its foot shadow SHADOW more.
+const float FACE = 32.0;
+const float SHADOW = 16.0;
 
 float sm(float t) { t = clamp(t, 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
-// The level (0 low, 1 ground, 2 high) `d` world units from here.
-float L(vec2 d) { return texture2D(Texture, uv + d * MaskScale).r * 2.0; }
+vec4 M(vec2 d) { return texture2D(Texture, uv + d * MaskScale); }
+
+// How far north (units) the field `ch` (0: low edge, 1: high edge) turns positive, from a pixel
+// where it is f0 < 0; -1 if not within FACE + SHADOW. Linear between 4-unit samples (the mask's
+// own resolution), so the depth is continuous.
+float upEdge(float f0, float ch) {
+    float prev = f0;
+    for (int k = 1; k <= 12; k++) {
+        vec4 s = M(vec2(0.0, -4.0 * float(k)));
+        float f = mix(s.r, s.b, ch) - 0.5;
+        if (f >= 0.0) { return 4.0 * (float(k - 1) + prev / (prev - f)); }
+        prev = f;
+    }
+    return -1.0;
+}
 
 void main() {
     vec2 w = world;
-    vec4 m = texture2D(Texture, uv);
-    float lv = m.r * 2.0;
-    float r = m.g;
-    float pr = m.b;
-    float lo = clamp(1.0 - lv, 0.0, 1.0);
-    float hi = clamp(lv - 1.0, 0.0, 1.0);
+    vec4 m = M(vec2(0.0));
+    vec4 ex = M(vec2(4.0, 0.0)) - M(vec2(-4.0, 0.0));
+    vec4 ey = M(vec2(0.0, 4.0)) - M(vec2(0.0, -4.0));
+    // Signed distances (units) to the two contours, positive on the higher side.
+    vec2 gl = vec2(ex.r, ey.r) / 8.0;
+    vec2 gh = vec2(ex.b, ey.b) / 8.0;
+    float sl = (m.r - 0.5) / max(length(gl), 1e-5);
+    float sh = (m.b - 0.5) / max(length(gh), 1e-5);
+    float lo = clamp(0.5 - sl / 1.2, 0.0, 1.0);
+    float hi = clamp(0.5 + sh / 1.2, 0.0, 1.0);
     float mid = clamp(1.0 - lo - hi, 0.0, 1.0);
-    vec3 g = mix(texture2D(GroundA, w / 64.0).rgb, texture2D(GroundB, w / 64.0).rgb, sm((pr - 0.5) * 5.0 + 0.5));
-    vec3 c = texture2D(LowTex, w / 64.0).rgb * lo + g * mid + texture2D(HighTex, w / 64.0).rgb * hi;
+    // Roads: G is the distance to a north-south road, A to an east-west one (cells / 4).
+    bool ns = m.g < m.a;
+    float rd = min(m.g, m.a);
+    float r = 1.0 - sm((rd * 4.0 - 1.55) / 0.4);
+    float pr = texture2D(PatchTex, w / 1024.0).r;
+
+    // Ground: each level its own texture and light (hollows dim and cool, plateaus bright).
+    vec2 tw = w / 128.0;
+    vec3 g = mix(texture2D(GroundA, tw).rgb, texture2D(GroundB, tw).rgb, sm((pr - 0.5) * 5.0 + 0.5));
+    vec3 c = texture2D(LowTex, tw).rgb * lo * vec3(0.6, 0.66, 0.8) + g * mid + texture2D(HighTex, tw).rgb * hi * vec3(1.25, 1.22, 1.15);
     c *= 0.92 + 0.16 * pr;
-    c = mix(c, texture2D(TrailTex, w / 48.0).rgb, r);
-    // A rock face below a south-facing edge: depth from the edge picks the texture row.
-    float edge = -1.0;
-    for (int k = 1; k <= 6; k++) {
-        float d = float(k) * 3.0;
-        if (edge < 0.0 && L(vec2(0.0, -d)) - lv > 0.5) { edge = d; }
+    // Plateaus catch light towards their edges; hollows darken near the walls around them.
+    c *= 1.0 + 0.14 * hi * (1.0 - sm(sh / 24.0));
+    float occl = max((1.0 - sm(-sl / 24.0)) * step(sl, 0.0), (1.0 - sm(-sh / 24.0)) * step(sh, 0.0));
+    c *= 1.0 - 0.4 * occl * (1.0 - 0.6 * r);
+    vec3 trail = texture2D(TrailTex, tw).rgb;
+    c = mix(c, trail, r);
+
+    // Rims: a dark band on the high side of edges that don't face south, a lip of light on
+    // the top of south faces.
+    for (int i = 0; i < 2; i++) {
+        float s = i == 0 ? sl : sh;
+        vec2 gr = i == 0 ? gl : gh;
+        float south = sm((-normalize(gr + 1e-6).y - 0.35) / 0.4);
+        float band = (1.0 - sm(s / 4.0)) * step(0.0, s) * (1.0 - r);
+        c *= 1.0 - band * (0.42 * (1.0 - south));
+        c *= 1.0 + band * 0.22 * south * (1.0 - sm(s / 2.0));
     }
-    bool face = edge > 0.0 && r < 0.5;
-    if (face) {
-        c = mix(c, texture2D(CliffTex, vec2(w.x / 64.0, min(edge / 18.0, 1.0) * 0.98)).rgb, 1.0 - r);
-    } else if (L(vec2(0.0, -26.0)) - lv > 0.5) {
-        c *= 1.0 - 0.38 * (1.0 - r);
+
+    // Where a road crosses an edge: how far along the road (units) this pixel is from where
+    // the edge crosses the road's centre line, positive on the higher side. Measured at the
+    // centre line, so each flight of stairs runs straight across the road.
+    float aL = 99.0;
+    float aH = 99.0;
+    vec2 across = vec2(1.0, 0.0);
+    if (r > 0.02) {
+        // The road's axis and the point on its centre line level with this pixel.
+        across = ns ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+        vec2 trav = ns ? vec2(0.0, 1.0) : vec2(1.0, 0.0);
+        vec2 toc = ns ? vec2(-sign(ex.g) * m.g * 64.0, 0.0) : vec2(0.0, -sign(ey.a) * m.a * 64.0);
+        vec4 mc = M(toc);
+        float cl = abs(dot(normalize(gl + 1e-6), trav));
+        float chh = abs(dot(normalize(gh + 1e-6), trav));
+        if (cl > 0.3) { aL = (mc.r - 0.5) / max(length(gl), 1e-5) / cl; }
+        if (chh > 0.3) { aH = (mc.b - 0.5) / max(length(gh), 1e-5) / chh; }
     }
-    // Stairs where a trail climbs, turned so the top step faces uphill (the texture climbs
-    // towards its top edge; the slope's direction is snapped to one of four).
-    float gx = L(vec2(10.0, 0.0)) - L(vec2(-10.0, 0.0));
-    float gy = L(vec2(0.0, 10.0)) - L(vec2(0.0, -10.0));
-    if (r > 0.3 && abs(gx) + abs(gy) > 0.5) {
-        vec2 st = abs(gx) > abs(gy) ? vec2(w.y, gx > 0.0 ? -w.x : w.x) : vec2(w.x, gy > 0.0 ? -w.y : w.y);
-        c = mix(c, texture2D(StairsTex, st / 32.0).rgb, 0.9 * r);
+    float onRoad = sm((r - 0.25) / 0.5);
+
+    // Rock faces below edges with higher ground to the north: the higher edge first, the
+    // nearer (lower) edge drawn over it. A road crossing a face is one flight of stairs.
+    float faced = 0.0;
+    for (int i = 0; i < 2; i++) {
+        float ch = i == 0 ? 1.0 : 0.0;
+        float f0 = mix(m.r, m.b, ch) - 0.5;
+        if (f0 >= 0.0) { continue; }
+        float d = upEdge(f0, ch);
+        if (d < 0.0) { continue; }
+        if (d < FACE) {
+            float v = d / FACE;
+            vec3 rock = texture2D(CliffTex, vec2(w.x / 64.0, v * 0.97 + 0.015)).rgb * (1.05 - 0.3 * v);
+            rock *= 1.0 - 0.35 * sm((v - 0.8) / 0.2);
+            float a = mix(aL, aH, ch);
+            float sv = clamp(-a / FACE, 0.0, 1.0);
+            vec3 stairs = texture2D(StairsTex, vec2(dot(w, across) / 64.0, sv * 0.97 + 0.015)).rgb;
+            stairs *= 1.0 - 0.25 * sv;
+            c = mix(rock, stairs, onRoad * step(abs(a), FACE + 4.0));
+            faced = 1.0;
+        } else if (faced < 0.5) {
+            c *= 1.0 - 0.45 * (1.0 - sm((d - FACE) / SHADOW)) * (1.0 - r);
+        }
     }
-    // Dark rims where the ground drops north, west or east; a light lip atop south faces.
-    if (r < 0.5) {
-        if (lv - L(vec2(0.0, -5.0)) > 0.5 || lv - L(vec2(-5.0, 0.0)) > 0.5 || lv - L(vec2(5.0, 0.0)) > 0.5) { c *= 0.55; }
-        if (lv - L(vec2(0.0, 3.0)) > 0.5) { c *= 1.25; }
+
+    // Roads over the other edges: a flight across the road, climbing to the higher side.
+    const float BAND = 20.0;
+    if (faced < 0.5 && onRoad > 0.0) {
+        for (int i = 0; i < 2; i++) {
+            float a = i == 0 ? aL : aH;
+            vec2 gr = i == 0 ? gl : gh;
+            if (abs(a) < BAND && -normalize(gr + 1e-6).y < 0.35) {
+                float sv = (BAND - a) / (2.0 * BAND);
+                vec3 stairs = texture2D(StairsTex, vec2(dot(w, across) / 64.0, sv * 0.97 + 0.015)).rgb * (1.0 - 0.2 * sv);
+                c = mix(c, stairs, onRoad * (1.0 - sm((abs(a) - BAND + 3.0) / 3.0)));
+            }
+        }
     }
-    gl_FragColor = vec4(c * color.rgb, 1.0);
+    gl_FragColor = vec4(c * Exposure * color.rgb, 1.0);
 }
 "#;
 
-const SAMPLERS: [&str; 7] = ["LowTex", "GroundA", "GroundB", "HighTex", "TrailTex", "StairsTex", "CliffTex"];
-
-fn sm(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
+const SAMPLERS: [&str; 8] = ["LowTex", "GroundA", "GroundB", "HighTex", "TrailTex", "StairsTex", "CliffTex", "PatchTex"];
 
 /// A ground texture with its contrast softened around the mean (busy tiles read calmer),
 /// tiling (repeat wrap) and mipmapped where the GPU allows.
@@ -153,6 +233,32 @@ fn ground_texture(path: &str, contrast: f32) -> Texture2D {
     t
 }
 
+/// Slow light/dark variation across the ground (which of the two ground textures shows):
+/// smooth value noise on a wrapping 8x8 lattice, 1024 world units per repeat.
+fn patch_texture() -> Texture2D {
+    const N: usize = 128;
+    const L: i32 = 8;
+    let v = |x: i32, y: i32| (sim::stage::hash(x.rem_euclid(L), y.rem_euclid(L), 7) & 0xFFFF) as f32 / 65535.0;
+    let s = |t: f32| t * t * (3.0 - 2.0 * t);
+    let mut px = vec![255u8; N * N * 4];
+    for j in 0..N {
+        for i in 0..N {
+            let (x, y) = (i as f32 / N as f32 * L as f32, j as f32 / N as f32 * L as f32);
+            let (xi, yi) = (x.floor() as i32, y.floor() as i32);
+            let (fx, fy) = (s(x - xi as f32), s(y - yi as f32));
+            let top = v(xi, yi) + (v(xi + 1, yi) - v(xi, yi)) * fx;
+            let bot = v(xi, yi + 1) + (v(xi + 1, yi + 1) - v(xi, yi + 1)) * fx;
+            let k = (j * N + i) * 4;
+            px[k..k + 3].fill(((top + (bot - top) * fy) * 255.0) as u8);
+        }
+    }
+    let t = Texture2D::from_rgba8(N as u16, N as u16, &px);
+    t.set_filter(FilterMode::Linear);
+    let gl = unsafe { get_internal_gl() };
+    gl.quad_context.texture_set_wrap(t.raw_miniquad_id(), TextureWrap::Repeat, TextureWrap::Repeat);
+    t
+}
+
 pub struct Baker {
     stage: StageId,
     material: Option<Material>,
@@ -169,7 +275,7 @@ impl Baker {
         let material = load_material(
             ShaderSource::Glsl { vertex: VERTEX, fragment: FRAGMENT },
             MaterialParams {
-                uniforms: vec![UniformDesc::new("MaskScale", UniformType::Float2)],
+                uniforms: vec![UniformDesc::new("MaskScale", UniformType::Float2), UniformDesc::new("Exposure", UniformType::Float1)],
                 textures: SAMPLERS.iter().map(|s| s.to_string()).collect(),
                 pipeline_params: PipelineParams {
                     color_blend: Some(BlendState::new(Equation::Add, BlendFactor::Value(BlendValue::SourceAlpha), BlendFactor::OneMinusValue(BlendValue::SourceAlpha))),
@@ -180,11 +286,14 @@ impl Baker {
         let mut textures = Vec::new();
         let material = match material {
             Ok(m) => {
-                for (name, file, contrast) in [("LowTex", "low", 0.6), ("GroundA", "ground_a", 0.6), ("GroundB", "ground_b", 0.6), ("HighTex", "high", 0.6), ("TrailTex", "trail", 0.7), ("StairsTex", "stairs", 1.0), ("CliffTex", "cliff", 1.0)] {
-                    let t = ground_texture(&format!("w{w}/{file}"), contrast);
+                for (name, file, contrast) in [("LowTex", "low", 0.7), ("GroundA", "ground_a", 0.7), ("GroundB", "ground_b", 0.7), ("HighTex", "high", 0.7), ("TrailTex", "trail", 0.8), ("StairsTex", "stairs", 1.0), ("CliffTex", "cliff", 1.0)] {
+                    let t = ground_texture(&format!("w{w}/terrain/{file}"), contrast);
                     m.set_texture(name, t.clone());
                     textures.push(t);
                 }
+                let p = patch_texture();
+                m.set_texture("PatchTex", p.clone());
+                textures.push(p);
                 m.set_uniform("MaskScale", vec2(1.0 / (G as f32 * STEP), 1.0 / (G as f32 * STEP)));
                 Some(m)
             }
@@ -193,7 +302,7 @@ impl Baker {
                 None
             }
         };
-        let im = sprites::hd_image(&format!("w{w}/ground_a"));
+        let im = sprites::hd_image(&format!("w{w}/terrain/ground_a"));
         let n = (im.bytes.len() / 4) as f32;
         let mut m = [0.0f32; 3];
         for c in im.bytes.chunks(4) {
@@ -201,27 +310,36 @@ impl Baker {
                 m[i] += c[i] as f32 / n / 255.0;
             }
         }
-        Baker { stage, material, _textures: textures, fill: Color::new(m[0], m[1], m[2], 1.0), chunks: HashMap::new() }
+        // Night worlds with very dark ground are lifted so their levels still read.
+        let exposure = (0.17 / (0.3 * m[0] + 0.59 * m[1] + 0.11 * m[2]).max(0.01)).clamp(1.0, 1.6);
+        if let Some(mat) = &material {
+            mat.set_uniform("Exposure", exposure);
+        }
+        let fill = Color::new(m[0] * exposure, m[1] * exposure, m[2] * exposure, 1.0);
+        Baker { stage, material, _textures: textures, fill, chunks: HashMap::new() }
     }
 
     pub fn stage(&self) -> StageId {
         self.stage
     }
 
-    /// A chunk's mask: level / 2 (R), trail share (G), slow patch value (B), sampled at the
-    /// centre of each texel.
+    /// A chunk's mask, sampled at the centre of each texel: the height around the low (R) and
+    /// high (B) thresholds, distance to a north-south (G) and an east-west road (A), cells / 4.
     fn mask(&self, key: (i32, i32)) -> Texture2D {
         let o = vec2(key.0 as f32 * CHUNK - MARGIN, key.1 as f32 * CHUNK - MARGIN);
-        let lv = |h: f32| sm((h - LOW_BELOW) / 0.012 + 0.5) + sm((h - HIGH_ABOVE) / 0.012 + 0.5);
+        let enc = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let mut px = vec![255u8; G * G * 4];
         for j in 0..G {
             for i in 0..G {
                 let p = o + vec2((i as f32 + 0.5) * STEP, (j as f32 + 0.5) * STEP);
                 let q = sim::Vec2::new(p.x, p.y);
                 let k = (j * G + i) * 4;
-                px[k] = (lv(height(self.stage, q)) / 2.0 * 255.0).round() as u8;
-                px[k + 1] = (sm((1.9 - road_distance(self.stage, q)) / 0.5) * 255.0).round() as u8;
-                px[k + 2] = (sim::terrain::noise(p.x / 90.0, p.y / 90.0, 7) * 255.0).round() as u8;
+                let h = height(self.stage, q);
+                px[k] = enc((h - LOW_BELOW) * K + 0.5);
+                let (dv, dh) = road_distances(self.stage, q);
+                px[k + 1] = enc(dv / 4.0);
+                px[k + 2] = enc((h - HIGH_ABOVE) * K + 0.5);
+                px[k + 3] = enc(dh / 4.0);
             }
         }
         let t = Texture2D::from_rgba8(G as u16, G as u16, &px);

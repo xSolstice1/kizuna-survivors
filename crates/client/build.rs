@@ -1,6 +1,8 @@
 //! Indexes the art: every `art/src/**/*.px` (pixel source) and every `art/hd/**/*.png`
 //! (high-resolution redraw, 4x the pixel size). `sprites::art("w1/boss")` then embeds the
-//! HD PNG when one exists and falls back to the pixel source otherwise.
+//! HD PNG when one exists and falls back to the pixel source otherwise. Opaque textures (the
+//! terrain) may be `.jpg` instead, much smaller; they are indexed the same way, by path
+//! without the extension.
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +27,7 @@ fn main() {
     let (mut pxs, mut pngs) = (Vec::new(), Vec::new());
     walk(&src, "px", &mut pxs);
     walk(&hd, "png", &mut pngs);
+    walk(&hd, "jpg", &mut pngs);
     pxs.sort();
     pngs.sort();
     let mut s = String::new();
