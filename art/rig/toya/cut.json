@@ -1,0 +1,83 @@
+{
+ "sources": {
+  "full": "art/ai/raw/toya_hero_gemini-3-pro-image_0.png",
+  "nohair": "art/ai/raw/toya_L_nohair_gemini-nano-banana-2.1_0.png",
+  "noarms": "art/ai/raw/toya_L_noarms_gemini-nano-banana-2.1_0.png"
+ },
+ "hip_y": 800,
+ "hem_y": 800,
+ "neck": [
+  540,
+  505
+ ],
+ "arm_split_x": 540,
+ "leg_split_x": 540,
+ "arm_hull": {
+  "near": [
+   [
+    390,
+    560
+   ],
+   [
+    345,
+    590
+   ],
+   [
+    325,
+    662
+   ]
+  ],
+  "far": [
+   [
+    680,
+    560
+   ],
+   [
+    725,
+    590
+   ],
+   [
+    745,
+    662
+   ]
+  ]
+ },
+ "pivots": {
+  "hair_back": [
+   540,
+   120
+  ],
+  "arm_far_upper": [
+   680,
+   572
+  ],
+  "arm_far_fore": [
+   710,
+   693
+  ],
+  "leg_far": [
+   610,
+   805
+  ],
+  "leg_near": [
+   470,
+   805
+  ],
+  "torso": [
+   540,
+   800
+  ],
+  "head": [
+   540,
+   505
+  ],
+  "arm_near_upper": [
+   390,
+   572
+  ],
+  "arm_near_fore": [
+   353,
+   693
+  ]
+ }
+}

@@ -1,0 +1,83 @@
+{
+ "sources": {
+  "full": "art/ai/raw/kuon_hero_gemini-3-pro-image_0.png",
+  "nohair": "art/ai/raw/kuon_hero_gemini-3-pro-image_0.png",
+  "noarms": "art/ai/raw/kuon_L_noarms2_gemini-nano-banana-2.1_0.png"
+ },
+ "hip_y": 815,
+ "hem_y": 815,
+ "neck": [
+  560,
+  495
+ ],
+ "arm_split_x": 540,
+ "leg_split_x": 527,
+ "arm_hull": {
+  "near": [
+   [
+    390,
+    570
+   ],
+   [
+    345,
+    600
+   ],
+   [
+    325,
+    672
+   ]
+  ],
+  "far": [
+   [
+    680,
+    570
+   ],
+   [
+    725,
+    600
+   ],
+   [
+    745,
+    672
+   ]
+  ]
+ },
+ "pivots": {
+  "hair_back": [
+   560,
+   120
+  ],
+  "arm_far_upper": [
+   680,
+   582
+  ],
+  "arm_far_fore": [
+   715,
+   693
+  ],
+  "leg_far": [
+   600,
+   820
+  ],
+  "leg_near": [
+   460,
+   820
+  ],
+  "torso": [
+   560,
+   815
+  ],
+  "head": [
+   560,
+   495
+  ],
+  "arm_near_upper": [
+   390,
+   582
+  ],
+  "arm_near_fore": [
+   333,
+   693
+  ]
+ }
+}

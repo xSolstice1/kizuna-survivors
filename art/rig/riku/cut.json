@@ -1,0 +1,83 @@
+{
+ "sources": {
+  "full": "art/ai/raw/riku_hero_gemini-3-pro-image_0.png",
+  "nohair": "art/ai/raw/riku_L_nohair_gemini-nano-banana-2.1_0.png",
+  "noarms": "art/ai/raw/riku_L_noarms_gemini-nano-banana-2.1_0.png"
+ },
+ "hip_y": 800,
+ "hem_y": 800,
+ "neck": [
+  580,
+  495
+ ],
+ "arm_split_x": 560,
+ "leg_split_x": 560,
+ "arm_hull": {
+  "near": [
+   [
+    400,
+    578
+   ],
+   [
+    355,
+    608
+   ],
+   [
+    335,
+    680
+   ]
+  ],
+  "far": [
+   [
+    700,
+    578
+   ],
+   [
+    745,
+    608
+   ],
+   [
+    765,
+    680
+   ]
+  ]
+ },
+ "pivots": {
+  "hair_back": [
+   580,
+   120
+  ],
+  "arm_far_upper": [
+   700,
+   590
+  ],
+  "arm_far_fore": [
+   760,
+   650
+  ],
+  "leg_far": [
+   627,
+   807
+  ],
+  "leg_near": [
+   487,
+   807
+  ],
+  "torso": [
+   580,
+   800
+  ],
+  "head": [
+   580,
+   495
+  ],
+  "arm_near_upper": [
+   400,
+   590
+  ],
+  "arm_near_fore": [
+   362,
+   680
+  ]
+ }
+}
