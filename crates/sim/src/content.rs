@@ -1705,6 +1705,24 @@ pub fn enemy_armor(t: f32) -> f32 {
     ARMOR_SHARE * hp_scale(t) * ((m - ARMOR_FROM) / (ARMOR_FULL - ARMOR_FROM)).clamp(0.0, 1.0)
 }
 
+/// Ascension (Nightmare+N) traits: +1 adds the first, +2 the first two, and so on. They stack
+/// on top of the raw Ascension multipliers. (name, plain description for the picker)
+pub const ASCENSION_TRAITS: [(&str, &str); 6] = [
+    ("Quick volleys", "Ranged enemies fire 40% more often."),
+    ("Hardened elites", "Elites and Leaders have 50% more HP and double armour."),
+    ("Death bursts", "Some enemies burst a moment after they fall. Step away."),
+    ("Swift horde", "Enemies move 15% faster."),
+    ("Fast bullets", "Enemy bullets fly 30% faster."),
+    ("Endless crowd", "20% more enemies at once."),
+];
+pub const ASC_VOLLEY: f32 = 1.4;
+pub const ASC_ELITE_HP: f32 = 1.5;
+pub const ASC_ELITE_ARMOR: f32 = 2.0;
+pub const ASC_BURST_CHANCE: f32 = 0.15;
+pub const ASC_SPEED: f32 = 1.15;
+pub const ASC_BULLET_SPEED: f32 = 1.3;
+pub const ASC_CROWD: f32 = 1.2;
+
 /// Enemy move-speed multiplier over the run (non-bosses): +3.5% per pace-minute, capped at
 /// +50% by 15:00 so the fastest fodder (~58 base) still stays under the player's base 110.
 pub fn speed_scale(t: f32) -> f32 {

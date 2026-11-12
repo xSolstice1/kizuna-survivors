@@ -1306,6 +1306,11 @@ impl World {
         hp_scale(self.round_pace()) * self.headline_bump() * late * st.tier * self.cfg.difficulty.hp() * self.ascension_hp()
     }
 
+    /// Whether Ascension trait `k` (0-based, see `ASCENSION_TRAITS`) is on this run.
+    pub fn asc_trait(&self, k: usize) -> bool {
+        self.cfg.ascension as usize > k
+    }
+
     fn ascension_hp(&self) -> f32 {
         let fingers = if self.cfg.gear.has(Exotic::SovereignFinger) { self.cfg.gear.fingers as f32 } else { 0.0 };
         (1.0 + 0.4 * self.cfg.ascension as f32) * (1.0 + 0.04 * fingers)
@@ -1344,7 +1349,8 @@ impl World {
             let final_share = if kind.rank() == Rank::Final { FINAL_BOSS_HP } else { 1.0 };
             d.hp * BOSS_HP * final_share * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
         } else {
-            d.hp * self.enemy_hp_scale() * self.mods.enemy_hp
+            let hardened = if self.asc_trait(1) && (kind.rank() >= Rank::Elite || kind.is_leader()) { ASC_ELITE_HP } else { 1.0 };
+            d.hp * self.enemy_hp_scale() * self.mods.enemy_hp * hardened
         };
         let damage = d.damage * self.enemy_damage_scale();
         let timer = match d.ai {
@@ -1354,7 +1360,7 @@ impl World {
             Ai::Boss => 2.0,
             _ => 3.0,
         };
-        let ramp = if kind.is_boss() { 1.0 } else { speed_scale(self.round_pace()) };
+        let ramp = if kind.is_boss() { 1.0 } else { speed_scale(self.round_pace()) * if self.asc_trait(3) { ASC_SPEED } else { 1.0 } };
         let speed = d.speed * ramp * self.rng.range(0.9, 1.1) * self.mods.enemy_speed;
         let e = &mut self.enemies;
         e.id.push(self.next_id);
@@ -1472,7 +1478,8 @@ impl World {
         let pace = self.round_pace();
         let rung = ladder_rung(pace);
         let basic = if rung > 0 { st.fodder_b } else { st.fodder };
-        let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * if st.in_crisis(self.time) { 1.35 } else { 1.0 } * LADDER_COUNT[rung];
+        let crowd = if self.asc_trait(5) { ASC_CROWD } else { 1.0 };
+        let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * crowd * if st.in_crisis(self.time) { 1.35 } else { 1.0 } * LADDER_COUNT[rung];
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
             None if self.night_lord_spawned => 0,
@@ -1869,6 +1876,7 @@ impl World {
         let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some(self.domain_center);
         let dr = self.domain_radius();
         let style = if self.cfg.stage == StageId::Shotengai { 0 } else { self.cfg.stage.index() as u8 };
+        let volley_rate = if self.asc_trait(0) { ASC_VOLLEY } else { 1.0 };
         let e = &mut self.enemies;
         let frozen = self.freeze > 0.0;
         // Pass 1: desired velocity = seek player + separation from grid neighbours.
@@ -1932,7 +1940,7 @@ impl World {
                     e.vel[i] = mv * speed;
                     e.ai_timer[i] -= DT;
                     if e.ai_timer[i] <= 0.0 && d < 300.0 {
-                        e.ai_timer[i] = every;
+                        e.ai_timer[i] = every / volley_rate;
                         let base = dir.y.atan2(dir.x);
                         match volley {
                             Volley::Single { speed } => self.shots.push(Shot { pos: p, vel: dir * speed, life: 4.0, style, elem: shooter }),
@@ -3286,7 +3294,9 @@ impl World {
                 self.eclipses.push((self.enemies.pos[j], amount * 0.4 * ecl));
             }
         }
-        let amount = (amount - self.armor_now).max(amount * ARMOR_FLOOR);
+        let tough = self.asc_trait(1) && !self.enemies.kind[j].is_boss() && (self.enemies.kind[j].rank() >= Rank::Elite || self.enemies.kind[j].is_leader());
+        let armor = if tough { self.armor_now * ASC_ELITE_ARMOR } else { self.armor_now };
+        let amount = (amount - armor).max(amount * ARMOR_FLOOR);
         let e = &mut self.enemies;
         e.hp[j] -= amount;
         e.flash[j] = 5;
@@ -3768,6 +3778,10 @@ impl World {
                 self.player.special = (self.player.special + self.mods.special_rate * (1.0 + self.bonus.special_charge) / SPECIAL_KILLS).min(1.0);
             }
             self.events.push(Event::Kill { pos, kind });
+            if self.asc_trait(2) && !kind.is_boss() && self.hazards.len() < 120 && self.rng.f32() < ASC_BURST_CHANCE {
+                let damage = 10.0 * self.enemy_damage_scale();
+                self.hazards.push(Hazard { pos, radius: 30.0, warn: 0.9, life: 0.0, kind: HazardKind::Blast { damage }, tick: 0.0, friendly: false, spare_enemies: true });
+            }
             if self.cfg.stress.is_none() {
                 self.death_trick(pos, kind);
             }
@@ -4635,8 +4649,9 @@ impl World {
         let hit_r = PLAYER_RADIUS + SHOT_RADIUS;
         let mut hit = false;
         let mut hit_elem = None;
+        let bullet_speed = if self.asc_trait(4) { ASC_BULLET_SPEED } else { 1.0 };
         self.shots.retain_mut(|s| {
-            s.pos += s.vel * DT;
+            s.pos += s.vel * (DT * bullet_speed);
             s.life -= DT;
             if (s.pos - p).length_sq() <= hit_r * hit_r {
                 hit = true;
@@ -6823,6 +6838,15 @@ mod tests {
         assert_eq!(w.shots.len(), 40 - SHOT_ERASE_BANK as usize, "only the banked budget is erased");
         w.erase_shots(|_, _| true);
         assert_eq!(w.shots.len(), 40 - SHOT_ERASE_BANK as usize, "an empty budget erases nothing");
+    }
+
+    #[test]
+    fn ascension_traits_stack_by_level() {
+        let at = |asc: u32| World::new(WorldConfig { difficulty: Difficulty::Nightmare, ascension: asc, ..Default::default() });
+        assert!(!at(0).asc_trait(0));
+        let w = at(3);
+        assert!(w.asc_trait(0) && w.asc_trait(1) && w.asc_trait(2) && !w.asc_trait(3));
+        assert!((0..ASCENSION_TRAITS.len()).all(|k| at(6).asc_trait(k)));
     }
 
     #[test]
