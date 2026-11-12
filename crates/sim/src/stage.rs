@@ -106,7 +106,7 @@ pub fn chunk_of(p: Vec2) -> (i32, i32) {
 }
 
 /// Pushes a circle out of one box. Returns the push applied (zero if not touching).
-fn push_out_box(c: Vec2, r: f32, (min, max): (Vec2, Vec2)) -> Vec2 {
+pub fn push_out_box(c: Vec2, r: f32, (min, max): (Vec2, Vec2)) -> Vec2 {
     let q = Vec2::new(c.x.clamp(min.x, max.x), c.y.clamp(min.y, max.y));
     let d = c - q;
     let d2 = d.length_sq();
@@ -161,6 +161,38 @@ pub fn resolve(stage: StageId, c: Vec2, r: f32) -> Vec2 {
         }
     }
     c
+}
+
+/// `resolve_local` against the stage's props and terrain cliffs (props come from the terrain's
+/// cache, which leaves out any on a cliff or road).
+pub fn resolve_local_with(terrain: &crate::terrain::Terrain, c: Vec2, r: f32) -> Vec2 {
+    let (x0, y0) = chunk_of(Vec2::new(c.x - r, c.y - r));
+    let (x1, y1) = chunk_of(Vec2::new(c.x + r, c.y + r));
+    let mut c = c;
+    for cy in y0..=y1 {
+        for cx in x0..=x1 {
+            let (props, n) = terrain.chunk_props(cx, cy);
+            for p in &props[..n] {
+                c += push_out_box(c, r, p.footprint());
+            }
+        }
+    }
+    terrain.resolve(c, r)
+}
+
+/// `resolve` (3x3 chunks, exact for the player) against props and terrain cliffs.
+pub fn resolve_with(terrain: &crate::terrain::Terrain, c: Vec2, r: f32) -> Vec2 {
+    let (cx, cy) = chunk_of(c);
+    let mut c = c;
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            let (props, n) = terrain.chunk_props(cx + dx, cy + dy);
+            for p in &props[..n] {
+                c += push_out_box(c, r, p.footprint());
+            }
+        }
+    }
+    terrain.resolve(c, r)
 }
 
 /// True if a circle overlaps any prop (3x3 chunk check).

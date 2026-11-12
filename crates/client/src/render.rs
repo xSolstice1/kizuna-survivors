@@ -1439,7 +1439,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if target.is_some() {
         clear_background(Color::from_rgba(28, 24, 40, 255));
     }
-    stage.draw_ground(world.cfg.stage, cam, time);
+    stage.draw_ground(world.cfg.stage, &world.terrain, cam, time);
     let p = world.player.pos;
     let view = view_rect(cam);
 

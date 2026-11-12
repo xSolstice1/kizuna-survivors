@@ -5,7 +5,7 @@ use std::time::Instant;
 fn main() {
     println!("{:>8} {:>8} {:>10} {:>10} {:>10} {:>8}", "enemies", "proj", "avg ms", "p99 ms", "max ms", "kills");
     for &(enemies, proj) in &[(500, 1000), (2000, 4000), (3000, 6000), (5000, 8000)] {
-        let mut w = World::new(WorldConfig { seed: 3, stress: Some(Stress { enemies, projectiles: proj }), ..Default::default() });
+        let mut w = World::new(WorldConfig { seed: 3, stage: std::env::args().nth(1).map_or(sim::campaign::StageId::Shotengai, |_| sim::campaign::StageId::ShrineValley), stress: Some(Stress { enemies, projectiles: proj }), ..Default::default() });
         let input = |t: u32| {
             let a = t as f32 * 0.004;
             Input { move_dir: Vec2::new(a.cos(), a.sin()), ..Default::default() }

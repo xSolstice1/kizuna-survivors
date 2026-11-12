@@ -9,7 +9,7 @@ use crate::render::world_scale;
 use crate::sprites;
 
 use sim::campaign::StageId;
-use sim::stage::{chunk_props, hash, PropKind, CHUNK, PATH_EVERY, TILE};
+use sim::stage::{hash, PropKind, CHUNK, PATH_EVERY, TILE};
 
 /// Per world: ground_a, ground_b, decal, path, prop_a, prop_b, prop_c, prop_d.
 type WorldSet = [Texture2D; 8];
@@ -223,7 +223,7 @@ impl StageArt {
     }
 
     /// Ground tiles, props and their glows (everything under the characters).
-    pub fn draw_ground(&self, stage: StageId, cam: &Camera2D, time: f64) {
+    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, time: f64) {
         let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
         let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
         let (tx0, ty0) = ((x0 / TILE).floor() as i32, (y0 / TILE).floor() as i32);
@@ -254,7 +254,7 @@ impl StageArt {
         let (cx1, cy1) = (((x0 + sw + margin) / CHUNK).floor() as i32, ((y0 + sh + margin) / CHUNK).floor() as i32);
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
-                let (props, n) = chunk_props(stage, cx, cy);
+                let (props, n) = terrain.chunk_props(cx, cy);
                 for prop in &props[..n] {
                     let (px, py) = (prop.pos.x, prop.pos.y);
                     let (t, glow) = match prop.kind {

@@ -806,6 +806,8 @@ pub struct World {
     next_elite: f32,
     rng: Rng,
     grid: Grid,
+    /// High and low ground, cliffs, roads and the enemies' flow field (campaign worlds).
+    pub terrain: crate::terrain::Terrain,
     scratch: Vec<u32>,
     /// Bullets weapons and arts may still erase (refills at `SHOT_ERASE_RATE`/s); see `erase_shots`.
     shot_erase: f32,
@@ -825,6 +827,7 @@ pub struct World {
 
 impl World {
     pub fn new(cfg: WorldConfig) -> Self {
+        let terrain = crate::terrain::Terrain::new(cfg.stage);
         let first_elite = cfg.stage.def().round_start(8);
         let rng = Rng::new(cfg.seed);
         let hero = hero_def(cfg.hero);
@@ -961,6 +964,7 @@ impl World {
             next_elite: first_elite,
             rng,
             grid: Grid::new(cell, dim),
+            terrain,
             scratch: Vec::new(),
             shot_erase: SHOT_ERASE_BANK,
             armor_now: 0.0,
@@ -983,6 +987,11 @@ impl World {
         }
         self.tick += 1;
         self.time += DT;
+        self.terrain.ensure(self.player.pos);
+        if self.tick % 12 == 1 {
+            self.terrain.update_flow(self.player.pos);
+        }
+        self.terrain.step_sight(10);
         self.move_player(input);
         self.armor_now = enemy_armor(self.round_pace());
         self.director();
@@ -1242,7 +1251,7 @@ impl World {
         }
         let pressure = if self.under_pressure() { PRESSURE_SLOW } else { 1.0 };
         self.player.pos += d * (self.move_speed() * pressure * DT);
-        self.player.pos = stage::resolve(self.cfg.stage, self.player.pos, PLAYER_RADIUS);
+        self.player.pos = stage::resolve_with(&self.terrain, self.player.pos, PLAYER_RADIUS);
     }
 
     fn contact_damage(&mut self) {
@@ -1347,6 +1356,13 @@ impl World {
         if self.enemies.len() >= MAX_ENEMIES {
             return;
         }
+        // Only where it can walk to the player: never inside a cliff or on a cut-off ledge.
+        // Bosses search wider and, failing that, appear near the player.
+        let pos = match self.terrain.spawnable(pos, if kind.is_boss() { 40 } else { 6 }) {
+            Some(p) => p,
+            None if kind.is_boss() => stage::resolve_with(&self.terrain, self.player.pos + Vec2::new(0.0, -120.0), 24.0),
+            None => return,
+        };
         let d = enemy_def(kind);
         let hp = if kind.is_boss() {
             let final_share = if kind.rank() == Rank::Final { FINAL_BOSS_HP * self.stage().final_tier } else { 1.0 };
@@ -1473,7 +1489,7 @@ impl World {
         }
         if st.shrine_rounds.contains(&round) {
             let a = self.rng.range(0.0, std::f32::consts::TAU);
-            self.shrine = Some(stage::resolve(self.cfg.stage, self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
+            self.shrine = Some(stage::resolve_with(&self.terrain, self.player.pos + Vec2::from_angle(a) * 240.0, 18.0));
             self.events.push(Event::ShrineAppeared);
         }
         if st.ring_rounds.contains(&round) {
@@ -2113,7 +2129,8 @@ impl World {
                 }
                 Ai::Chase | Ai::Hop => {}
             }
-            let seek = to_player.normalize_or_zero() * speed;
+            // Straight at the target, unless terrain is in the way: then down the flow field.
+            let seek = self.terrain.steer(p, p + to_player).unwrap_or_else(|| to_player.normalize_or_zero()) * speed;
             let mut sep = Vec2::ZERO;
             let mut seen = 0u32;
             let pos = &e.pos;
@@ -2135,19 +2152,23 @@ impl World {
             e.vel[i] = seek + sep * 70.0;
         }
         // Pass 2: integrate, then slide around props (bosses smash straight through).
-        let stage_id = self.cfg.stage;
+        let terrain = &self.terrain;
         for i in 0..e.pos.len() {
             let slow = if e.slow[i] > 0.0 { SLOW_FACTOR } else { 1.0 };
             e.pos[i] += (e.vel[i] * slow + e.push[i]) * DT;
-            if !e.kind[i].is_boss() {
+            if e.kind[i].is_boss() {
+                // Bosses smash through props, but cliffs stop them too.
+                e.pos[i] = terrain.resolve(e.pos[i], e.radius[i]);
+            } else {
                 let before = e.pos[i];
-                let after = stage::resolve_local(stage_id, before, e.radius[i]);
+                let after = stage::resolve_local_with(terrain, before, e.radius[i]);
                 let n = after - before;
                 if n.length_sq() > 1e-8 {
-                    // Blocked: step along the obstacle face, on the side closer to the player.
+                    // Blocked: step along the obstacle face, on the side the enemy wants to go
+                    // (its velocity follows the flow field around cliffs; else the player).
                     let n = n.normalize_or_zero();
                     let t = Vec2::new(-n.y, n.x);
-                    let to_p = player - after;
+                    let to_p = if e.vel[i].length_sq() > 1.0 { e.vel[i] } else { player - after };
                     let dot = t.x * to_p.x + t.y * to_p.y;
                     let side = if dot.abs() > 1.0 { dot.signum() } else if e.id[i] % 2 == 0 { 1.0 } else { -1.0 };
                     e.pos[i] = after + t * (side * e.speed[i] * 0.8 * DT);
@@ -2627,7 +2648,7 @@ impl World {
             if self.pickups.len() < MAX_PICKUPS {
                 let a = self.rng.range(0.0, std::f32::consts::TAU);
                 let d = self.rng.range(220.0, 380.0);
-                let pos = stage::resolve(self.cfg.stage, self.player.pos + Vec2::from_angle(a) * d, 12.0);
+                let pos = stage::resolve_with(&self.terrain, self.player.pos + Vec2::from_angle(a) * d, 12.0);
                 let k = PickupKind::roll(self.rng.f32());
                 self.pickups.push((pos, k));
                 self.events.push(Event::PickupSpawned { pos, kind: k });
@@ -2848,7 +2869,7 @@ impl World {
                 c.facing = to.normalize_or_zero();
                 c.pos += c.facing * (c.speed.min(dist / DT) * DT);
             }
-            c.pos = stage::resolve_local(self.cfg.stage, c.pos, 6.0);
+            c.pos = stage::resolve_local_with(&self.terrain, c.pos, 6.0);
             if target.is_some() && !leash && dist < 22.0 && c.strike_cd <= 0.0 {
                 c.strike_cd = 0.45;
                 c.striking = 0.15;
@@ -2934,8 +2955,27 @@ impl World {
         let mut out = Vec::new();
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
-                let (props, n) = stage::chunk_props(self.cfg.stage, cx, cy);
+                let (props, n) = self.terrain.chunk_props(cx, cy);
                 out.extend(props[..n].iter().map(|p| p.footprint()));
+            }
+        }
+        // Cliffs, as horizontal runs of wall cells.
+        if self.terrain.on {
+            use crate::terrain::{cell_of, CELL};
+            let ((x0, y0), (x1, y1)) = (cell_of(min), cell_of(max));
+            for y in y0..=y1 {
+                let mut run: Option<i32> = None;
+                for x in x0..=x1 + 1 {
+                    let wall = x <= x1 && self.terrain.wall(x, y);
+                    match (wall, run) {
+                        (true, None) => run = Some(x),
+                        (false, Some(s)) => {
+                            out.push((Vec2::new(s as f32 * CELL, y as f32 * CELL), Vec2::new(x as f32 * CELL, (y + 1) as f32 * CELL)));
+                            run = None;
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
         out
@@ -4234,7 +4274,7 @@ impl World {
                 for _ in 0..s.amount {
                     let a = self.rng.range(0.0, std::f32::consts::TAU);
                     let d = self.rng.range(30.0, 110.0);
-                    let pos = stage::resolve(self.cfg.stage, p + Vec2::from_angle(a) * d, 8.0);
+                    let pos = stage::resolve_with(&self.terrain, p + Vec2::from_angle(a) * d, 8.0);
                     self.lanterns.push(Lantern { pos, life, max_life: life, radius: 46.0 * area, tick: 0.2, damage: dmg, slows: w.awakened, elem });
                 }
             }
@@ -4343,7 +4383,7 @@ impl World {
                 let n = s.amount;
                 for k in 0..n {
                     let slot = k as f32 / n as f32 * std::f32::consts::TAU;
-                    let pos = stage::resolve(self.cfg.stage, p + Vec2::from_angle(slot) * 18.0, 6.0);
+                    let pos = stage::resolve_with(&self.terrain, p + Vec2::from_angle(slot) * 18.0, 6.0);
                     self.clones.push(MirageClone {
                         pos,
                         facing: self.player.facing,
@@ -7715,13 +7755,63 @@ mod tests {
     }
 
     #[test]
+    fn player_cannot_walk_through_cliffs() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.weapons.clear();
+        // Walk straight in each direction for 6 s: never end up inside a cliff cell.
+        for dir in [Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0), Vec2::new(0.7, 0.7)] {
+            w.player.pos = Vec2::ZERO;
+            for _ in 0..360 {
+                w.step(Input { move_dir: dir, ..Default::default() });
+                assert!(!w.terrain.wall_at(w.player.pos), "inside a cliff at {:?}", w.player.pos);
+            }
+        }
+    }
+
+    #[test]
+    fn enemies_path_around_cliffs() {
+        let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.weapons.clear();
+        w.player.hp = 1e9;
+        w.player.max_hp = 1e9;
+        // A reachable cell whose walking distance is much longer than the straight line.
+        use crate::terrain::CELL;
+        let mut start = None;
+        'search: for r in 12..30 {
+            for k in 0..64 {
+                let p = Vec2::from_angle(k as f32 / 64.0 * std::f32::consts::TAU) * (r as f32 * CELL);
+                if let Some(d) = w.terrain.distance(p) {
+                    let straight = (p.x.abs() + p.y.abs()) / CELL;
+                    if !w.terrain.wall_at(p) && d as f32 > straight + 12.0 {
+                        start = Some(p);
+                        break 'search;
+                    }
+                }
+            }
+        }
+        let start = start.expect("a spot behind a cliff");
+        let kind = w.stage().fodder;
+        w.spawn_enemy(kind, start);
+        let i = w.enemies.len() - 1;
+        w.enemies.hp[i] = 1e9;
+        let mut closest = f32::MAX;
+        for _ in 0..1500 {
+            w.time = 1.0;
+            w.step(Input::default());
+            closest = closest.min((w.enemies.pos[i] - w.player.pos).length());
+        }
+        assert!(closest < 40.0, "enemy from {start:?} never got around the cliff (closest {closest:.0})");
+    }
+
+    #[test]
     fn crowds_walk_around_props_in_every_stage() {
         for stage in crate::campaign::ALL_STAGES {
-            // A wide prop to walk around.
+            // A wide prop to walk around (one the terrain keeps: not on a cliff or road).
+            let terrain = crate::terrain::Terrain::new(stage);
             let mut found = None;
             'outer: for cy in 0..40 {
                 for cx in 0..40 {
-                    let (ps, n) = crate::stage::chunk_props(stage, cx, cy);
+                    let (ps, n) = terrain.chunk_props(cx, cy);
                     for p in &ps[..n] {
                         if matches!(p.kind, crate::stage::PropKind::C | crate::stage::PropKind::Stall) {
                             found = Some(*p);
