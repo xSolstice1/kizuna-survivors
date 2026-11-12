@@ -2946,6 +2946,12 @@ impl World {
         None
     }
 
+    /// Seconds until the first owned weapon of `kind` next fires (None if not owned). Lets the
+    /// client start a throw animation so its release lines up with the shot.
+    pub fn next_fire_in(&self, kind: WeaponKind) -> Option<f32> {
+        self.weapons.iter().find(|w| w.kind == kind).map(|w| w.timer.max(0.0))
+    }
+
     /// The active transformation, if any.
     pub fn form_kind(&self) -> Option<SpecialKind> {
         (self.player.form > 0.0).then(|| hero_def(self.cfg.hero).special)
