@@ -122,6 +122,10 @@ async fn main() {
     let mut report: Option<RunReport> = None;
     let mut shop_cursor = 0usize;
     let mut acc = 0.0f32;
+    // Where the player was before the last sim step, and scratch copies of positions, for
+    // drawing between sim steps (see "Interpolate" below).
+    let mut prev_player = world.player.pos;
+    let (mut saved_enemies, mut saved_projectiles, mut saved_shots): (Vec<sim::Vec2>, Vec<sim::Vec2>, Vec<sim::Vec2>) = (Vec::new(), Vec::new(), Vec::new());
     let mut sim_ms = 0.0f32;
     let mut chest_anim: Option<chest_ui::ChestAnim> = None;
     // Space is latched until the sim next steps; at high refresh rates many frames take no step.
@@ -483,6 +487,7 @@ async fn main() {
             let mut steps = 0;
             while acc >= DT && steps < 4 && !world.paused() {
                 let t_s = get_time();
+                prev_player = world.player.pos;
                 world.step(input);
                 perf_parts[0] += (get_time() - t_s) * 1000.0;
                 fx.absorb(&world.events, world.player.pos, world.reach_half().x);
@@ -504,7 +509,6 @@ async fn main() {
                 sim_ms = sim_ms * 0.95 + ((get_time() - t0) * 1000.0 / steps as f64) as f32 * 0.05;
             }
             fx.update(dt);
-            fx.animate(&assets.ren_rig, &world, dt);
             fx.track_trail(&world, dt);
         } else {
             acc = 0.0;
@@ -522,10 +526,54 @@ async fn main() {
             rt.texture.set_filter(FilterMode::Linear);
             world_rt = Some(rt);
         }
+        // Interpolate: the sim steps at 60 Hz but the screen may refresh faster (or not line up),
+        // so draw everything where it is between the last two steps: the player between its
+        // last two positions, moving things back along their velocity by the time not yet
+        // simulated. Put back right after drawing, so the sim never sees it.
+        let live = screen == Screen::Playing && !world.paused() && !map_open;
+        let back = if live { (1.0 - (acc / DT).clamp(0.0, 1.0)) * DT } else { 0.0 };
+        let player_now = world.player.pos;
+        if back > 0.0 {
+            let d = player_now - prev_player;
+            if d.x.abs() + d.y.abs() < 40.0 {
+                world.player.pos = player_now - d * (back / DT);
+            }
+            saved_enemies.clear();
+            saved_enemies.extend_from_slice(&world.enemies.pos);
+            for (p, v) in world.enemies.pos.iter_mut().zip(&world.enemies.vel) {
+                *p = *p - *v * back;
+            }
+            saved_projectiles.clear();
+            saved_projectiles.extend_from_slice(&world.projectiles.pos);
+            let pr = &mut world.projectiles;
+            for i in 0..pr.pos.len() {
+                if pr.charge[i] <= 0.0 {
+                    pr.pos[i] = pr.pos[i] - pr.vel[i] * back;
+                }
+            }
+            saved_shots.clear();
+            saved_shots.extend(world.shots.iter().map(|s| s.pos));
+            for s in &mut world.shots {
+                s.pos = s.pos - s.vel * back;
+            }
+        }
+        if live {
+            if let Some(rig) = assets.rig(world.cfg.hero) {
+                fx.animate(rig, &world, dt);
+            }
+        }
         let mut cam = render::camera_for(&world, &fx);
         cam.render_target = world_rt.clone();
         let t_w = get_time();
         render::draw_world(&world, &assets, &stage_art, &fx, &cam, now, world_rt.as_ref());
+        if back > 0.0 {
+            world.player.pos = player_now;
+            world.enemies.pos.copy_from_slice(&saved_enemies);
+            world.projectiles.pos.copy_from_slice(&saved_projectiles);
+            for (s, p) in world.shots.iter_mut().zip(&saved_shots) {
+                s.pos = *p;
+            }
+        }
         perf_parts[1] += (get_time() - t_w) * 1000.0;
         set_default_camera();
         if world.stage().mechanic == sim::campaign::Mechanic::Downpour {

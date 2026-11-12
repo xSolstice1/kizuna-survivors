@@ -89,6 +89,29 @@ fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
     })
 }
 
+/// The art name of a hero with a cut-out rig (art/rig/<name>, art/hd/rig/<name>).
+fn rig_name(h: HeroId) -> Option<&'static str> {
+    Some(match h {
+        HeroId::Ren => "ren",
+        HeroId::Riku => "riku",
+        HeroId::Shun => "shun",
+        HeroId::Toya => "toya",
+        HeroId::Kuon => "kuon",
+        _ => return None,
+    })
+}
+
+fn rig_json(name: &str) -> &'static str {
+    match name {
+        "ren" => include_str!("../../../art/rig/ren/game.json"),
+        "riku" => include_str!("../../../art/rig/riku/game.json"),
+        "shun" => include_str!("../../../art/rig/shun/game.json"),
+        "toya" => include_str!("../../../art/rig/toya/game.json"),
+        "kuon" => include_str!("../../../art/rig/kuon/game.json"),
+        _ => unreachable!(),
+    }
+}
+
 pub struct Assets {
     /// Per hero (in `ALL_HEROES` order): idle, walk A, walk B.
     heroes: Vec<[Texture2D; 3]>,
@@ -99,10 +122,10 @@ pub struct Assets {
     toya_mukade: [Texture2D; 3],
     kuon_domain: [Texture2D; 3],
     ren_divine: [Texture2D; 3],
-    /// Ren in a run: the cut-out rig (her front view in `heroes` is for menus).
-    pub ren_rig: crate::rig::RigDef,
-    /// Head crop of the front view, for the HUD portrait circle.
-    pub ren_face: Texture2D,
+    /// Per hero (in `ALL_HEROES` order): the cut-out rig used in a run, if it has one.
+    rigs: Vec<Option<crate::rig::RigDef>>,
+    /// Per hero: head crop of the front view, for the HUD portrait circle.
+    faces: Vec<Option<Texture2D>>,
     cleaver: Texture2D,
     cleaver_hannya: Texture2D,
     cleaver_rest: Texture2D,
@@ -161,13 +184,10 @@ impl Assets {
         let heroes = ALL_HEROES
             .iter()
             .map(|h| match h {
-                HeroId::Riku => frames(sprites::sprite("riku")),
-                HeroId::Shun => frames(sprites::sprite("shun")),
-                HeroId::Toya => frames(sprites::sprite("toya")),
-                HeroId::Kuon => frames(sprites::sprite("kuon")),
-                // Front view for portraits, the armory and menus (in a run she uses ren_rig).
-                HeroId::Ren => {
-                    let front = sprites::hi_art("ren_front");
+                // Rigged heroes: the front view for portraits, the armory and menus (in a run
+                // they use their rig, see `rig`).
+                HeroId::Riku | HeroId::Shun | HeroId::Toya | HeroId::Kuon | HeroId::Ren => {
+                    let front = sprites::hi_art(&format!("{}_front", rig_name(*h).unwrap()));
                     [front.clone(), front.clone(), front]
                 }
                 _ => frames(sprites::parse(&sprites::recolor(base, hero_palette(*h)))),
@@ -180,8 +200,8 @@ impl Assets {
             toya_mukade: frames(sprites::sprite("toya_mukade")),
             kuon_domain: frames(sprites::sprite("kuon_domain")),
             ren_divine: frames(sprites::sprite("ren_divine")),
-            ren_rig: crate::rig::RigDef::load("ren", include_str!("../../../art/rig/ren/game.json")),
-            ren_face: sprites::hi_art("ren_face"),
+            rigs: ALL_HEROES.iter().map(|h| rig_name(*h).map(|n| crate::rig::RigDef::load(n, rig_json(n)))).collect(),
+            faces: ALL_HEROES.iter().map(|h| rig_name(*h).map(|n| sprites::hi_art(&format!("{n}_face")))).collect(),
             cleaver: sprites::art("cleaver"),
             cleaver_hannya: sprites::art("cleaver_hannya"),
             cleaver_rest: sprites::art("cleaver_rest"),
@@ -334,6 +354,16 @@ impl Assets {
         }
     }
 
+    /// The hero's rig, if it has one.
+    pub fn rig(&self, h: HeroId) -> Option<&crate::rig::RigDef> {
+        self.rigs[ALL_HEROES.iter().position(|x| *x == h).unwrap()].as_ref()
+    }
+
+    /// The hero's HUD face, if it has one.
+    pub fn face(&self, h: HeroId) -> Option<&Texture2D> {
+        self.faces[ALL_HEROES.iter().position(|x| *x == h).unwrap()].as_ref()
+    }
+
     pub fn hero(&self, h: HeroId) -> &[Texture2D; 3] {
         &self.heroes[ALL_HEROES.iter().position(|x| *x == h).unwrap()]
     }
@@ -455,8 +485,8 @@ struct Particle {
 /// Purely visual state derived from sim events.
 #[derive(Default)]
 pub struct Fx {
-    /// Ren's rig: springs and walk/idle blend (see crate::rig).
-    pub ren_rig: crate::rig::RigState,
+    /// The rigged hero's springs and walk/idle blend (see crate::rig).
+    pub hero_rig: crate::rig::RigState,
     numbers: Vec<DamageNumber>,
     particles: Vec<Particle>,
     /// Expanding barrier rings: (centre, age).
@@ -615,7 +645,7 @@ impl Fx {
                 }
                 Event::PlayerHurt => {
                     self.shake = self.shake.max(0.18);
-                    self.ren_rig.hurt();
+                    self.hero_rig.hurt();
                 }
                 Event::LevelUp if !self.leveled_once => {
                     self.leveled_once = true;
@@ -832,7 +862,7 @@ impl Fx {
     /// Advances the rigged hero (once per frame, before drawing).
     pub fn animate(&mut self, rig: &crate::rig::RigDef, world: &World, dt: f32) {
         let pl = &world.player;
-        self.ren_rig.update(rig, dt, pl.moving, vec2(pl.pos.x, pl.pos.y), pl.facing.x < 0.0);
+        self.hero_rig.update(rig, dt, pl.moving, vec2(pl.pos.x, pl.pos.y), pl.facing.x < 0.0);
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -928,6 +958,78 @@ fn dimmed(c: Color) -> Color {
     Color::new((grey + (c.r - grey) * 0.5) * k, (grey + (c.g - grey) * 0.5) * k, (grey + (c.b - grey) * 0.5) * k, c.a)
 }
 
+/// How an enemy's sprite moves (all enemies slide in the sim; this is purely visual).
+#[derive(Clone, Copy, PartialEq)]
+enum Motion {
+    /// Steps: bounce, squash on each footfall, lean into the movement.
+    Walk,
+    /// Big arcs with a hard squash on landing.
+    Hop,
+    /// Spirits, birds, lanterns: bob, sway and a soft pulse; no footfalls.
+    Float,
+}
+
+fn motion(kind: EnemyKind) -> Motion {
+    use EnemyKind::*;
+    match kind {
+        Kasa | EmberToad | WailingCommuter | SwarmMother | StrawPuppet => Motion::Hop,
+        Wisp | Chochin | PaperCrane | LanternFairy | FoxMaskPhantom | ShardMoth | BoneEaterCrow | ClayBird | LostSoul | Kagerou | PaleSeraph | CurseEye | GlitchShade | BellMaiden | Mitsuhime | ToriiSerpent | Nopperabo | RainGhoul | ShadeDancer | TsurubeDrop | NightLord | HollowMonarch => Motion::Float,
+        _ => Motion::Walk,
+    }
+}
+
+/// An enemy's animated pose: (lift up in world units, x scale, y scale, rotation in radians).
+/// Driven by time and the enemy's own phase, so a crowd never moves in lockstep.
+fn enemy_pose(world: &World, i: usize, h: f32, big: bool, tf: f32) -> (f32, f32, f32, f32) {
+    let e = &world.enemies;
+    let v = e.vel[i];
+    let speed = v.length();
+    let moving = speed > 4.0;
+    let seed = (e.id[i] as f32 * 0.618_034).fract() * std::f32::consts::TAU;
+    let slow = if big { 0.55 } else { 1.0 };
+    let lean = if moving { (v.x / speed) * if big { 0.04 } else { 0.09 } } else { 0.0 };
+    let (lift, mut sx, mut sy, rot);
+    match motion(e.kind[i]) {
+        Motion::Walk => {
+            let ph = tf * 2.3 * slow * (speed / 45.0).clamp(0.7, 1.6) + seed;
+            let s = ph.sin();
+            if moving {
+                let air = s.abs(); // 0 on a footfall, 1 mid-step
+                lift = air * h * 0.05;
+                let land = (1.0 - air).powi(3);
+                sy = 1.0 - 0.08 * land + 0.03 * air;
+                sx = 1.0 + 0.06 * land - 0.02 * air;
+                rot = lean + (ph * 0.5).sin() * 0.06 * slow;
+            } else {
+                let b = (tf * 2.2 * slow + seed).sin();
+                (lift, sx, sy, rot) = (0.0, 1.0 - 0.015 * b, 1.0 + 0.025 * b, 0.0);
+            }
+        }
+        Motion::Hop => {
+            let ph = (tf * 1.7 * slow + seed / std::f32::consts::TAU).fract();
+            let arc = (ph * std::f32::consts::PI).sin(); // 0 on the ground, 1 at the top
+            let land = (1.0 - ph * 5.0).max(0.0) + ((ph - 0.85) * 6.6).max(0.0); // squash around touchdown
+            lift = if moving { arc * h * 0.22 } else { arc * h * 0.06 };
+            sy = 1.0 - 0.16 * land + 0.08 * arc;
+            sx = 1.0 + 0.12 * land - 0.04 * arc;
+            rot = lean * 1.5 + if moving { (ph - 0.5) * 0.18 * v.x.signum() } else { 0.0 };
+        }
+        Motion::Float => {
+            let b = (tf * 1.9 * slow + seed).sin();
+            lift = h * (0.10 + 0.05 * b);
+            sx = 1.0 + 0.02 * (tf * 3.1 + seed).sin();
+            sy = 1.0 + 0.03 * b;
+            rot = lean * 1.3 + (tf * 1.3 * slow + seed * 1.7).sin() * 0.07;
+        }
+    }
+    // A hit squashes the sprite for an instant.
+    if e.flash[i] > 0 {
+        sx *= 1.14;
+        sy *= 0.88;
+    }
+    (lift, sx, sy, rot)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_world_enemy<'a>(
     world: &World,
@@ -989,16 +1091,23 @@ fn draw_world_enemy<'a>(
     } else if matches!(ai, Ai::Ranged { .. }) {
         draw_circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
     }
-    let (sw, sh) = (w * 0.7, (w * 0.2).max(5.0));
-    shadows.push(shadow, pos.x - sw / 2.0, pos.y + h * 0.25 - 1.0 - sh / 2.0, Color::new(0.0, 0.0, 0.0, 0.4), DrawTextureParams { dest_size: Some(vec2(sw, sh)), ..Default::default() });
+    let (lift, sx, sy, rot) = enemy_pose(world, i, h, rank >= Rank::Mini, tf);
+    // The shadow stays on the ground and shrinks as the sprite rises.
+    let rise = (lift / h).clamp(0.0, 0.5);
+    let (sw, sh) = (w * 0.7 * (1.0 - rise), (w * 0.2).max(5.0) * (1.0 - rise));
+    shadows.push(shadow, pos.x - sw / 2.0, pos.y + h * 0.25 - 1.0 - sh / 2.0, Color::new(0.0, 0.0, 0.0, 0.4 * (1.0 - rise)), DrawTextureParams { dest_size: Some(vec2(sw, sh)), ..Default::default() });
     if !world.in_reach(pos, e.radius[i]) {
         tint = dimmed(tint);
     }
-    let (x, y) = ((pos.x - w / 2.0).round(), (pos.y - h * 0.75 + bob).round());
+    // Feet stay at the bottom; squash and rotation pivot on them. Not rounded, so the motion is smooth.
+    let feet = vec2(pos.x, pos.y + h * 0.25 + bob * 0.3 - lift);
+    let size = vec2(w * sx, h * sy);
+    let (x, y) = (feet.x - size.x / 2.0, feet.y - size.y);
+    let params = DrawTextureParams { flip_x: flip, dest_size: Some(size), rotation: rot, pivot: Some(feet), ..Default::default() };
     let rarity = kind.rarity();
     if let (Some(outline), Some(c)) = (outline, outline_tint(rarity, tint.a)) {
         for (dx, dy) in OUTLINE_OFFSETS {
-            outlines.push(outline, x + dx, y + dy, c, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+            outlines.push(outline, x + dx, y + dy, c, DrawTextureParams { pivot: Some(feet + vec2(dx, dy)), ..params.clone() });
         }
         cues.push((pos.x, y, rarity, tint.a));
     }
@@ -1008,7 +1117,7 @@ fn draw_world_enemy<'a>(
         draw_circle(pos.x, pos.y, sim::content::BANNER_RADIUS, Color::new(c.r, c.g, c.b, 0.05));
         draw_circle_lines(pos.x, pos.y, sim::content::BANNER_RADIUS, 2.0, Color::new(c.r, c.g, c.b, pulse));
     }
-    sprites.push(t, x, y, tint, DrawTextureParams { flip_x: flip, dest_size: Some(vec2(w, h)), ..Default::default() });
+    sprites.push(t, x, y, tint, params);
 }
 
 /// A Blink enemy fading out before a blink (state 1) or back in after it (state 2).
@@ -1215,7 +1324,11 @@ pub fn camera_for(world: &World, fx: &Fx) -> Camera2D {
     let jitter = shake_offset(fx.shake, get_time() as f32);
     // Positive y zoom: macroquad already flips y when drawing to the screen, so this gives
     // y-down world coordinates (from_display_rect would flip twice and render upside down).
-    Camera2D { target: vec2(p.x.round(), p.y.round()) + jitter, zoom: vec2(2.0 / sw, 2.0 / sh), ..Default::default() }
+    // Snap to whole device pixels (not whole world units, which is 2-4 device pixels and makes
+    // the ground step while the hero glides).
+    let px = world_scale() * screen_dpi_scale();
+    let target = vec2((p.x * px).round() / px, (p.y * px).round() / px);
+    Camera2D { target: target + jitter, zoom: vec2(2.0 / sw, 2.0 / sh), ..Default::default() }
 }
 
 fn draw_smokes(smokes: &[(Vec2, f32, f32)]) {
@@ -1331,7 +1444,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let view = view_rect(cam);
 
     // The rigged hero, drawn at the end of this fn (after the world target), at full resolution.
-    let mut hires_player: Option<(Vec2, bool, Color)> = None;
+    let mut hires_player: Option<(&crate::rig::RigDef, Vec2, bool, Color)> = None;
 
     // Sakura Field sits on the ground under everything.
     for w in &world.weapons {
@@ -1614,8 +1727,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_circle_lines(p.x, p.y + 3.0, 20.0 + 60.0 * k, 3.0 * (1.0 - k) + 1.0, Color::new(1.0, 0.9, 0.5, 0.8 * (1.0 - k)));
     }
     draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
-    // Ren: the cut-out rig (crate::rig), except in her Divine form.
-    let rigged = world.cfg.hero == HeroId::Ren && !divine;
+    // Rigged heroes (crate::rig), except in a transformed form (those keep their sprite).
+    let rig = a.rig(world.cfg.hero).filter(|_| !(fox || hannya || mukade || domain || divine));
+    let rigged = rig.is_some();
     let tex = if fox {
         &a.riku_fox[frame]
     } else if hannya {
@@ -1659,9 +1773,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         // target it is drawn after the target is on screen, at full device resolution.
         let feet = vec2(p.x, p.y + 6.0);
         if target.is_some() {
-            hires_player = Some((feet, flip, tint));
+            hires_player = Some((rig.unwrap(), feet, flip, tint));
         } else {
-            crate::rig::draw(&a.ren_rig, &fx.ren_rig, feet, flip, tint);
+            crate::rig::draw(rig.unwrap(), &fx.hero_rig, feet, flip, tint);
         }
     } else {
         draw_texture_ex(tex, x, y, tint, params);
@@ -2035,10 +2149,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if let Some(rt) = target {
         set_default_camera();
         draw_texture_ex(&rt.texture, 0.0, 0.0, WHITE, DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() });
-        if let Some((feet, left, tint)) = hires_player.take() {
+        if let Some((rig, feet, left, tint)) = hires_player.take() {
             let direct = Camera2D { target: cam.target, zoom: cam.zoom, offset: cam.offset, rotation: cam.rotation, render_target: None, viewport: cam.viewport };
             set_camera(&direct);
-            crate::rig::draw(&a.ren_rig, &fx.ren_rig, feet, left, tint);
+            crate::rig::draw(rig, &fx.hero_rig, feet, left, tint);
             set_default_camera();
         }
     }
