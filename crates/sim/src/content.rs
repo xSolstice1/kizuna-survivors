@@ -25,7 +25,7 @@ pub const DEFAULT_VIEW_HALF: Vec2 = Vec2::new(320.0, 180.0);
 /// (`skill_strength`): ranged ~3600, hybrid ~3900, melee ~4150 (melee stands in the crowd, so it
 /// keeps a small edge). Before this Riku and Toya were ~3x Ren.
 pub const MIGHT_MELEE: f32 = 2.04;
-pub const MIGHT_TOYA: f32 = 1.65;
+pub const MIGHT_TOYA: f32 = 1.75;
 /// Effect duration and range gained per Persistence level.
 pub const PERSISTENCE_PER_LEVEL: f32 = 0.12;
 pub const MIGHT_RIKU: f32 = 1.73;
@@ -420,7 +420,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
     let base = WeaponStats { damage: 0.0, cooldown: 1.0, amount: 1, area: 1.0, speed: 0.0, pierce: 0, duration: 0.0 };
     match kind {
         WeaponKind::Ofuda => WeaponStats {
-            damage: 5.6 + 1.54 * k,
+            damage: 4.93 + 1.36 * k,
             cooldown: 1.0 - 0.05 * k,
             amount: 2 + at(l, 3) + at(l, 5) + at(l, 7) + at(l, 8),
             speed: 340.0,
@@ -534,14 +534,14 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::CrimsonTendrils => WeaponStats {
-            damage: 13.0 + 3.5 * k,
+            damage: 11.70 + 3.15 * k,
             cooldown: 0.9 - 0.03 * k,
             amount: 4 + at(l, 4) + at(l, 7), // tendrils (targets)
             area: 1.0 + 0.07 * k, // reach
             ..base
         },
         WeaponKind::MukadeSpines => WeaponStats {
-            damage: 13.9 + 3.87 * k,
+            damage: 11.54 + 3.21 * k,
             cooldown: 1.7 - 0.06 * k,
             amount: 3 + at(l, 3) + at(l, 5) + at(l, 7),
             area: 1.0 + 0.08 * k,
@@ -555,7 +555,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::VenomFang => WeaponStats {
-            damage: 4.7 + 1.4 * k,
+            damage: 4.00 + 1.19 * k,
             cooldown: 1.2 - 0.04 * k,
             amount: 2 + at(l, 3) + at(l, 6) + at(l, 8),
             area: 1.0 + 0.06 * k,
@@ -579,7 +579,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::VoidLance => WeaponStats {
-            damage: 23.5 + 6.47 * k,
+            damage: 21.15 + 5.82 * k,
             cooldown: 3.4 - 0.12 * k,
             amount: 1 + at(l, 5),
             area: 1.0 + 0.08 * k,
