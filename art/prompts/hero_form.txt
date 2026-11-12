@@ -1,0 +1,5 @@
+Image 1 is a rough placeholder sprite of a hero's transformed "power form" from a 2D top-down anime survivors-like game. Image 2 is the finished art of the same hero in normal form.
+
+Draw the hero from image 2 in the power form shown in image 1: keep his or her face, hairstyle, proportions, art style and quality exactly as in image 2 (chibi, about 2 heads tall, dark navy outline, glossy cel shading, detailed anime eyes), and add the transformation from image 1: its outfit changes, colours, mask, horns, glow, flames, aura or other effects. Same pose and view as image 2.
+
+One single figure, centred. Background: perfectly flat solid pure green (#00FF00), no floor, no shadow, no text. The figure must not touch the image edges.

@@ -1,0 +1,9 @@
+Image 1 is a rough placeholder sprite of an ORIGINAL hero (a young man) from a 2D top-down anime survivors-like game. Image 2 is the finished art of another hero from the same game, a girl: it is ONLY the reference for style, proportions and pose. Do not draw her.
+
+Redraw the hero from image 1 as finished game art that matches image 2 exactly in style and quality: the same chibi proportions (about 2 heads tall, big head), the same confident dark navy outline with varied line weight, the same glossy cel shading and highlights, large detailed anime eyes with highlights, hair drawn as clean locks with shine, cloth with simple folds.
+
+Keep his identity from image 1: his hairstyle and hair colour, eye colour, face accessories (masks, eyepatches, blindfolds, bandages), outfit design and colours, and any props or emblems. He is a young man, not a girl.
+
+Pose: like image 2. Standing, full body, three-quarter view turned to the RIGHT, both arms hanging relaxed slightly away from the body, legs straight with a small gap between them, calm face.
+
+One single figure, centred. Background: perfectly flat solid pure green (#00FF00), no floor, no shadow, no text. The figure must not touch the image edges.

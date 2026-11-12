@@ -89,16 +89,24 @@ def main():
     # Navy sleeves over a navy torso barely differ, so each arm is the hull of what was found.
     found = clean(diff(body_rgb, src["noarms"][0], 25) & solid, min_area=300)
     near_x = xx < cfg["arm_split_x"]
-    arms = (hull(found & near_x, cfg["arm_hull"]["near"]) | hull(found & ~near_x, cfg["arm_hull"]["far"])) & (body_a > 0.05)
+    # An arm the edit didn't remove (e.g. one holding a prop) stays part of the torso.
+    def arm(side, extra):
+        return hull(found & side, extra) if (found & side).sum() > 1500 else np.zeros_like(found)
+    arms = (arm(near_x, cfg["arm_hull"]["near"]) | arm(~near_x, cfg["arm_hull"]["far"])) & (body_a > 0.05)
     arms = ndimage.binary_dilation(arms, iterations=3) & (body_a > 0.05)
-    # Legs: below the skirt, gone in the legless edit.
-    legs = clean((src["nolegs"][1] < 0.5) & solid & (yy > cfg["hem_y"] - 40), grow=2) & (body_a > 0.05)
-
-    # Torso: the armless image, minus legs; below the hem, the legless edit's redrawn skirt edge.
     t_rgb = src["noarms"][0].copy()
-    hem = yy > cfg["hem_y"]
-    t_rgb[hem] = src["nolegs"][0][hem]
-    t_a = np.minimum(src["noarms"][1], np.where(hem, src["nolegs"][1], 1.0))
+    if "nolegs" in src:
+        # Skirts: legs are what the legless edit removed below the hem; the torso takes the
+        # edit's redrawn hem.
+        legs = clean((src["nolegs"][1] < 0.5) & solid & (yy > cfg["hem_y"] - 40), grow=2) & (body_a > 0.05)
+        hem = yy > cfg["hem_y"]
+        t_rgb[hem] = src["nolegs"][0][hem]
+        t_a = np.minimum(src["noarms"][1], np.where(hem, src["nolegs"][1], 1.0))
+    else:
+        # Trousers: legs are everything below the hip line; the torso keeps a band below it,
+        # so the hips stay covered while the legs swing.
+        legs = solid & (yy > cfg["hip_y"])
+        t_a = np.where(yy > cfg["hip_y"] + 28, 0.0, src["noarms"][1])
 
     # Head: torso pixels above the neck line; hair may hang a little lower.
     nx, ny = cfg["neck"]
@@ -109,7 +117,8 @@ def main():
     torso = (t_a > 0.05) & ~(head & (yy < ny - 30))
 
     # Back hair: the hair-only edit, with the hole the body left filled by the darkest hair tone.
-    h_rgb, h_a = src["hair"]
+    # Short hair has none (it's all on the head).
+    h_rgb, h_a = src["hair"] if "hair" in src else (body_rgb, np.zeros_like(body_a))
     hm = h_a > 0.5
     filled = row_fill(hm)
     hole = filled & ~hm
@@ -137,6 +146,14 @@ def main():
     }
     rig = {"canvas": [W, H], "order": list(parts), "parts": {}}
     for name, (rgb, a, m) in parts.items():
+        if not (m & (a > 0.05)).any():
+            # An empty part: a transparent speck at its pivot, so every rig has the same parts.
+            px, py = cfg["pivots"][name]
+            im, box = Image.new("RGBA", (2, 2)), (px, py, px + 2, py + 2)
+            im.save(out / f"{name}.png")
+            rig["parts"][name] = {"offset": box[:2], "size": im.size, "pivot": cfg["pivots"][name]}
+            print(name, "empty")
+            continue
         im, box = part(rgb, a, m)
         im.save(out / f"{name}.png")
         rig["parts"][name] = {"offset": box[:2], "size": im.size, "pivot": cfg["pivots"][name]}
