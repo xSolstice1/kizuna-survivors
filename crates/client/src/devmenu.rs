@@ -19,6 +19,8 @@ pub struct DevMenu {
     pub show_fps: bool,
     typed: String,
     taps: Vec<f64>,
+    /// When "Reset to a new save" was first clicked (a second click within 3 s confirms).
+    reset_armed: Option<f64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -33,6 +35,8 @@ pub enum DevAction {
     Sen,
     Dust,
     MeetAll,
+    /// Wipe the save back to a brand-new player (keeps sound settings).
+    ResetSave,
     // In a run.
     SkipMini,
     SkipBoss,
@@ -111,6 +115,7 @@ impl DevMenu {
                 ("+5,000 Spirit Dust", Dust),
                 ("Mark every Otherworlder met", MeetAll),
                 ("Show fps on/off", ToggleFps),
+                ("Reset to a new save", ResetSave),
             ]
         };
         let cols = 2usize;
@@ -126,9 +131,19 @@ impl DevMenu {
         for (i, (label, act)) in items.iter().enumerate() {
             let (c, r) = (i % cols, i / cols);
             let rect = Rect::new(px + 20.0 + c as f32 * (bw + gap), py + 72.0 + r as f32 * (bh + gap), bw, bh);
-            let label = if *act == ToggleFps { format!("{label}  ({})", if self.show_fps { "on" } else { "off" }) } else { label.to_string() };
-            if kit::button(rect, &label, true, Style::Secondary) {
-                out = Some(*act);
+            let armed = *act == ResetSave && self.reset_armed.is_some_and(|t| get_time() - t < 3.0);
+            let label = match *act {
+                ToggleFps => format!("{label}  ({})", if self.show_fps { "on" } else { "off" }),
+                ResetSave if armed => "Click again to wipe the save".to_string(),
+                _ => label.to_string(),
+            };
+            if kit::button(rect, &label, true, if armed { Style::Primary } else { Style::Secondary }) {
+                if *act == ResetSave && !armed {
+                    self.reset_armed = Some(get_time());
+                } else {
+                    self.reset_armed = None;
+                    out = Some(*act);
+                }
             }
         }
         if kit::button(Rect::new(px + pw / 2.0 - 90.0, py + ph - 52.0, 180.0, 40.0), "Close", true, Style::Primary) || is_key_pressed(KeyCode::Escape) {

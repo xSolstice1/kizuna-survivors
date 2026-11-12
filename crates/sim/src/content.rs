@@ -21,17 +21,20 @@ pub const REACH_MELEE: f32 = 0.8;
 /// Reach stays at least this far inside the visible edge.
 pub const REACH_EDGE: f32 = 24.0;
 pub const DEFAULT_VIEW_HALF: Vec2 = Vec2::new(320.0, 180.0);
-/// Melee reach covers far fewer enemies, so melee heroes hit harder; hybrids keep pace without help.
-pub const MIGHT_MELEE: f32 = 2.3;
-pub const MIGHT_TOYA: f32 = 3.0;
+/// Hero damage multipliers, set so every hero's three best weapons land near one strength
+/// (`skill_strength`): ranged ~3600, hybrid ~3900, melee ~4150 (melee stands in the crowd, so it
+/// keeps a small edge). Before this Riku and Toya were ~3x Ren.
+pub const MIGHT_MELEE: f32 = 2.04;
+pub const MIGHT_TOYA: f32 = 1.75;
 /// Effect duration and range gained per Persistence level.
 pub const PERSISTENCE_PER_LEVEL: f32 = 0.12;
-pub const MIGHT_RIKU: f32 = 2.8;
-/// Ranged heroes after the per-pool weapon band (phase 7 task 9) cut their strongest weapons.
-pub const MIGHT_REN: f32 = 1.4;
-pub const MIGHT_KUON: f32 = 1.6;
-/// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
-pub const BOSS_HP: f32 = 0.5;
+pub const MIGHT_RIKU: f32 = 1.73;
+pub const MIGHT_REN: f32 = 2.07;
+pub const MIGHT_KUON: f32 = 1.82;
+/// Boss HP multiplier (mid-run bosses; finals also take `FINAL_BOSS_HP`).
+pub const BOSS_HP: f32 = 2.0;
+/// Final bosses take this share of `BOSS_HP` (they must fall before dawn).
+pub const FINAL_BOSS_HP: f32 = 0.25;
 
 /// The Night Lord arrives at RUN_SECONDS; if still alive at this time, dawn takes the player.
 pub const DAWN_LIMIT: f32 = 17.0 * 60.0;
@@ -262,8 +265,11 @@ pub const MUKADE_DAMAGE_TAKEN: f32 = 0.75;
 
 /// Ren's Barrier blocks a fireball, then recharges (faster with levels).
 pub fn barrier_recharge(level: u32) -> f32 {
-    (4.0 - 0.04 * level as f32).max(1.5)
+    (5.0 - 0.025 * level as f32).max(3.0)
 }
+/// Bullets that weapons and arts can erase per second (shared), and how many can bank up.
+pub const SHOT_ERASE_RATE: f32 = 1.5;
+pub const SHOT_ERASE_BANK: f32 = 4.0;
 /// Fireballs that do land on Ren hurt this much less.
 pub const BARRIER_SHOT_DAMAGE: f32 = 0.75;
 pub const DIVINE_DURATION: f32 = 8.0;
@@ -417,7 +423,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
     let base = WeaponStats { damage: 0.0, cooldown: 1.0, amount: 1, area: 1.0, speed: 0.0, pierce: 0, duration: 0.0 };
     match kind {
         WeaponKind::Ofuda => WeaponStats {
-            damage: 5.6 + 1.54 * k,
+            damage: 4.93 + 1.36 * k,
             cooldown: 1.0 - 0.05 * k,
             amount: 2 + at(l, 3) + at(l, 5) + at(l, 7) + at(l, 8),
             speed: 340.0,
@@ -531,14 +537,14 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::CrimsonTendrils => WeaponStats {
-            damage: 13.0 + 3.5 * k,
+            damage: 11.70 + 3.15 * k,
             cooldown: 0.9 - 0.03 * k,
             amount: 4 + at(l, 4) + at(l, 7), // tendrils (targets)
             area: 1.0 + 0.07 * k, // reach
             ..base
         },
         WeaponKind::MukadeSpines => WeaponStats {
-            damage: 13.9 + 3.87 * k,
+            damage: 11.54 + 3.21 * k,
             cooldown: 1.7 - 0.06 * k,
             amount: 3 + at(l, 3) + at(l, 5) + at(l, 7),
             area: 1.0 + 0.08 * k,
@@ -552,7 +558,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::VenomFang => WeaponStats {
-            damage: 4.7 + 1.4 * k,
+            damage: 4.00 + 1.19 * k,
             cooldown: 1.2 - 0.04 * k,
             amount: 2 + at(l, 3) + at(l, 6) + at(l, 8),
             area: 1.0 + 0.06 * k,
@@ -576,7 +582,7 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             ..base
         },
         WeaponKind::VoidLance => WeaponStats {
-            damage: 23.5 + 6.47 * k,
+            damage: 21.15 + 5.82 * k,
             cooldown: 3.4 - 0.12 * k,
             amount: 1 + at(l, 5),
             area: 1.0 + 0.08 * k,
@@ -1279,17 +1285,22 @@ pub fn describe_fallback(u: Upgrade, amount: f32) -> String {
     match u {
         Upgrade::Heal => format!("Restore {amount:.0} HP ({:.0}% of max).", ONIGIRI_HEAL * 100.0),
         Upgrade::Sen => format!("+{amount:.0} Sen."),
-        Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Stacks.", amount * 100.0),
+        Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Adds up.", amount * 100.0),
         _ => u.describe(1),
     }
 }
+
+/// Steady healing per second, as a share of max HP (all regeneration / on-kill / on-hit heals
+/// combined), and how many seconds of it can bank up.
+pub const HEAL_CAP: f32 = 0.03;
+pub const HEAL_WINDOW: f32 = 2.0;
 
 /// Share of max HP an Onigiri restores.
 pub const ONIGIRI_HEAL: f32 = 0.3;
 /// Sen Pouch at the start of a run; it gains this much again every `SEN_POUCH_RAMP` seconds of pace.
 pub const SEN_POUCH: f32 = 25.0;
 pub const SEN_POUCH_RAMP: f32 = 300.0;
-/// Run damage multiplier per Blessing taken (stacks).
+/// Damage per Blessing taken: 1.03 = +3%, added up across Blessings (see `World::blessing_mult`).
 pub const BLESSING_DAMAGE: f32 = 1.03;
 
 impl Upgrade {
@@ -1389,7 +1400,7 @@ impl Upgrade {
                 WeaponKind::VoidLance => "A slow orb of void erases everything along its line.",
                 WeaponKind::YinYangOrbs => "Two yin-yang orbs fly out to the edge of your reach and spin back through enemies.",
                 WeaponKind::SpiritSeal => "Stamps a seal on random enemies; each bursts a moment later and hurts the crowd around it.",
-                WeaponKind::PurificationWave => "A wide purifying ring blasts enemies back and erases fireballs.",
+                WeaponKind::PurificationWave => "A wide purifying ring blasts enemies back and erases a few fireballs.",
             }
             .into(),
             Upgrade::Weapon(k) => {
@@ -1453,7 +1464,7 @@ impl Upgrade {
             .into(),
             Upgrade::Heal => format!("Restore {:.0}% of max HP.", ONIGIRI_HEAL * 100.0),
             Upgrade::Sen => "Sen that grows as the night goes on.".into(),
-            Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Stacks.", (BLESSING_DAMAGE - 1.0) * 100.0),
+            Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Adds up.", (BLESSING_DAMAGE - 1.0) * 100.0),
         }
     }
 }
@@ -1586,25 +1597,29 @@ impl Default for Modifiers {
 // ───────────────────────── Progression & pacing ─────────────────────────
 
 /// Attacks only land inside the reach box, so kills are rarer; each gem is worth more to keep levelling on pace.
-pub const XP_GAIN: f32 = 2.2;
+pub const XP_GAIN: f32 = 2.0;
 
+/// XP for the next level. The cubic term barely touches early levels (+24% total XP by 20)
+/// but makes late ones costly (+62% by 40, ~3x by 100), so a build maxes out later and runs
+/// stop reaching level 100+.
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;
-    (5.0 + 3.5 * l + 0.35 * l * l).round() as u32
+    (5.0 + 3.5 * l + 0.35 * l * l + XP_CUBIC * l * l * l).round() as u32
 }
+pub const XP_CUBIC: f32 = 0.01;
 
 /// Minimum enemies alive at time `t` (seconds). Linear between keyframes.
 pub fn min_alive(t: f32) -> usize {
     const KEYS: [(f32, f32); 9] = [
-        (0.0, 25.0),
-        (60.0, 70.0),
-        (180.0, 150.0),
-        (300.0, 220.0),
-        (480.0, 380.0),
-        (660.0, 700.0),
-        (780.0, 1100.0),
-        (870.0, 1700.0),
-        (900.0, 2000.0),
+        (0.0, 28.0),
+        (60.0, 80.0),
+        (180.0, 175.0),
+        (300.0, 260.0),
+        (480.0, 450.0),
+        (660.0, 820.0),
+        (780.0, 1250.0),
+        (870.0, 1850.0),
+        (900.0, 2200.0),
     ];
     let m = t.min(900.0);
     for w in KEYS.windows(2) {
@@ -1616,9 +1631,9 @@ pub fn min_alive(t: f32) -> usize {
     KEYS[KEYS.len() - 1].1 as usize
 }
 
-/// Max new enemies per tick when below `min_alive`: 4 at the start, 24 by 15:00.
+/// Max new enemies per tick when below `min_alive`: 5 at the start, 30 by 15:00.
 pub fn refill_per_tick(t: f32) -> usize {
-    4 + (t / 45.0) as usize
+    5 + (t / 36.0) as usize
 }
 
 /// Spawn ladder rung: 0 until 5:00, 1 until 10:00, then 2. From rung 1 the basic fodder
@@ -1629,7 +1644,7 @@ pub fn ladder_rung(t: f32) -> usize {
 /// Ranged / blinker share multiplier per rung.
 pub const LADDER_LIFT: [f32; 3] = [1.0, 2.0, 3.0];
 /// Alive-count multiplier per rung; tougher kinds keep total enemy HP about the same.
-pub const LADDER_COUNT: [f32; 3] = [1.0, 0.6, 0.6];
+pub const LADDER_COUNT: [f32; 3] = [1.0, 0.85, 0.85];
 
 /// Share of new spawns that are Kasa (umbrella) instead of Wisp.
 pub fn kasa_share(t: f32) -> f32 {
@@ -1643,15 +1658,97 @@ pub fn kasa_share(t: f32) -> f32 {
 /// Extra enemy HP and damage step for each headline round reached.
 pub const HEADLINE_BUMP: f32 = 1.01;
 
-/// Enemy HP multiplier over the run.
+/// Enemy HP (x base) at 0:00, rising to `HP_START` by `HP_START_BY` pace-minutes: the first
+/// minute still gives a few quick levels, then fodder takes several hits from a fresh weapon.
+pub const HP_OPEN: f32 = 1.5;
+pub const HP_START: f32 = 3.5;
+pub const HP_START_BY: f32 = 3.0;
+/// Extra enemy HP per minute after `HP_RAMP_FROM` minutes (compounding), so enemies keep up
+/// with a build that has come together instead of melting from mid-run on.
+pub const HP_RAMP: f32 = 0.15;
+pub const HP_RAMP_FROM: f32 = 1.0;
+
+/// Enemy HP multiplier over the run (`t` in pace seconds).
 pub fn hp_scale(t: f32) -> f32 {
     let m = t / 60.0;
-    1.0 + 0.15 * m + 0.03 * m * m
+    let start = HP_OPEN + (HP_START - HP_OPEN) * (m / HP_START_BY).min(1.0);
+    (start + 0.2 * m + 0.03 * m * m) * (1.0 + HP_RAMP).powf((m - HP_RAMP_FROM).max(0.0))
 }
 
-/// Enemy contact-damage multiplier over the run: 1x at the start, 2.5x by 15:00.
+/// Enemies one area attack hits at full damage; each further enemy takes `AREA_FALLOFF` less,
+/// down to `AREA_FLOOR`. Big crowds stop being free damage for screen-wide weapons, while
+/// single-target and few-target hits (and boss fights) are untouched.
+pub const AREA_FULL: u32 = 6;
+pub const AREA_FALLOFF: f32 = 0.07;
+pub const AREA_FLOOR: f32 = 0.3;
+
+/// Damage share for the `n`-th enemy (0-based) one area attack hits.
+pub fn area_falloff(n: u32) -> f32 {
+    if n < AREA_FULL {
+        1.0
+    } else {
+        (1.0 - AREA_FALLOFF * (n - AREA_FULL + 1) as f32).max(AREA_FLOOR)
+    }
+}
+
+/// Enemy armour: a flat cut to every hit, phased in from `ARMOR_FROM` to `ARMOR_FULL` pace-
+/// minutes up to `ARMOR_SHARE` x the enemy HP scale (so it keeps pace with the run). A hit always
+/// deals at least `ARMOR_FLOOR` of itself: big hits barely notice, rapid small ticks lose up to half.
+pub const ARMOR_SHARE: f32 = 0.15;
+pub const ARMOR_FROM: f32 = 5.0;
+pub const ARMOR_FULL: f32 = 10.0;
+pub const ARMOR_FLOOR: f32 = 0.5;
+
+/// Flat damage taken off each hit at pace time `t` (seconds).
+pub fn enemy_armor(t: f32) -> f32 {
+    let m = t / 60.0;
+    ARMOR_SHARE * hp_scale(t) * ((m - ARMOR_FROM) / (ARMOR_FULL - ARMOR_FROM)).clamp(0.0, 1.0)
+}
+
+/// Ascension (Nightmare+N) traits: +1 adds the first, +2 the first two, and so on. They stack
+/// on top of the raw Ascension multipliers. (name, plain description for the picker)
+pub const ASCENSION_TRAITS: [(&str, &str); 6] = [
+    ("Quick volleys", "Ranged enemies fire 40% more often."),
+    ("Hardened elites", "Elites and Leaders have 50% more HP and double armour."),
+    ("Death bursts", "Some enemies burst a moment after they fall. Step away."),
+    ("Swift horde", "Enemies move 15% faster."),
+    ("Fast bullets", "Enemy bullets fly 30% faster."),
+    ("Endless crowd", "20% more enemies at once."),
+];
+pub const ASC_VOLLEY: f32 = 1.4;
+pub const ASC_ELITE_HP: f32 = 1.5;
+pub const ASC_ELITE_ARMOR: f32 = 2.0;
+pub const ASC_BURST_CHANCE: f32 = 0.15;
+pub const ASC_SPEED: f32 = 1.15;
+pub const ASC_BULLET_SPEED: f32 = 1.3;
+pub const ASC_CROWD: f32 = 1.2;
+
+/// Champions: ordinary enemies that sometimes spawn as a tougher, bigger version and split
+/// into `CHAMPION_SPLIT` ordinary copies when they fall. They give 5x XP for the trouble.
+pub const CHAMPION_HP: f32 = 4.0;
+pub const CHAMPION_SIZE: f32 = 1.3;
+pub const CHAMPION_SPEED: f32 = 1.15;
+pub const CHAMPION_DAMAGE: f32 = 1.5;
+pub const CHAMPION_KNOCK: f32 = 0.3;
+pub const CHAMPION_XP: u32 = 5;
+pub const CHAMPION_SPLIT: usize = 3;
+pub const CHAMPION_NIGHTMARE: f32 = 1.5;
+
+/// Share of ordinary spawns that are Champions: none before pace-minute 4, then up to 6% by 15:00.
+pub fn champion_share(t: f32) -> f32 {
+    let m = t / 60.0;
+    (0.06 * (m - 4.0) / 11.0).clamp(0.0, 0.06)
+}
+
+/// Enemy move-speed multiplier over the run (non-bosses): +3.5% per pace-minute, capped at
+/// +50% by 15:00 so the fastest fodder (~58 base) still stays under the player's base 110.
+pub fn speed_scale(t: f32) -> f32 {
+    (1.0 + 0.035 * t / 60.0).min(1.5)
+}
+
+/// Enemy contact-damage multiplier over the run: 1x at the start, 4.75x by 15:00.
 pub fn damage_scale(t: f32) -> f32 {
-    1.0 + t / 600.0
+    1.0 + t / 240.0
 }
 
 /// Seconds between Oni elites: every 2 minutes, every minute from 10:00.
@@ -1700,8 +1797,8 @@ mod tests {
     fn hero_levers_are_per_hero() {
         assert_eq!(hero_def(HeroId::Riku).reach_might, MIGHT_RIKU);
         assert_eq!(hero_def(HeroId::Toya).reach_might, MIGHT_TOYA);
-        assert_eq!(hero_def(HeroId::Shun).reach_might, 2.3);
-        assert_eq!(hero_def(HeroId::Haru).reach_might, 2.3);
+        assert_eq!(hero_def(HeroId::Shun).reach_might, MIGHT_MELEE);
+        assert_eq!(hero_def(HeroId::Haru).reach_might, MIGHT_MELEE);
         assert_eq!(hero_def(HeroId::Kaede).reach_might, 1.0);
         assert_eq!(hero_def(HeroId::Ren).reach_might, MIGHT_REN);
         assert_eq!(hero_def(HeroId::Kuon).reach_might, MIGHT_KUON);
@@ -1744,6 +1841,14 @@ mod tests {
     }
 
     #[test]
+    fn area_falloff_spares_small_groups() {
+        assert!((0..AREA_FULL).all(|n| area_falloff(n) == 1.0));
+        assert!(area_falloff(AREA_FULL) < 1.0);
+        assert!((AREA_FULL..200).all(|n| area_falloff(n + 1) <= area_falloff(n)));
+        assert_eq!(area_falloff(500), AREA_FLOOR);
+    }
+
+    #[test]
     fn pacing_is_monotonic() {
         let mut prev = 0;
         for s in (0..=900).step_by(10) {
@@ -1751,8 +1856,8 @@ mod tests {
             assert!(n >= prev, "min_alive dropped at {s}s");
             prev = n;
         }
-        assert_eq!(min_alive(0.0), 25);
-        assert_eq!(min_alive(900.0), 2000);
+        assert_eq!(min_alive(0.0), 28);
+        assert_eq!(min_alive(900.0), 2200);
     }
 
     #[test]

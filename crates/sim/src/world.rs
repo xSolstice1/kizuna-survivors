@@ -415,6 +415,8 @@ pub struct Enemies {
     /// A Tool Thief's stolen pickup, and seconds left fleeing the player with it.
     pub carry: Vec<Option<PickupKind>>,
     pub flee: Vec<f32>,
+    /// A Champion: a tougher, bigger version that splits into three when it falls.
+    pub champion: Vec<bool>,
 }
 
 impl Enemies {
@@ -458,6 +460,7 @@ impl Enemies {
         self.scatter.swap_remove(i);
         self.scatter_from.swap_remove(i);
         self.carry.swap_remove(i);
+        self.champion.swap_remove(i);
         self.flee.swap_remove(i);
     }
 }
@@ -804,6 +807,19 @@ pub struct World {
     rng: Rng,
     grid: Grid,
     scratch: Vec<u32>,
+    /// Bullets weapons and arts may still erase (refills at `SHOT_ERASE_RATE`/s); see `erase_shots`.
+    shot_erase: f32,
+    /// `enemy_armor` for this tick.
+    armor_now: f32,
+    /// HP the steady heals may still restore (refills at `HEAL_CAP` x max HP per second).
+    heal_budget: f32,
+    /// Kizuna Blessings taken this run (each +3% damage, added up).
+    pub blessings: u32,
+    /// Enemies hit so far by the current area attack (reset by `query_circle` and per source);
+    /// see `area_falloff`.
+    area_hits: u32,
+    /// Specials and stage hazards are screen-clears by design: no area falloff while they run.
+    area_exempt: bool,
     dead: Vec<usize>,
 }
 
@@ -946,6 +962,12 @@ impl World {
             rng,
             grid: Grid::new(cell, dim),
             scratch: Vec::new(),
+            shot_erase: SHOT_ERASE_BANK,
+            armor_now: 0.0,
+            heal_budget: max_hp * HEAL_CAP * HEAL_WINDOW,
+            blessings: 0,
+            area_hits: 0,
+            area_exempt: false,
             dead: Vec::new(),
         }
     }
@@ -962,6 +984,7 @@ impl World {
         self.tick += 1;
         self.time += DT;
         self.move_player(input);
+        self.armor_now = enemy_armor(self.round_pace());
         self.director();
         self.update_mechanic();
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
@@ -971,19 +994,26 @@ impl World {
         self.move_enemies();
         self.update_weapons();
         self.update_signatures();
+        self.area_exempt = true;
         self.update_fox();
         self.update_hannya();
         self.update_mukade();
         self.update_domain();
         self.update_divine();
+        self.area_exempt = false;
+        self.area_hits = 0;
         self.update_clones();
+        self.area_hits = 0;
         self.update_spirit_arts();
+        self.area_hits = 0;
         self.update_effects();
         self.move_projectiles_and_hit();
         if input.special || self.wants_auto_special() {
             let before = self.player.form;
             let used = self.specials_used;
+            self.area_exempt = true;
             self.use_special();
+            self.area_exempt = false;
             if before <= 0.0 && self.player.form > 0.0 {
                 self.player.form += 2.0 * self.cfg.gear.unique(Unique::Overflow);
             }
@@ -993,7 +1023,10 @@ impl World {
         }
         self.contact_damage();
         self.update_shots();
+        self.area_exempt = true;
         self.update_hazards();
+        self.area_exempt = false;
+        self.area_hits = 0;
         self.update_gear();
         self.update_pickups();
         self.tick_statuses();
@@ -1026,8 +1059,14 @@ impl World {
         let fury = if self.player.hp < self.player.max_hp * 0.4 { 1.0 + 0.3 * g.unique(Unique::Berserker) } else { 1.0 };
         let lotus = 1.0 + 0.35 * g.unique(Unique::GlassLotus);
         let reach = hero_def(self.cfg.hero).reach_might;
-        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake * fury * lotus * reach * self.exotic_might()
+        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * self.blessing_mult() * sake * fury * lotus * reach * self.exotic_might()
     }
+    /// Damage multiplier from Kizuna Blessings: +3% each, added up (30 = +90%), so a long
+    /// maxed-out run no longer compounds into a runaway multiplier.
+    pub fn blessing_mult(&self) -> f32 {
+        1.0 + (BLESSING_DAMAGE - 1.0) * self.blessings as f32
+    }
+
     fn haste(&self) -> f32 {
         let frenzy = match self.form_kind() {
             Some(SpecialKind::Mukade) => MUKADE_HASTE,
@@ -1192,6 +1231,8 @@ impl World {
     }
 
     fn move_player(&mut self, input: Input) {
+        let cap = HEAL_CAP * self.player.max_hp;
+        self.heal_budget = (self.heal_budget + cap * DT).min(cap * HEAL_WINDOW);
         let regen = 0.25 * self.passive_level(PassiveKind::Recovery) as f32 + self.bonus.recovery;
         self.heal(regen * DT);
         let d = input.move_dir.normalize_or_zero();
@@ -1268,6 +1309,11 @@ impl World {
         hp_scale(self.round_pace()) * self.headline_bump() * late * st.tier * self.cfg.difficulty.hp() * self.ascension_hp()
     }
 
+    /// Whether Ascension trait `k` (0-based, see `ASCENSION_TRAITS`) is on this run.
+    pub fn asc_trait(&self, k: usize) -> bool {
+        self.cfg.ascension as usize > k
+    }
+
     fn ascension_hp(&self) -> f32 {
         let fingers = if self.cfg.gear.has(Exotic::SovereignFinger) { self.cfg.gear.fingers as f32 } else { 0.0 };
         (1.0 + 0.4 * self.cfg.ascension as f32) * (1.0 + 0.04 * fingers)
@@ -1294,7 +1340,7 @@ impl World {
 
     /// Enemy damage multiplier now (contact, bullets, hazards).
     pub fn enemy_damage_scale(&self) -> f32 {
-        damage_scale(self.round_pace()) * self.headline_bump() * self.cfg.difficulty.damage() * (1.0 + 0.12 * self.cfg.ascension as f32)
+        damage_scale(self.round_pace()) * self.headline_bump() * self.stage().damage_tier * self.cfg.difficulty.damage() * (1.0 + 0.12 * self.cfg.ascension as f32)
     }
 
     fn spawn_enemy(&mut self, kind: EnemyKind, pos: Vec2) {
@@ -1303,9 +1349,11 @@ impl World {
         }
         let d = enemy_def(kind);
         let hp = if kind.is_boss() {
-            d.hp * BOSS_HP * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
+            let final_share = if kind.rank() == Rank::Final { FINAL_BOSS_HP * self.stage().final_tier } else { 1.0 };
+            d.hp * BOSS_HP * final_share * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
         } else {
-            d.hp * self.enemy_hp_scale() * self.mods.enemy_hp
+            let hardened = if self.asc_trait(1) && (kind.rank() >= Rank::Elite || kind.is_leader()) { ASC_ELITE_HP } else { 1.0 };
+            d.hp * self.enemy_hp_scale() * self.mods.enemy_hp * hardened
         };
         let damage = d.damage * self.enemy_damage_scale();
         let timer = match d.ai {
@@ -1315,7 +1363,8 @@ impl World {
             Ai::Boss => 2.0,
             _ => 3.0,
         };
-        let speed = d.speed * self.rng.range(0.9, 1.1) * self.mods.enemy_speed;
+        let ramp = if kind.is_boss() { 1.0 } else { speed_scale(self.round_pace()) * if self.asc_trait(3) { ASC_SPEED } else { 1.0 } };
+        let speed = d.speed * ramp * self.rng.range(0.9, 1.1) * self.mods.enemy_speed;
         let e = &mut self.enemies;
         e.id.push(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
@@ -1352,6 +1401,20 @@ impl World {
         e.scatter_from.push(Vec2::ZERO);
         e.carry.push(None);
         e.flee.push(0.0);
+        e.champion.push(false);
+    }
+
+    /// Turns enemy `i` into a Champion (see `CHAMPION_*`).
+    fn make_champion(&mut self, i: usize) {
+        let e = &mut self.enemies;
+        e.champion[i] = true;
+        e.hp[i] *= CHAMPION_HP;
+        e.max_hp[i] *= CHAMPION_HP;
+        e.radius[i] *= CHAMPION_SIZE;
+        e.speed[i] *= CHAMPION_SPEED;
+        e.damage[i] *= CHAMPION_DAMAGE;
+        e.knock[i] *= CHAMPION_KNOCK;
+        e.xp[i] *= CHAMPION_XP;
     }
 
     fn spawn_boss(&mut self, kind: EnemyKind) {
@@ -1432,7 +1495,8 @@ impl World {
         let pace = self.round_pace();
         let rung = ladder_rung(pace);
         let basic = if rung > 0 { st.fodder_b } else { st.fodder };
-        let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * if st.in_crisis(self.time) { 1.35 } else { 1.0 } * LADDER_COUNT[rung];
+        let crowd = if self.asc_trait(5) { ASC_CROWD } else { 1.0 };
+        let density = self.cfg.difficulty.density() * (1.0 + 0.04 * self.cfg.ascension as f32).min(1.6) * crowd * if st.in_crisis(self.time) { 1.35 } else { 1.0 } * LADDER_COUNT[rung];
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
             None if self.night_lord_spawned => 0,
@@ -1459,7 +1523,13 @@ impl World {
             };
             let r = self.cfg.spawn_radius + self.rng.range(0.0, 80.0);
             let p = self.ring_point(r);
+            let before = self.enemies.len();
             self.spawn_enemy(kind, p);
+            let share = champion_share(pace) * if self.cfg.difficulty == Difficulty::Nightmare { CHAMPION_NIGHTMARE } else { 1.0 };
+            // Only roll once Champions can appear, so early runs keep their random sequence.
+            if share > 0.0 && self.enemies.len() > before && self.rng.f32() < share {
+                self.make_champion(before);
+            }
         }
 
         if self.cfg.stress.is_none() {
@@ -1829,6 +1899,7 @@ impl World {
         let domain = (self.form_kind() == Some(SpecialKind::Firmament)).then_some(self.domain_center);
         let dr = self.domain_radius();
         let style = if self.cfg.stage == StageId::Shotengai { 0 } else { self.cfg.stage.index() as u8 };
+        let volley_rate = if self.asc_trait(0) { ASC_VOLLEY } else { 1.0 };
         let e = &mut self.enemies;
         let frozen = self.freeze > 0.0;
         // Pass 1: desired velocity = seek player + separation from grid neighbours.
@@ -1892,7 +1963,7 @@ impl World {
                     e.vel[i] = mv * speed;
                     e.ai_timer[i] -= DT;
                     if e.ai_timer[i] <= 0.0 && d < 300.0 {
-                        e.ai_timer[i] = every;
+                        e.ai_timer[i] = every / volley_rate;
                         let base = dir.y.atan2(dir.x);
                         match volley {
                             Volley::Single { speed } => self.shots.push(Shot { pos: p, vel: dir * speed, life: 4.0, style, elem: shooter }),
@@ -2124,6 +2195,7 @@ impl World {
         let p = self.player.pos;
         let might = self.might();
         for wi in 0..self.weapons.len() {
+            self.area_hits = 0;
             let w = self.weapons[wi];
             let every = signature_every(w.kind);
             if !w.awakened || every <= 0.0 {
@@ -2510,7 +2582,7 @@ impl World {
         let power = self.fox_power();
         let elem = Some(self.hero_element);
         let p = self.player.pos;
-        self.heal(MUKADE_REGEN * DT);
+        self.heal_burst(MUKADE_REGEN * DT);
         // Tendril barrage.
         self.fox_tick -= DT;
         if self.fox_tick <= 0.0 {
@@ -3122,6 +3194,8 @@ impl World {
         if !self.in_reach(self.enemies.pos[j], self.enemies.radius[j]) {
             return;
         }
+        let amount = if self.area_exempt { amount } else { amount * area_falloff(self.area_hits) };
+        self.area_hits += 1;
         self.apply_hit(j, amount, dir, elem);
         if let Some(elem) = elem {
             let chance = if elem == Element::Wind && self.has_set6(StageId::EmberLeaf) { 2.0 * PROC_CHANCE } else { PROC_CHANCE };
@@ -3243,6 +3317,9 @@ impl World {
                 self.eclipses.push((self.enemies.pos[j], amount * 0.4 * ecl));
             }
         }
+        let tough = self.asc_trait(1) && !self.enemies.kind[j].is_boss() && (self.enemies.kind[j].rank() >= Rank::Elite || self.enemies.kind[j].is_leader());
+        let armor = if tough { self.armor_now * ASC_ELITE_ARMOR } else { self.armor_now };
+        let amount = (amount - armor).max(amount * ARMOR_FLOOR);
         let e = &mut self.enemies;
         e.hp[j] -= amount;
         e.flash[j] = 5;
@@ -3253,6 +3330,7 @@ impl World {
     /// Indices of enemies whose body overlaps a circle, into `self.scratch`.
     fn query_circle(&mut self, c: Vec2, r: f32) {
         self.scratch.clear();
+        self.area_hits = 0;
         let e = &self.enemies;
         let out = &mut self.scratch;
         self.grid.for_each_near(c, r + MAX_ENEMY_RADIUS, |j| {
@@ -3460,7 +3538,7 @@ impl World {
                         let j = self.scratch[k] as usize;
                         self.hurt_enemy(j, 170.0 * pw * DT, ov, Some(a.art.element()));
                     }
-                    self.shots.retain(|s| (s.pos - op).length_sq() > 32.0 * 32.0);
+                    self.erase_shots(|_, s| (s.pos - op).length_sq() <= 32.0 * 32.0);
                 }
             }
             ArsenalArt::ShadowStar => {
@@ -3478,7 +3556,7 @@ impl World {
                     a.timer = 4.0;
                     let r = self.reach_cap(230.0 * self.area_mult());
                     self.nova(p, r, 120.0 * pw, 1, Some(a.art.element()));
-                    self.shots.retain(|s| (s.pos - p).length_sq() > r * r);
+                    self.erase_shots(|_, s| (s.pos - p).length_sq() <= r * r);
                     self.events.push(Event::Slash { pos: p, dir: self.player.facing, radius: r, full: true });
                 }
             }
@@ -3723,6 +3801,16 @@ impl World {
                 self.player.special = (self.player.special + self.mods.special_rate * (1.0 + self.bonus.special_charge) / SPECIAL_KILLS).min(1.0);
             }
             self.events.push(Event::Kill { pos, kind });
+            if self.enemies.champion[i] {
+                for k in 0..CHAMPION_SPLIT {
+                    let a = k as f32 * std::f32::consts::TAU / CHAMPION_SPLIT as f32;
+                    self.pending_spawns.push((kind, pos + Vec2::from_angle(a) * 14.0));
+                }
+            }
+            if self.asc_trait(2) && !kind.is_boss() && self.hazards.len() < 120 && self.rng.f32() < ASC_BURST_CHANCE {
+                let damage = 10.0 * self.enemy_damage_scale();
+                self.hazards.push(Hazard { pos, radius: 30.0, warn: 0.9, life: 0.0, kind: HazardKind::Blast { damage }, tick: 0.0, friendly: false, spare_enemies: true });
+            }
             if self.cfg.stress.is_none() {
                 self.death_trick(pos, kind);
             }
@@ -3746,10 +3834,10 @@ impl World {
                 }
                 self.gear_kills += 1;
                 self.since_kill = 0.0;
-                let g = &self.cfg.gear;
-                if g.has(Exotic::HungerOrgan) {
-                    self.player.hp = (self.player.hp + self.player.max_hp * 0.004).min(self.player.max_hp);
+                if self.cfg.gear.has(Exotic::HungerOrgan) {
+                    self.heal(self.player.max_hp * 0.004);
                 }
+                let g = &self.cfg.gear;
                 if g.has(Exotic::LanternHeart) && self.gear_kills % 50 == 0 {
                     self.exo_timers[0] -= 1.0;
                 }
@@ -3827,6 +3915,7 @@ impl World {
     fn update_weapons(&mut self) {
         let (might, haste) = (self.might(), self.haste());
         for wi in 0..self.weapons.len() {
+            self.area_hits = 0;
             let w = self.weapons[wi];
             let s = self.stats_of(&w);
             let elem = Some(w.kind.element());
@@ -4311,9 +4400,7 @@ impl World {
                 }
                 if wv.purify {
                     let (c, r) = (wv.center, wv.radius);
-                    let mut shots = std::mem::take(&mut self.shots);
-                    shots.retain(|s| ((s.pos - c).length() - r).abs() > 14.0 || !self.in_reach(s.pos, 0.0));
-                    self.shots = shots;
+                    self.erase_shots(|w, s| ((s.pos - c).length() - r).abs() <= 14.0 && w.in_reach(s.pos, 0.0));
                 }
             }
             i += 1;
@@ -4480,7 +4567,20 @@ impl World {
         self.gems.value.push(value);
     }
 
+    /// Steady healing (regeneration, on-kill, on-hit, drain): all of it shares a budget of
+    /// `HEAL_CAP` x max HP per second (banking up to `HEAL_WINDOW` seconds), so sustain keeps up
+    /// with chip damage but can't erase a swarm. Big deliberate heals use `heal_burst`.
     fn heal(&mut self, amount: f32) {
+        if self.cfg.gear.has(Exotic::ClosedHandVow) {
+            return;
+        }
+        let a = (amount * self.mods.healing).min(self.heal_budget).max(0.0);
+        self.heal_budget -= a;
+        self.player.hp = (self.player.hp + a).min(self.player.max_hp);
+    }
+
+    /// An uncapped heal (the Onigiri card, a Feast, a form's own regeneration).
+    fn heal_burst(&mut self, amount: f32) {
         if self.cfg.gear.has(Exotic::ClosedHandVow) {
             return;
         }
@@ -4550,13 +4650,37 @@ impl World {
         self.events.push(Event::SenPicked { amount });
     }
 
+    /// Erases enemy bullets matching `hit`, but only as many as the shared erase budget allows
+    /// (`SHOT_ERASE_RATE` per second, banking `SHOT_ERASE_BANK`). Bullet-clearing weapons and arts
+    /// still save you from a few shots; they no longer wipe whole curtains. Specials don't use this.
+    fn erase_shots(&mut self, hit: impl Fn(&World, &Shot) -> bool) {
+        let mut n = self.shot_erase.floor() as usize;
+        if n == 0 {
+            return;
+        }
+        let mut shots = std::mem::take(&mut self.shots);
+        let before = shots.len();
+        shots.retain(|s| {
+            if n > 0 && hit(self, s) {
+                n -= 1;
+                false
+            } else {
+                true
+            }
+        });
+        self.shot_erase -= (before - shots.len()) as f32;
+        self.shots = shots;
+    }
+
     fn update_shots(&mut self) {
+        self.shot_erase = (self.shot_erase + SHOT_ERASE_RATE * DT).min(SHOT_ERASE_BANK);
         let p = self.player.pos;
         let hit_r = PLAYER_RADIUS + SHOT_RADIUS;
         let mut hit = false;
         let mut hit_elem = None;
+        let bullet_speed = if self.asc_trait(4) { ASC_BULLET_SPEED } else { 1.0 };
         self.shots.retain_mut(|s| {
-            s.pos += s.vel * DT;
+            s.pos += s.vel * (DT * bullet_speed);
             s.life -= DT;
             if (s.pos - p).length_sq() <= hit_r * hit_r {
                 hit = true;
@@ -5017,6 +5141,10 @@ impl World {
 
     /// Card text for `u`, with live amounts for the maxed-out fallbacks.
     pub fn describe_upgrade(&self, u: Upgrade, next_level: u8) -> String {
+        if u == Upgrade::Blessing {
+            let now = (self.blessing_mult() - 1.0) * 100.0;
+            return format!("+{:.0}% damage for the rest of the run. You have +{now:.0}% so far.", (BLESSING_DAMAGE - 1.0) * 100.0);
+        }
         if MAXED_FALLBACKS.contains(&u) { describe_fallback(u, self.fallback_amount(u)) } else { u.describe(next_level) }
     }
 
@@ -5036,9 +5164,9 @@ impl World {
                     self.heal(VITALITY_HP);
                 }
             }
-            Upgrade::Heal => self.heal(self.fallback_amount(u)),
+            Upgrade::Heal => self.heal_burst(self.fallback_amount(u)),
             Upgrade::Sen => self.gain_sen(self.fallback_amount(u).round() as u32),
-            Upgrade::Blessing => self.mods.damage *= 1.0 + self.fallback_amount(u),
+            Upgrade::Blessing => self.blessings += 1,
         }
         self.note_slots();
     }
@@ -6682,6 +6810,89 @@ mod tests {
     }
 
     #[test]
+    fn blessings_stack_onto_weapon_damage() {
+        // The maxed-out Kizuna Blessing card: +3% damage per pick, added up, on real shots.
+        let shot = |blessings: u32| -> f32 {
+            let mut w = World::new(WorldConfig { seed: 9, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+            for _ in 0..blessings {
+                w.apply_upgrade(Upgrade::Blessing);
+            }
+            w.spawn_enemy(EnemyKind::Oni, Vec2::new(60.0, 0.0));
+            for _ in 0..240 {
+                w.step(Input::default());
+                if let Some(d) = w.projectiles.damage.first() {
+                    return *d;
+                }
+            }
+            panic!("no talisman fired");
+        };
+        let (base, blessed) = (shot(0), shot(20));
+        let want = 1.0 + 20.0 * (BLESSING_DAMAGE - 1.0);
+        assert!((blessed / base - want).abs() < 1e-3, "20 blessings: x{:.3}, want x{want:.3}", blessed / base);
+    }
+
+    #[test]
+    fn steady_healing_is_capped_per_second() {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.player.hp = 1.0;
+        for _ in 0..60 {
+            w.heal(1000.0); // a flood of on-kill heals every tick for one second
+            w.step(Input::default());
+        }
+        let cap = HEAL_CAP * w.player.max_hp;
+        assert!(w.player.hp <= 1.0 + cap * (1.0 + HEAL_WINDOW) + 0.5, "healed {} in 1 s, cap {cap}/s", w.player.hp - 1.0);
+        let before = w.player.hp;
+        w.heal_burst(30.0);
+        assert!((w.player.hp - before - 30.0).abs() < 1e-3, "a burst heal ignores the cap");
+    }
+
+    #[test]
+    fn armour_trims_small_hits_more_than_big_ones() {
+        assert_eq!(enemy_armor(0.0), 0.0);
+        assert_eq!(enemy_armor(ARMOR_FROM * 60.0), 0.0);
+        let late = 12.0 * 60.0;
+        let a = enemy_armor(late);
+        assert!(a > 0.0);
+        let dealt = |hit: f32| (hit - a).max(hit * ARMOR_FLOOR) / hit;
+        assert!(dealt(a * 10.0) > 0.85, "a big hit keeps most of itself");
+        assert_eq!(dealt(a * 0.5), ARMOR_FLOOR, "a tiny tick is floored, never zeroed");
+    }
+
+    #[test]
+    fn bullet_erasing_is_budgeted() {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        let p = w.player.pos;
+        w.shots = (0..40).map(|k| Shot { pos: p + Vec2::new(200.0 + k as f32, 0.0), vel: Vec2::ZERO, life: 10.0, style: 0, elem: None }).collect();
+        w.erase_shots(|_, _| true);
+        assert_eq!(w.shots.len(), 40 - SHOT_ERASE_BANK as usize, "only the banked budget is erased");
+        w.erase_shots(|_, _| true);
+        assert_eq!(w.shots.len(), 40 - SHOT_ERASE_BANK as usize, "an empty budget erases nothing");
+    }
+
+    #[test]
+    fn ascension_traits_stack_by_level() {
+        let at = |asc: u32| World::new(WorldConfig { difficulty: Difficulty::Nightmare, ascension: asc, ..Default::default() });
+        assert!(!at(0).asc_trait(0));
+        let w = at(3);
+        assert!(w.asc_trait(0) && w.asc_trait(1) && w.asc_trait(2) && !w.asc_trait(3));
+        assert!((0..ASCENSION_TRAITS.len()).all(|k| at(6).asc_trait(k)));
+    }
+
+    #[test]
+    fn champions_are_tougher_and_split() {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.spawn_enemy(EnemyKind::Wisp, Vec2::new(200.0, 0.0));
+        let (hp, r) = (w.enemies.hp[0], w.enemies.radius[0]);
+        w.make_champion(0);
+        assert!((w.enemies.hp[0] - hp * CHAMPION_HP).abs() < 1e-3 && w.enemies.radius[0] > r);
+        w.enemies.hp[0] = 0.0;
+        w.remove_dead_enemies();
+        assert_eq!(w.pending_spawns.iter().filter(|(k, _)| *k == EnemyKind::Wisp).count(), CHAMPION_SPLIT);
+        assert_eq!(champion_share(0.0), 0.0);
+        assert!(champion_share(900.0) > 0.0);
+    }
+
+    #[test]
     fn walking_away_from_a_shrine_changes_nothing() {
         let mut w = World::new(WorldConfig::default());
         w.shrine_offer = Some(vec![ShrineEvent::GlassBlade, ShrineEvent::Offering]);
@@ -6850,7 +7061,9 @@ mod tests {
         step_to(&mut w, at + 0.1);
         assert_eq!(w.chests.len(), chests + 1);
         assert!(count_of(&w, st.uncommon[0]) + count_of(&w, st.uncommon[1]) >= 20);
-        assert!(count_of(&w, st.fodder_b) <= cranes + 2);
+        // The round's uncommons replace the usual top-up; only the director's normal refill trickle
+        // (a few per tick, more since the density ramp) adds cranes.
+        assert!(count_of(&w, st.fodder_b) <= cranes + 6, "cranes {} -> {}", cranes, count_of(&w, st.fodder_b));
     }
 
     #[test]
@@ -7124,6 +7337,9 @@ mod tests {
         for k in 0..30 {
             let a = k as f32 / 30.0 * std::f32::consts::TAU;
             w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(a) * (60.0 + (k % 3) as f32 * 40.0));
+            // Base HP: this checks the form's attacks, not the run's HP curve.
+            let last = w.enemies.len() - 1;
+            w.enemies.hp[last] = enemy_def(EnemyKind::Oni).hp;
         }
         w.enemies.speed.iter_mut().for_each(|s| *s = 0.0);
         w.player.special = 1.0;
@@ -7412,6 +7628,9 @@ mod tests {
         // Domain: enemies inside freeze, take damage, and the finale lance fires.
         for k in 0..20 {
             w.spawn_enemy(EnemyKind::Oni, Vec2::from_angle(k as f32) * 90.0);
+            // Base HP: this checks the domain's waves, not the run's HP curve.
+            let last = w.enemies.len() - 1;
+            w.enemies.hp[last] = enemy_def(EnemyKind::Oni).hp;
         }
         w.player.special = 1.0;
         w.step(Input { special: true, ..Default::default() });
@@ -7542,7 +7761,44 @@ mod tests {
             let hero = std::env::var("BALANCE_HERO").ok().and_then(|h| HeroId::from_key(&h)).unwrap_or(HeroId::Ren);
             let stage = std::env::var("BALANCE_STAGE").ok().and_then(|h| StageId::from_key(&h)).unwrap_or(StageId::Shotengai);
             let difficulty = std::env::var("BALANCE_DIFF").ok().and_then(|h| Difficulty::from_key(&h)).unwrap_or(Difficulty::Normal);
-            let mut w = World::new(WorldConfig { seed, hero, stage, difficulty, ..Default::default() });
+            // BALANCE_ASC=n: Nightmare+n. BALANCE_GEAR=count:rarity (e.g. 4:epic): that many random
+            // pieces at the stage's drop item level. BALANCE_AFK=1: the bot never moves.
+            // BALANCE_TRACE=1: a line per minute (lowest HP, damage taken, enemies alive).
+            let ascension: u32 = std::env::var("BALANCE_ASC").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let afk = std::env::var("BALANCE_AFK").is_ok_and(|v| v == "1");
+            // BALANCE_AFK_AFTER=secs: play normally, then stop moving (a "semi-AFK" player).
+            let afk_after: f32 = std::env::var("BALANCE_AFK_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(f32::INFINITY);
+            let trace = std::env::var("BALANCE_TRACE").is_ok_and(|v| v == "1");
+            let gear = match std::env::var("BALANCE_GEAR").ok().and_then(|g| g.split_once(':').map(|(n, r)| (n.parse::<usize>().ok(), r.to_string()))) {
+                Some((Some(n), r)) => {
+                    let rarity = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic]
+                        .into_iter()
+                        .find(|x| x.name().eq_ignore_ascii_case(&r))
+                        .unwrap_or(Rarity::Rare);
+                    let mut rng = crate::rng::Rng::new(seed ^ 0x9e37);
+                    let ilvl = crate::gear::drop_ilvl(stage, difficulty.index(), ascension);
+                    let slots = [crate::gear::Slot::Hat, crate::gear::Slot::Top, crate::gear::Slot::Bottom, crate::gear::Slot::Gloves, crate::gear::Slot::Shoes, crate::gear::Slot::Necklace, crate::gear::Slot::Ring, crate::gear::Slot::Earring, crate::gear::Slot::Charm, crate::gear::Slot::Omamori];
+                    let items: Vec<_> = slots.iter().take(n).map(|s| crate::gear::roll_item(&mut rng, Some(*s), rarity, ilvl)).collect();
+                    Loadout::from_items(&items.iter().collect::<Vec<_>>())
+                }
+                _ => Loadout::default(),
+            };
+            // BALANCE_META=max: every Shrine Shop upgrade at max rank and every world's relic.
+            let meta = if std::env::var("BALANCE_META").is_ok_and(|v| v == "max") {
+                let mut prof = crate::meta::Profile::default();
+                for p in crate::meta::ALL_POWERUPS {
+                    prof.ranks[p.index()] = p.max_rank();
+                }
+                prof.relics = crate::campaign::ALL_STAGES.iter().filter_map(|s| s.def().relic).collect();
+                prof.bonus()
+            } else {
+                Bonus::default()
+            };
+            let mut w = World::new(WorldConfig { seed, hero, stage, difficulty, ascension, gear, meta, ..Default::default() });
+            let (mut hp_low, mut taken, mut last_hp, mut next_trace) = (1.0f32, 0.0f32, 0.0f32, 60.0f32);
+            let mut dealt = 0.0f64;
+            let mut boss_at: Vec<(EnemyKind, f32)> = Vec::new();
+            last_hp = last_hp.max(w.player.hp);
             let mut level_at_15 = None;
             let mut maxed_offers = 0u32;
             let mut first_maxed = None;
@@ -7564,9 +7820,38 @@ mod tests {
                 if w.shrine_offer.is_some() {
                     w.choose_shrine(Some(0));
                 }
-                let input = w.bot_input();
+                let input = if afk || w.time >= afk_after { Input::default() } else { w.bot_input() };
                 w.step(input);
                 gear_drops += w.events.iter().filter(|e| matches!(e, Event::GearDrop { .. })).count() as u32;
+                dealt += w.events.iter().map(|e| if let Event::Hit { amount, .. } = e { *amount as f64 } else { 0.0 }).sum::<f64>();
+                for e in &w.events {
+                    match e {
+                        Event::BossSpawned(k) | Event::NightLordSpawned(k) => boss_at.push((*k, w.time)),
+                        Event::Kill { kind, .. } if kind.is_boss() => {
+                            if let Some(i) = boss_at.iter().position(|(k, _)| k == kind) {
+                                let (k, t0) = boss_at.remove(i);
+                                if trace {
+                                    println!("  boss {:?} spawned {:.0}s, killed in {:.1}s", k, t0, w.time - t0);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if w.player.hp < last_hp {
+                    taken += last_hp - w.player.hp;
+                }
+                last_hp = w.player.hp;
+                hp_low = hp_low.min(w.player.hp / w.player.max_hp);
+                if trace && w.time >= next_trace {
+                    // dps_ratio: damage dealt this minute / enemy HP scale = how many "base enemies" of
+                    // HP the player chews through per second. Flat = enemies keep pace with the build.
+                    let dps = dealt / 60.0;
+                    println!("  {:>4.0}s  hp_low {:>3.0}%  taken {:>6.0}  alive {:>4}  kills {:>6}  level {:>3}  enemy_hp x{:>6.1}  dmg x{:.1}  dps {:>9.0}  dps/hp {:>7.0}", w.time, hp_low * 100.0, taken, w.enemies.len(), w.kills, w.player.level, w.enemy_hp_scale(), w.enemy_damage_scale(), dps, dps / w.enemy_hp_scale() as f64);
+                    dealt = 0.0;
+                    next_trace += 60.0;
+                    hp_low = 1.0;
+                }
             }
             let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
             let nl = w.boss().map(|b| format!("{} {:.0}%", b.2.short_name(), b.1 * 100.0)).unwrap_or("-".into());
@@ -7574,7 +7859,8 @@ mod tests {
             let leader_kills: u32 = ALL_ENEMIES.iter().filter(|k| k.is_leader()).map(|k| w.kills_by_kind[k.index()]).sum();
             let eligible: u32 = ALL_ENEMIES.iter().filter(|k| matches!(k.rank(), Rank::Mini | Rank::Boss | Rank::Final)).map(|k| w.kills_by_kind[k.index()]).sum();
             println!(
-                "seed {seed} [boss {nl}] uncommon_kills {uncommon_kills} leader_kills {leader_kills} gear_drops {gear_drops} set_eligible_kills {eligible} bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  maxed_offers {}  first_maxed {:?}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                "seed {seed} blessing_mult {:.2} [boss {nl}] uncommon_kills {uncommon_kills} leader_kills {leader_kills} gear_drops {gear_drops} set_eligible_kills {eligible} bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  maxed_offers {}  first_maxed {:?}  ({:.1}s real)  weapons {:?}  awakened {:?}",
+                w.blessing_mult(),
                 w.bosses_down,
                 w.state,
                 w.time,

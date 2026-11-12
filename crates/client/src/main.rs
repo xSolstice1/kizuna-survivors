@@ -741,6 +741,13 @@ fn dev_profile_action(a: devmenu::DevAction, profile: &mut Profile) {
                 *k = (*k).max(1);
             }
         }
+        ResetSave => {
+            // Back to a brand-new player: heroes, worlds, shop, relics, gear, currencies, stats
+            // and collection all reset. Sound and Auto Special settings stay.
+            let (music, sfx, auto_off) = (profile.music_volume, profile.sfx_volume, profile.auto_special_off);
+            *profile = Profile::default();
+            (profile.music_volume, profile.sfx_volume, profile.auto_special_off) = (music, sfx, auto_off);
+        }
         _ => {}
     }
 }

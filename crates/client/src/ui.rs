@@ -914,6 +914,10 @@ pub fn pause(world: &World, assets: &Assets, music: &mut f32, sfx: &mut f32, dev
     ] {
         cx += kit::chip(cx, cy, label, &value, c) + 8.0;
     }
+    if world.blessings > 0 {
+        let bonus = (world.blessing_mult() - 1.0) * 100.0;
+        kit::chip(rx + 18.0, cy + 34.0, "BLESSINGS", &format!("{} · +{bonus:.0}% damage", world.blessings), JADE);
+    }
 
     // Actions.
     let by = top + 220.0;

@@ -1645,6 +1645,14 @@ pub fn stage_select(profile: &mut Profile, assets: &Assets, art: &crate::stage::
     for (k, l) in kit::wrap(&mods, tw, 13).iter().take(2).enumerate() {
         kit::text(l, tx, py + 28.0 + k as f32 * 15.0, 13.0, kit::INK);
     }
+    // Ascension traits: the newest one in full, the rest by name.
+    if asc > 0 {
+        let n = (asc as usize).min(sim::content::ASCENSION_TRAITS.len());
+        let (name, what) = sim::content::ASCENSION_TRAITS[n - 1];
+        let older: Vec<&str> = sim::content::ASCENSION_TRAITS[..n - 1].iter().map(|t| t.0).collect();
+        let line = if older.is_empty() { format!("+{n}: {name}. {what}") } else { format!("+{n}: {name}. {what}  Also: {}.", older.join(", ")) };
+        kit::text_fit(&line, tx, py + 58.0, tw, 13.0, GOLD);
+    }
     let reward = match (d, def.relic) {
         (Difficulty::Nightmare, Some(r)) => format!("First clear: +{} Sen and the relic {} ({})", d.first_clear_sen(), r.name(), r.describe()),
         _ => format!("First clear: +{} Sen{}", d.first_clear_sen(), if d == Difficulty::Normal && sid != StageId::Shotengai { ", opens the next world" } else { "" }),
