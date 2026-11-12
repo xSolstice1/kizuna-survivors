@@ -804,6 +804,8 @@ pub struct World {
     rng: Rng,
     grid: Grid,
     scratch: Vec<u32>,
+    /// HP the steady heals may still restore (refills at `HEAL_CAP` x max HP per second).
+    heal_budget: f32,
     /// Kizuna Blessings taken this run (each +3% damage, added up).
     pub blessings: u32,
     /// Enemies hit so far by the current area attack (reset by `query_circle` and per source);
@@ -953,6 +955,7 @@ impl World {
             rng,
             grid: Grid::new(cell, dim),
             scratch: Vec::new(),
+            heal_budget: max_hp * HEAL_CAP * HEAL_WINDOW,
             blessings: 0,
             area_hits: 0,
             area_exempt: false,
@@ -1218,6 +1221,8 @@ impl World {
     }
 
     fn move_player(&mut self, input: Input) {
+        let cap = HEAL_CAP * self.player.max_hp;
+        self.heal_budget = (self.heal_budget + cap * DT).min(cap * HEAL_WINDOW);
         let regen = 0.25 * self.passive_level(PassiveKind::Recovery) as f32 + self.bonus.recovery;
         self.heal(regen * DT);
         let d = input.move_dir.normalize_or_zero();
@@ -2539,7 +2544,7 @@ impl World {
         let power = self.fox_power();
         let elem = Some(self.hero_element);
         let p = self.player.pos;
-        self.heal(MUKADE_REGEN * DT);
+        self.heal_burst(MUKADE_REGEN * DT);
         // Tendril barrage.
         self.fox_tick -= DT;
         if self.fox_tick <= 0.0 {
@@ -3778,10 +3783,10 @@ impl World {
                 }
                 self.gear_kills += 1;
                 self.since_kill = 0.0;
-                let g = &self.cfg.gear;
-                if g.has(Exotic::HungerOrgan) {
-                    self.player.hp = (self.player.hp + self.player.max_hp * 0.004).min(self.player.max_hp);
+                if self.cfg.gear.has(Exotic::HungerOrgan) {
+                    self.heal(self.player.max_hp * 0.004);
                 }
+                let g = &self.cfg.gear;
                 if g.has(Exotic::LanternHeart) && self.gear_kills % 50 == 0 {
                     self.exo_timers[0] -= 1.0;
                 }
@@ -4513,7 +4518,20 @@ impl World {
         self.gems.value.push(value);
     }
 
+    /// Steady healing (regeneration, on-kill, on-hit, drain): all of it shares a budget of
+    /// `HEAL_CAP` x max HP per second (banking up to `HEAL_WINDOW` seconds), so sustain keeps up
+    /// with chip damage but can't erase a swarm. Big deliberate heals use `heal_burst`.
     fn heal(&mut self, amount: f32) {
+        if self.cfg.gear.has(Exotic::ClosedHandVow) {
+            return;
+        }
+        let a = (amount * self.mods.healing).min(self.heal_budget).max(0.0);
+        self.heal_budget -= a;
+        self.player.hp = (self.player.hp + a).min(self.player.max_hp);
+    }
+
+    /// An uncapped heal (the Onigiri card, a Feast, a form's own regeneration).
+    fn heal_burst(&mut self, amount: f32) {
         if self.cfg.gear.has(Exotic::ClosedHandVow) {
             return;
         }
@@ -5073,7 +5091,7 @@ impl World {
                     self.heal(VITALITY_HP);
                 }
             }
-            Upgrade::Heal => self.heal(self.fallback_amount(u)),
+            Upgrade::Heal => self.heal_burst(self.fallback_amount(u)),
             Upgrade::Sen => self.gain_sen(self.fallback_amount(u).round() as u32),
             Upgrade::Blessing => self.blessings += 1,
         }
@@ -6738,6 +6756,21 @@ mod tests {
         let (base, blessed) = (shot(0), shot(20));
         let want = 1.0 + 20.0 * (BLESSING_DAMAGE - 1.0);
         assert!((blessed / base - want).abs() < 1e-3, "20 blessings: x{:.3}, want x{want:.3}", blessed / base);
+    }
+
+    #[test]
+    fn steady_healing_is_capped_per_second() {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        w.player.hp = 1.0;
+        for _ in 0..60 {
+            w.heal(1000.0); // a flood of on-kill heals every tick for one second
+            w.step(Input::default());
+        }
+        let cap = HEAL_CAP * w.player.max_hp;
+        assert!(w.player.hp <= 1.0 + cap * (1.0 + HEAL_WINDOW) + 0.5, "healed {} in 1 s, cap {cap}/s", w.player.hp - 1.0);
+        let before = w.player.hp;
+        w.heal_burst(30.0);
+        assert!((w.player.hp - before - 30.0).abs() < 1e-3, "a burst heal ignores the cap");
     }
 
     #[test]

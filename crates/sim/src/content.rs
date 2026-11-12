@@ -1287,6 +1287,11 @@ pub fn describe_fallback(u: Upgrade, amount: f32) -> String {
     }
 }
 
+/// Steady healing per second, as a share of max HP (all regeneration / on-kill / on-hit heals
+/// combined), and how many seconds of it can bank up.
+pub const HEAL_CAP: f32 = 0.03;
+pub const HEAL_WINDOW: f32 = 2.0;
+
 /// Share of max HP an Onigiri restores.
 pub const ONIGIRI_HEAL: f32 = 0.3;
 /// Sen Pouch at the start of a run; it gains this much again every `SEN_POUCH_RAMP` seconds of pace.
