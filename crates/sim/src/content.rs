@@ -1596,10 +1596,14 @@ impl Default for Modifiers {
 /// Attacks only land inside the reach box, so kills are rarer; each gem is worth more to keep levelling on pace.
 pub const XP_GAIN: f32 = 2.0;
 
+/// XP for the next level. The cubic term barely touches early levels (+24% total XP by 20)
+/// but makes late ones costly (+62% by 40, ~3x by 100), so a build maxes out later and runs
+/// stop reaching level 100+.
 pub fn xp_needed(level: u32) -> u32 {
     let l = level as f32;
-    (5.0 + 3.5 * l + 0.35 * l * l).round() as u32
+    (5.0 + 3.5 * l + 0.35 * l * l + XP_CUBIC * l * l * l).round() as u32
 }
+pub const XP_CUBIC: f32 = 0.01;
 
 /// Minimum enemies alive at time `t` (seconds). Linear between keyframes.
 pub fn min_alive(t: f32) -> usize {
