@@ -1,5 +1,5 @@
-//! Visual effects kit: generated effect sprites (art/hd/vfx/*.png, from one sprite sheet, see
-//! docs/art-pipeline.md) and an additive-blend material, so glows, sparks and trails add light
+//! Visual effects kit: generated effect sprites (art/hd/vfx/*.png, cut from sprite sheets by
+//! tools/ai/vfx_cut.py, see docs/art-pipeline.md) and an additive-blend material, so glows, sparks and trails add light
 //! instead of painting flat shapes over the scene.
 //!
 //! Use: `vfx.additive(|| { vfx.draw("glow", c, 24.0, 0.0, tint); ... })` for light, or
@@ -10,9 +10,13 @@ use macroquad::prelude::*;
 
 use crate::sprites;
 
-pub const NAMES: [&str; 32] = [
+pub const NAMES: [&str; 63] = [
     "glow", "sparkle", "petal", "smoke", "slash", "ring", "circle", "lightning", "flame", "streak", "moon", "burst", "ember", "splash", "ofuda", "leaf",
     "bullet", "kunai", "vortex", "star", "seal", "spirit", "tendril", "foxtail", "beam", "bubble", "wind", "spike", "shield", "crack", "reticle", "feather",
+    // Sheet 3 (glowing, additive).
+    "void", "accretion", "foxspirit", "goldfire", "crescent", "meteor", "taiko", "spark_ball", "fireball", "danmaku", "chain", "soulfire", "hellfire", "venom", "pillar", "sigil",
+    // Sheet 4 (solid objects, drawn normally).
+    "shuriken", "lantern", "fang", "yinyang", "segment", "centipede_head", "hannya", "flask", "fox", "bones", "redstar", "crystal", "bell", "thunder_ofuda", "sakura",
 ];
 
 const FRAGMENT: &str = r#"#version 100
@@ -91,12 +95,31 @@ impl Vfx {
 
     /// Like `draw`, stretched to `wh` (e.g. a streak along a velocity).
     pub fn draw_wh(&self, name: &str, c: Vec2, wh: Vec2, rot: f32, tint: Color) {
-        draw_texture_ex(self.tex(name), c.x - wh.x / 2.0, c.y - wh.y / 2.0, tint, DrawTextureParams { dest_size: Some(wh), rotation: rot, ..Default::default() });
+        self.draw_ex(name, c, wh, rot, false, tint);
+    }
+
+    /// Like `draw_wh`, optionally mirrored left to right (for sprites that face a way).
+    pub fn draw_ex(&self, name: &str, c: Vec2, wh: Vec2, rot: f32, flip_x: bool, tint: Color) {
+        draw_texture_ex(self.tex(name), c.x - wh.x / 2.0, c.y - wh.y / 2.0, tint, DrawTextureParams { dest_size: Some(wh), rotation: rot, flip_x, ..Default::default() });
+    }
+
+    /// A sprite whose art points along `art_dir` (radians), turned to point along `dir`.
+    pub fn draw_along(&self, name: &str, c: Vec2, wh: Vec2, dir: Vec2, art_dir: f32, tint: Color) {
+        self.draw_wh(name, c, wh, dir.y.atan2(dir.x) - art_dir, tint);
     }
 }
 
 thread_local! {
     static KIT: std::cell::OnceCell<Vfx> = const { std::cell::OnceCell::new() };
+}
+
+/// Runs `f` with the installed kit (for drawing helpers that don't get the assets).
+pub fn with(f: impl FnOnce(&Vfx)) {
+    KIT.with(|k| {
+        if let Some(v) = k.get() {
+            f(v);
+        }
+    });
 }
 
 /// Makes the kit available to `shape` (called once, when the assets load).
@@ -110,7 +133,7 @@ pub fn install(v: &Vfx) {
 /// sprites instead of flat geometry, so every effect in the world is art rather than code
 /// shapes. Solid circles become a bright-cored orb, faint ones a soft glow; outlines become the
 /// shockwave ring; lines a beam; small squares embers; triangles a spike aimed at the tip;
-/// polygons a star or sparkle; dark ellipses soft shadows.
+/// dark ellipses soft shadows.
 pub mod shape {
     use super::KIT;
     use macroquad::prelude::*;
@@ -183,14 +206,6 @@ pub mod shape {
     pub fn moon_orb(c: Vec2, r: f32, rot: f32) {
         spr("glow", c, Vec2::splat(r * 4.0), 0.0, Color::new(1.0, 0.9, 0.6, 0.45));
         spr("moon", c, Vec2::splat(r * 2.4), rot * 0.3, WHITE);
-    }
-
-    pub fn poly(x: f32, y: f32, sides: u8, r: f32, rotation: f32, c: Color) {
-        spr(if sides == 5 { "star" } else { "sparkle" }, vec2(x, y), Vec2::splat(r * 2.8), rotation.to_radians(), c);
-    }
-
-    pub fn poly_lines(x: f32, y: f32, _sides: u8, r: f32, _rotation: f32, thickness: f32, c: Color) {
-        circle_lines(x, y, r, thickness, c);
     }
 
     pub fn ellipse(x: f32, y: f32, w: f32, h: f32, rotation: f32, c: Color) {
