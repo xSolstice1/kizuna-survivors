@@ -103,15 +103,25 @@ squash and breathes when standing still. A new enemy kind defaults to Walk; add 
 
 ## Effects (VFX sprites)
 
-Every effect in the world (projectiles, auras, rings, beams, sparks, shadows) is drawn with the
-32 sprites in `art/hd/vfx/`, made as two 4x4 sheets on pure black (`art/prompts/vfx_sheet.txt`,
-`vfx_sheet2.txt`; pro, ~$0.14 each, with an earlier sheet as the style reference) and cut into
-cells; black becomes transparent. `crates/client/src/vfx.rs` loads them (`NAMES`) and draws
-them additively (`vfx.additive(|| ...)`), so light adds up instead of covering the scene.
+Every spell, projectile, aura, telegraph and hit in the world is drawn with the sprites in
+`art/hd/vfx/` (63 of them), made as 4x4 sheets with gemini-3-pro-image (~$0.14 each, an earlier
+sheet or a hero as the style reference) and cut with `tools/ai/vfx_cut.py`:
+
+- **Glowing effects** (`art/prompts/vfx_sheet.txt`, `vfx_sheet2.txt`, `vfx_sheet3.txt`) are
+  drawn on pure black and cut with `--bg black`: black becomes transparent, and the client
+  draws them additively (`vfx.additive(|| ...)`), so light adds up instead of covering the scene.
+- **Solid objects** (`vfx_sheet4.txt`: shuriken, lanterns, fangs, the yin-yang orb, centipede
+  parts, ...) are drawn on a #00FF00 chroma-key screen and cut with `--bg green`, then drawn
+  normally (dark parts must stay opaque).
+
+`crates/client/src/vfx.rs` loads them (`NAMES`); `draw`, `draw_wh`, `draw_ex` (mirrored) and
+`draw_along` (turn a sprite whose art points one way to face a velocity) place them.
 `vfx::shape` has drop-ins for macroquad's `draw_circle`, `draw_line`, `draw_triangle` and the
-rest, which draw sprites instead of flat geometry; use them for quick effects, and draw named
-sprites (flame, foxtail, seal, ...) for signature ones. To add an effect, make a sheet the same
-way, add the names to `NAMES`, and draw them.
+rest that draw sprites instead of flat geometry, for minor effects; every signature effect draws
+named sprites (see `draw_world` and the `draw_*` helpers in `render.rs`). To add effects, write a
+sheet prompt listing 16 cells row by row, generate it, cut it, add the names to `NAMES`, and
+look at them over a mid-grey background before using them. Keep additive layers light: many
+overlapping bright sprites burn to white (tone alphas down where effects stack).
 
 ## Adding a hero (rigged, like Ren)
 
@@ -202,7 +212,23 @@ Ground tiles are 128x128 and opaque. `restyle.py` redraws each one (nano is fine
 seamless (blends it with its half-offset copy), and `harmonize` matches each stage's `ground_b`,
 `path` and decal colours to `ground_a` and feathers decals into it, so alternating tiles don't
 checkerboard. Look at a tiled preview before committing; image models are bad at tiling, so
-expect to touch these up.
+expect to touch these up. (These tiles draw the flat prologue; the campaign worlds use the
+terrain textures below.)
+
+## Terrain (campaign worlds)
+
+The campaign worlds have high and low ground (`crates/sim/src/terrain.rs`: the map, cliffs as
+walls, roads that climb them) drawn by a shader (`crates/client/src/terrain_bake.rs`) from seven
+textures per world in `art/hd/<world>/terrain/` (JPEG: opaque and much smaller):
+`ground_a`, `ground_b`, `low`, `high`, `trail` (512x512, 128 world units per repeat), `cliff`
+(512x256: a rock face 64 units wide and 32 tall, the lip at the top) and `stairs` (512x256: one
+flight climbing to the top edge, seamless left to right, no railings). The prompts are in
+`art/prompts/terrain/` (`<world>_low.txt`, `_high.txt`, `_trail.txt`, `_cliff.txt`,
+`_stairs_wide.txt`; nano is fine except the cliff); generate at full size, then
+`python3 tools/ai/terrain_hd.py <world>` flattens the lighting, makes them seamless, matches
+`low` (darker) and `high` (lighter) to the world's palette and writes the textures. The shader
+adds the rest (contours, faces, shadows, rims, stairs, level lighting), so the textures should
+be flat surfaces with no edges or lighting of their own.
 
 ## Tips
 
