@@ -804,6 +804,8 @@ pub struct World {
     rng: Rng,
     grid: Grid,
     scratch: Vec<u32>,
+    /// Bullets weapons and arts may still erase (refills at `SHOT_ERASE_RATE`/s); see `erase_shots`.
+    shot_erase: f32,
     /// `enemy_armor` for this tick.
     armor_now: f32,
     /// HP the steady heals may still restore (refills at `HEAL_CAP` x max HP per second).
@@ -957,6 +959,7 @@ impl World {
             rng,
             grid: Grid::new(cell, dim),
             scratch: Vec::new(),
+            shot_erase: SHOT_ERASE_BANK,
             armor_now: 0.0,
             heal_budget: max_hp * HEAL_CAP * HEAL_WINDOW,
             blessings: 0,
@@ -3502,7 +3505,7 @@ impl World {
                         let j = self.scratch[k] as usize;
                         self.hurt_enemy(j, 170.0 * pw * DT, ov, Some(a.art.element()));
                     }
-                    self.shots.retain(|s| (s.pos - op).length_sq() > 32.0 * 32.0);
+                    self.erase_shots(|_, s| (s.pos - op).length_sq() <= 32.0 * 32.0);
                 }
             }
             ArsenalArt::ShadowStar => {
@@ -3520,7 +3523,7 @@ impl World {
                     a.timer = 4.0;
                     let r = self.reach_cap(230.0 * self.area_mult());
                     self.nova(p, r, 120.0 * pw, 1, Some(a.art.element()));
-                    self.shots.retain(|s| (s.pos - p).length_sq() > r * r);
+                    self.erase_shots(|_, s| (s.pos - p).length_sq() <= r * r);
                     self.events.push(Event::Slash { pos: p, dir: self.player.facing, radius: r, full: true });
                 }
             }
@@ -4354,9 +4357,7 @@ impl World {
                 }
                 if wv.purify {
                     let (c, r) = (wv.center, wv.radius);
-                    let mut shots = std::mem::take(&mut self.shots);
-                    shots.retain(|s| ((s.pos - c).length() - r).abs() > 14.0 || !self.in_reach(s.pos, 0.0));
-                    self.shots = shots;
+                    self.erase_shots(|w, s| ((s.pos - c).length() - r).abs() <= 14.0 && w.in_reach(s.pos, 0.0));
                 }
             }
             i += 1;
@@ -4606,7 +4607,30 @@ impl World {
         self.events.push(Event::SenPicked { amount });
     }
 
+    /// Erases enemy bullets matching `hit`, but only as many as the shared erase budget allows
+    /// (`SHOT_ERASE_RATE` per second, banking `SHOT_ERASE_BANK`). Bullet-clearing weapons and arts
+    /// still save you from a few shots; they no longer wipe whole curtains. Specials don't use this.
+    fn erase_shots(&mut self, hit: impl Fn(&World, &Shot) -> bool) {
+        let mut n = self.shot_erase.floor() as usize;
+        if n == 0 {
+            return;
+        }
+        let mut shots = std::mem::take(&mut self.shots);
+        let before = shots.len();
+        shots.retain(|s| {
+            if n > 0 && hit(self, s) {
+                n -= 1;
+                false
+            } else {
+                true
+            }
+        });
+        self.shot_erase -= (before - shots.len()) as f32;
+        self.shots = shots;
+    }
+
     fn update_shots(&mut self) {
+        self.shot_erase = (self.shot_erase + SHOT_ERASE_RATE * DT).min(SHOT_ERASE_BANK);
         let p = self.player.pos;
         let hit_r = PLAYER_RADIUS + SHOT_RADIUS;
         let mut hit = false;
@@ -6788,6 +6812,17 @@ mod tests {
         let dealt = |hit: f32| (hit - a).max(hit * ARMOR_FLOOR) / hit;
         assert!(dealt(a * 10.0) > 0.85, "a big hit keeps most of itself");
         assert_eq!(dealt(a * 0.5), ARMOR_FLOOR, "a tiny tick is floored, never zeroed");
+    }
+
+    #[test]
+    fn bullet_erasing_is_budgeted() {
+        let mut w = World::new(WorldConfig { stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        let p = w.player.pos;
+        w.shots = (0..40).map(|k| Shot { pos: p + Vec2::new(200.0 + k as f32, 0.0), vel: Vec2::ZERO, life: 10.0, style: 0, elem: None }).collect();
+        w.erase_shots(|_, _| true);
+        assert_eq!(w.shots.len(), 40 - SHOT_ERASE_BANK as usize, "only the banked budget is erased");
+        w.erase_shots(|_, _| true);
+        assert_eq!(w.shots.len(), 40 - SHOT_ERASE_BANK as usize, "an empty budget erases nothing");
     }
 
     #[test]

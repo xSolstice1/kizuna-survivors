@@ -265,8 +265,11 @@ pub const MUKADE_DAMAGE_TAKEN: f32 = 0.75;
 
 /// Ren's Barrier blocks a fireball, then recharges (faster with levels).
 pub fn barrier_recharge(level: u32) -> f32 {
-    (4.0 - 0.04 * level as f32).max(1.5)
+    (5.0 - 0.025 * level as f32).max(3.0)
 }
+/// Bullets that weapons and arts can erase per second (shared), and how many can bank up.
+pub const SHOT_ERASE_RATE: f32 = 1.5;
+pub const SHOT_ERASE_BANK: f32 = 4.0;
 /// Fireballs that do land on Ren hurt this much less.
 pub const BARRIER_SHOT_DAMAGE: f32 = 0.75;
 pub const DIVINE_DURATION: f32 = 8.0;
@@ -1397,7 +1400,7 @@ impl Upgrade {
                 WeaponKind::VoidLance => "A slow orb of void erases everything along its line.",
                 WeaponKind::YinYangOrbs => "Two yin-yang orbs fly out to the edge of your reach and spin back through enemies.",
                 WeaponKind::SpiritSeal => "Stamps a seal on random enemies; each bursts a moment later and hurts the crowd around it.",
-                WeaponKind::PurificationWave => "A wide purifying ring blasts enemies back and erases fireballs.",
+                WeaponKind::PurificationWave => "A wide purifying ring blasts enemies back and erases a few fireballs.",
             }
             .into(),
             Upgrade::Weapon(k) => {
