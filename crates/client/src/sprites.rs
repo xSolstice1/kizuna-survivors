@@ -38,6 +38,41 @@ pub fn sprite(path: &str) -> Sprite {
     decode_hd(path).unwrap_or_else(|| parse(px(path)))
 }
 
+/// A high-resolution PNG of any size (art/hd/<path>.png, no pixel source): its art size is
+/// its texel size / `UP`. Used by the generated (AI) sprites.
+pub fn free_art(path: &str) -> Texture2D {
+    let bytes = index::png(path).unwrap_or_else(|| panic!("missing art/hd/{path}.png"));
+    let img = Image::from_file_with_format(bytes, Some(ImageFormat::Png)).expect("bad png");
+    Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true }.texture()
+}
+
+/// The decoded RGBA image of art/hd/<path>.png or .jpg (for the terrain textures).
+pub fn hd_image(path: &str) -> Image {
+    let bytes = index::png(path).unwrap_or_else(|| panic!("missing art/hd/{path}.png"));
+    let format = if bytes.starts_with(&[0xFF, 0xD8]) { ImageFormat::Jpeg } else { ImageFormat::Png };
+    Image::from_file_with_format(bytes, Some(format)).expect("bad image")
+}
+
+/// A hi-res generated sprite (art/hd/<path>.png), with mipmaps so it stays clean when drawn
+/// smaller than its texture.
+pub fn hi_art(path: &str) -> Texture2D {
+    let t = free_art(path);
+    mipmaps(&t);
+    t
+}
+
+/// Trilinear filtering. Skipped on WebGL 1, which can't mipmap non-power-of-two textures.
+fn mipmaps(t: &Texture2D) {
+    use macroquad::miniquad::{FilterMode as F, MipmapFilterMode as M};
+    let gl = unsafe { get_internal_gl() };
+    if gl.quad_context.info().gl_version_string.contains("WebGL 1") {
+        return;
+    }
+    let id = t.raw_miniquad_id();
+    gl.quad_context.texture_generate_mipmaps(id);
+    gl.quad_context.texture_set_min_filter(id, F::Linear, M::Linear);
+}
+
 /// A texture by art path.
 pub fn art(path: &str) -> Texture2D {
     sprite(path).texture()

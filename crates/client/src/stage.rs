@@ -9,7 +9,7 @@ use crate::render::world_scale;
 use crate::sprites;
 
 use sim::campaign::StageId;
-use sim::stage::{chunk_props, hash, PropKind, CHUNK, PATH_EVERY, TILE};
+use sim::stage::{hash, PropKind, CHUNK, PATH_EVERY, TILE};
 
 /// Per world: ground_a, ground_b, decal, path, prop_a, prop_b, prop_c, prop_d.
 type WorldSet = [Texture2D; 8];
@@ -17,6 +17,8 @@ type WorldSet = [Texture2D; 8];
 pub struct StageArt {
     tex: Vec<(&'static str, Texture2D)>,
     worlds: Vec<WorldSet>,
+    /// Baked terrain chunks for the current campaign world (made on first use).
+    baker: std::cell::RefCell<Option<crate::terrain_bake::Baker>>,
     vignette: Texture2D,
     /// Soft white radial falloff, tinted per light.
     glow: Texture2D,
@@ -162,7 +164,7 @@ impl StageArt {
         });
         let glow = radial(64, [255, 255, 255], |d| (1.0 - d).max(0.0).powi(2));
         let dark = radial(128, [2, 3, 8], |d| ((d - 0.22) / 0.4).clamp(0.0, 1.0) * 0.86);
-        StageArt { tex, worlds, vignette, glow, dark }
+        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), vignette, glow, dark }
     }
 
     fn get(&self, name: &str) -> &Texture2D {
@@ -223,13 +225,23 @@ impl StageArt {
     }
 
     /// Ground tiles, props and their glows (everything under the characters).
-    pub fn draw_ground(&self, stage: StageId, cam: &Camera2D, time: f64) {
+    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, time: f64) {
         let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
         let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
+        if terrain.on {
+            let mut baker = self.baker.borrow_mut();
+            if baker.as_ref().is_none_or(|b| b.stage() != stage) {
+                *baker = Some(crate::terrain_bake::Baker::new(stage));
+            }
+            let b = baker.as_mut().unwrap();
+            let view = Rect::new(x0, y0, sw, sh);
+            b.update(cam.target, view);
+            b.draw(view);
+        }
         let (tx0, ty0) = ((x0 / TILE).floor() as i32, (y0 / TILE).floor() as i32);
         let (prop_glows, decal_glow) = world_glows(stage);
         let mut decals = Vec::new();
-        for ty in ty0..=ty0 + (sh / TILE) as i32 + 1 {
+        for ty in (ty0..=ty0 + (sh / TILE) as i32 + 1).filter(|_| !terrain.on) {
             for tx in tx0..=tx0 + (sw / TILE) as i32 + 1 {
                 let (t, decal) = self.tile(stage, tx, ty);
                 // Inset half a texel: tiles live in the shared atlas, and linear filtering must not
@@ -254,7 +266,7 @@ impl StageArt {
         let (cx1, cy1) = (((x0 + sw + margin) / CHUNK).floor() as i32, ((y0 + sh + margin) / CHUNK).floor() as i32);
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
-                let (props, n) = chunk_props(stage, cx, cy);
+                let (props, n) = terrain.chunk_props(cx, cy);
                 for prop in &props[..n] {
                     let (px, py) = (prop.pos.x, prop.pos.y);
                     let (t, glow) = match prop.kind {
@@ -285,7 +297,7 @@ impl StageArt {
                     }
                     // Contact shadow under the solid footprint.
                     let (min, max) = prop.footprint();
-                    draw_rectangle(min.x - 1.0, max.y - 2.0, max.x - min.x + 2.0, 3.0, Color::new(0.0, 0.0, 0.0, 0.35));
+                    crate::vfx::shape::ellipse((min.x + max.x) / 2.0, max.y - 0.5, (max.x - min.x) / 2.0 + 2.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
                     let n = crate::sprites::nat(t);
                     draw_texture_ex(t, (px - n.x / 2.0).round(), (py - n.y).round() + 6.0, WHITE, DrawTextureParams { dest_size: Some(n), ..Default::default() });
                 }
@@ -323,7 +335,7 @@ impl StageArt {
             let speed = 0.9 + (seed >> 10) as f32 % 100.0 / 200.0;
             let y = ((t * speed + (seed >> 20) as f32 / 4096.0) % 1.0) * (h + len) - len;
             let x = (sx * (w + 80.0) - 40.0 + y * 0.18) % (w + 80.0);
-            draw_line(x, y, x - len * 0.18, y + len, 1.5, streak);
+            crate::vfx::shape::line(x, y, x - len * 0.18, y + len, 1.5, streak);
         }
         if flash > 0.0 {
             draw_rectangle(0.0, 0.0, w, h, Color::new(0.85, 0.9, 1.0, flash.min(1.0) * 0.55));

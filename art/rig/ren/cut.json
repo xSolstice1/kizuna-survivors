@@ -1,0 +1,88 @@
+{
+ "sources": {
+  "full": "art/ai/raw/ren_chibi_gemini-3-pro-image_0.png",
+  "nohair": "art/ai/raw/ren_L_nohair_gemini-nano-banana-2.1_1.png",
+  "hair": "art/ai/raw/ren_L_hair_gemini-nano-banana-2.1_0.png",
+  "noarms": "art/ai/raw/ren_L_noarms_gemini-nano-banana-2.1_0.png",
+  "nolegs": "art/ai/raw/ren_L_nolegs_gemini-nano-banana-2.1_1.png"
+ },
+ "hem_y": 815,
+ "neck": [
+  565,
+  495
+ ],
+ "arm_split_x": 560,
+ "leg_split_x": 548,
+ "pivots": {
+  "hair_back": [
+   560,
+   120
+  ],
+  "leg_far": [
+   615,
+   825
+  ],
+  "leg_near": [
+   480,
+   825
+  ],
+  "torso": [
+   560,
+   820
+  ],
+  "head": [
+   565,
+   495
+  ],
+  "arm_near_upper": [
+   425,
+   545
+  ],
+  "arm_far_upper": [
+   690,
+   545
+  ],
+  "arm_near_fore": [
+   392,
+   660
+  ],
+  "arm_far_fore": [
+   718,
+   660
+  ]
+ },
+ "arm_hull": {
+  "near": [
+   [
+    425,
+    532
+   ],
+   [
+    372,
+    560
+   ],
+   [
+    343,
+    615
+   ],
+   [
+    340,
+    690
+   ]
+  ],
+  "far": [
+   [
+    690,
+    532
+   ],
+   [
+    728,
+    565
+   ],
+   [
+    748,
+    640
+   ]
+  ]
+ }
+}

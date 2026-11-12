@@ -1,0 +1,10 @@
+Redraw the character from image 1 EXACTLY (same design, same chibi proportions, same thick dark navy outline, same flat cel shading and colours) in a neutral "rig pose" for cut-out animation:
+
+- Three-quarter view facing RIGHT, standing straight, full body, centred.
+- Both arms hang down and slightly AWAY from the body (a small gap of green between each arm and the torso), hands relaxed and open, not touching the skirt or satchel.
+- Legs straight and slightly apart with a small gap between them, feet flat.
+- The long pink hair falls straight down BEHIND her back and shoulders, not covering the arms. Bangs and the two side locks framing the face stay as in image 1.
+- The satchel sits at her left hip (the side away from the viewer is fine), strap across the chest.
+- Calm neutral face, eyes open, mouth closed.
+
+Background: perfectly flat solid pure green (#00FF00), no floor, no shadow, no text. The figure must not touch the image edges.

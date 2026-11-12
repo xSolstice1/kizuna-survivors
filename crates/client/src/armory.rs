@@ -293,7 +293,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
         kit::rounded_outline(r.x, r.y, r.w, r.h, 6.0, if active { 2.5 } else { 1.5 }, if active { GOLD } else if sel { crate::menu::ACCENT } else { Color::new(1.0, 1.0, 1.0, 0.2) });
         if hero_def(*h).finished {
             let tint = if unlocked { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) };
-            draw_texture_ex(&assets.hero(*h)[0], r.x + 4.0, r.y + 3.0, tint, DrawTextureParams { dest_size: Some(vec2(30.0, 40.0)), ..Default::default() });
+            { let t = &assets.hero(*h)[0]; let w = 40.0 * t.width() / t.height(); draw_texture_ex(t, r.x + 19.0 - w / 2.0, r.y + 3.0, tint, DrawTextureParams { dest_size: Some(vec2(w, 40.0)), ..Default::default() }); }
         } else {
             kit::text_fit_centered("?", r.x + r.w / 2.0, r.y + 32.0, r.w, 24.0, FAINT);
         }
@@ -323,7 +323,7 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
         crate::menu::centered_at("?", dx + dw / 2.0, dy + 160.0, 90.0, FAINT);
     } else {
         let tint = if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) };
-        draw_texture_ex(&assets.hero(hero)[0], dx + dw / 2.0 - 48.0, dy + 66.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(96.0, 128.0)), ..Default::default() });
+        { let t = &assets.hero(hero)[0]; let w = 128.0 * t.width() / t.height(); draw_texture_ex(t, dx + dw / 2.0 - w / 2.0, dy + 66.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(w, 128.0)), ..Default::default() }); }
     }
     // Who they are, in the column between the slots.
     let colx = dx + 16.0 + 50.0 + 64.0;

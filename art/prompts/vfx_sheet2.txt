@@ -1,0 +1,8 @@
+A sprite sheet of 16 visual effects for a 2D anime action game, in a strict 4x4 grid of equal square cells on a PURE BLACK (#000000) background. Each effect is centred in its cell, fills about 80% of it, and does not touch the cell edges or other cells. Glowing, luminous effects (drawn with additive blending, so black means invisible). Polished modern anime game VFX style matching image 1 (same style as image 1's effects): clean shapes, soft glows, crisp bright cores.
+
+Row 1: (1) a round glowing energy bullet, white with a very bright core and soft halo; (2) a kunai dagger pointing right, white, glowing; (3) a swirling spiral vortex seen from above, white; (4) a five-pointed star, gold, glowing.
+Row 2: (5) a blue onmyoji five-point star seal inside a circle, seen from above; (6) a blue spirit flame wisp, rising; (7) a single crimson curved tentacle, thick at the bottom and tapering to the top; (8) a curving fox tail made of blue-white flame.
+Row 3: (9) a horizontal glowing beam segment, white, soft at both ends; (10) a green poison bubble with a highlight; (11) a white curved wind gust swoosh; (12) a dark red bone spike pointing up.
+Row 4: (13) a translucent hexagon-pattern shield bubble, pale blue; (14) a top-down ground crack glowing orange; (15) a red danger target reticle (a circle with four inward ticks); (16) a single white feather.
+
+No text, no labels, no numbers, no grid lines, no borders between cells.

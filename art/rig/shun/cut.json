@@ -1,0 +1,83 @@
+{
+ "sources": {
+  "full": "art/ai/raw/shun_hero_gemini-3-pro-image_0.png",
+  "nohair": "art/ai/raw/shun_L_nohair_gemini-nano-banana-2.1_0.png",
+  "noarms": "art/ai/raw/shun_L_noarms_gemini-nano-banana-2.1_0.png"
+ },
+ "hip_y": 795,
+ "hem_y": 795,
+ "neck": [
+  575,
+  505
+ ],
+ "arm_split_x": 540,
+ "leg_split_x": 549,
+ "arm_hull": {
+  "near": [
+   [
+    387,
+    550
+   ],
+   [
+    342,
+    580
+   ],
+   [
+    322,
+    652
+   ]
+  ],
+  "far": [
+   [
+    690,
+    550
+   ],
+   [
+    735,
+    580
+   ],
+   [
+    755,
+    652
+   ]
+  ]
+ },
+ "pivots": {
+  "hair_back": [
+   575,
+   120
+  ],
+  "arm_far_upper": [
+   690,
+   562
+  ],
+  "arm_far_fore": [
+   713,
+   690
+  ],
+  "leg_far": [
+   607,
+   800
+  ],
+  "leg_near": [
+   487,
+   800
+  ],
+  "torso": [
+   575,
+   795
+  ],
+  "head": [
+   575,
+   505
+  ],
+  "arm_near_upper": [
+   387,
+   562
+  ],
+  "arm_near_fore": [
+   340,
+   693
+  ]
+ }
+}

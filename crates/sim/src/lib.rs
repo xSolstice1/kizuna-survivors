@@ -10,6 +10,7 @@ pub mod math;
 pub mod meta;
 pub mod rng;
 pub mod stage;
+pub mod terrain;
 pub mod world;
 
 pub use math::Vec2;

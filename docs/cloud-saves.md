@@ -42,7 +42,10 @@ game keeps saving to the browser only.
    and the Google popup returns to `auth-callback.html`, which hands the session to the game
    tab and closes):
    - `https://kizuna-survivors.vercel.app/**`
-   - `https://kizuna-survivors-git-*-xsolstice1s-projects.vercel.app/**` (preview deploys)
+   - `https://kizuna-survivors-*-xsolstice1s-projects.vercel.app/**` (every preview: branch
+     addresses `…-git-<branch>-…` and per-build addresses `…-<hash>-…`, which is what the
+     Vercel dashboard and GitHub's "View deployment" links open). Without it, sign-in on a
+     preview falls back to the Site URL: production loads inside the Google popup.
    - `http://localhost:8000/**` (local testing)
 4. Authentication → Providers: enable the ones you want.
    - Google: create an OAuth client in Google Cloud Console; authorised redirect URI is

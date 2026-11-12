@@ -1,0 +1,11 @@
+Game sprite of an ORIGINAL character for a 2D top-down anime survivors-like game.
+
+Image 1 shows four existing heroes from this game: copy their STYLE exactly. Chunky chibi proportions about 2 heads tall (the head is nearly half the body height), short body, small chunky hands and feet, a thick dark navy outline around the whole silhouette, thinner inner lines, flat cel shading with 2 tones plus one highlight, light from the top left, no gradients, no texture. Big expressive eyes with one white highlight.
+
+Image 2 shows the character's DESIGN (outfit and colours) in a different, taller style: keep the design, not that style.
+
+Character: Ren Amane, a 17-year-old shrine keeper girl. Long loose soft rose-pink hair, bright blue eyes, calm deadpan-but-earnest face. Navy blue sailor-style school uniform with white stripes on the collar, a red ribbon tie, navy pleated skirt, dark navy knee socks, brown loafers, a small gold crescent-moon hairpin. A small brown satchel at her hip with white paper talismans sticking out.
+
+One single figure, standing, front view turned slightly (three-quarter) to the right, full body, centred. Must read clearly at 64 pixels tall: bold simple shapes, strong silhouette, no tiny details.
+
+Background: perfectly flat solid pure green (#00FF00), no floor, no shadow, no text, no border. The figure must not touch the image edges.
