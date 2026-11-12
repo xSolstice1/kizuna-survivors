@@ -804,6 +804,8 @@ pub struct World {
     rng: Rng,
     grid: Grid,
     scratch: Vec<u32>,
+    /// Kizuna Blessings taken this run (each +3% damage, added up).
+    pub blessings: u32,
     /// Enemies hit so far by the current area attack (reset by `query_circle` and per source);
     /// see `area_falloff`.
     area_hits: u32,
@@ -951,6 +953,7 @@ impl World {
             rng,
             grid: Grid::new(cell, dim),
             scratch: Vec::new(),
+            blessings: 0,
             area_hits: 0,
             area_exempt: false,
             dead: Vec::new(),
@@ -1043,8 +1046,14 @@ impl World {
         let fury = if self.player.hp < self.player.max_hp * 0.4 { 1.0 + 0.3 * g.unique(Unique::Berserker) } else { 1.0 };
         let lotus = 1.0 + 0.35 * g.unique(Unique::GlassLotus);
         let reach = hero_def(self.cfg.hero).reach_might;
-        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * sake * fury * lotus * reach * self.exotic_might()
+        (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * self.blessing_mult() * sake * fury * lotus * reach * self.exotic_might()
     }
+    /// Damage multiplier from Kizuna Blessings: +3% each, added up (30 = +90%), so a long
+    /// maxed-out run no longer compounds into a runaway multiplier.
+    pub fn blessing_mult(&self) -> f32 {
+        1.0 + (BLESSING_DAMAGE - 1.0) * self.blessings as f32
+    }
+
     fn haste(&self) -> f32 {
         let frenzy = match self.form_kind() {
             Some(SpecialKind::Mukade) => MUKADE_HASTE,
@@ -5041,6 +5050,10 @@ impl World {
 
     /// Card text for `u`, with live amounts for the maxed-out fallbacks.
     pub fn describe_upgrade(&self, u: Upgrade, next_level: u8) -> String {
+        if u == Upgrade::Blessing {
+            let now = (self.blessing_mult() - 1.0) * 100.0;
+            return format!("+{:.0}% damage for the rest of the run. You have +{now:.0}% so far.", (BLESSING_DAMAGE - 1.0) * 100.0);
+        }
         if MAXED_FALLBACKS.contains(&u) { describe_fallback(u, self.fallback_amount(u)) } else { u.describe(next_level) }
     }
 
@@ -5062,7 +5075,7 @@ impl World {
             }
             Upgrade::Heal => self.heal(self.fallback_amount(u)),
             Upgrade::Sen => self.gain_sen(self.fallback_amount(u).round() as u32),
-            Upgrade::Blessing => self.mods.damage *= 1.0 + self.fallback_amount(u),
+            Upgrade::Blessing => self.blessings += 1,
         }
         self.note_slots();
     }
@@ -6707,7 +6720,7 @@ mod tests {
 
     #[test]
     fn blessings_stack_onto_weapon_damage() {
-        // The maxed-out Kizuna Blessing card: +3% damage per pick, compounding, on real shots.
+        // The maxed-out Kizuna Blessing card: +3% damage per pick, added up, on real shots.
         let shot = |blessings: u32| -> f32 {
             let mut w = World::new(WorldConfig { seed: 9, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
             for _ in 0..blessings {
@@ -6723,7 +6736,7 @@ mod tests {
             panic!("no talisman fired");
         };
         let (base, blessed) = (shot(0), shot(20));
-        let want = BLESSING_DAMAGE.powi(20);
+        let want = 1.0 + 20.0 * (BLESSING_DAMAGE - 1.0);
         assert!((blessed / base - want).abs() < 1e-3, "20 blessings: x{:.3}, want x{want:.3}", blessed / base);
     }
 
@@ -7695,7 +7708,7 @@ mod tests {
             let eligible: u32 = ALL_ENEMIES.iter().filter(|k| matches!(k.rank(), Rank::Mini | Rank::Boss | Rank::Final)).map(|k| w.kills_by_kind[k.index()]).sum();
             println!(
                 "seed {seed} blessing_mult {:.2} [boss {nl}] uncommon_kills {uncommon_kills} leader_kills {leader_kills} gear_drops {gear_drops} set_eligible_kills {eligible} bosses_down {:03b}: {:?} at {:>5.0}s  level {:>2}  level@15:00 {:?}  kills {:>6}  slots_full {:?}  maxed {}  unique {}  repl {}  maxed_offers {}  first_maxed {:?}  ({:.1}s real)  weapons {:?}  awakened {:?}",
-                w.mods.damage,
+                w.blessing_mult(),
                 w.bosses_down,
                 w.state,
                 w.time,

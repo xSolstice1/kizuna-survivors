@@ -1282,7 +1282,7 @@ pub fn describe_fallback(u: Upgrade, amount: f32) -> String {
     match u {
         Upgrade::Heal => format!("Restore {amount:.0} HP ({:.0}% of max).", ONIGIRI_HEAL * 100.0),
         Upgrade::Sen => format!("+{amount:.0} Sen."),
-        Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Stacks.", amount * 100.0),
+        Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Adds up.", amount * 100.0),
         _ => u.describe(1),
     }
 }
@@ -1292,7 +1292,7 @@ pub const ONIGIRI_HEAL: f32 = 0.3;
 /// Sen Pouch at the start of a run; it gains this much again every `SEN_POUCH_RAMP` seconds of pace.
 pub const SEN_POUCH: f32 = 25.0;
 pub const SEN_POUCH_RAMP: f32 = 300.0;
-/// Run damage multiplier per Blessing taken (stacks).
+/// Damage per Blessing taken: 1.03 = +3%, added up across Blessings (see `World::blessing_mult`).
 pub const BLESSING_DAMAGE: f32 = 1.03;
 
 impl Upgrade {
@@ -1456,7 +1456,7 @@ impl Upgrade {
             .into(),
             Upgrade::Heal => format!("Restore {:.0}% of max HP.", ONIGIRI_HEAL * 100.0),
             Upgrade::Sen => "Sen that grows as the night goes on.".into(),
-            Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Stacks.", (BLESSING_DAMAGE - 1.0) * 100.0),
+            Upgrade::Blessing => format!("+{:.0}% damage for the rest of the run. Adds up.", (BLESSING_DAMAGE - 1.0) * 100.0),
         }
     }
 }
