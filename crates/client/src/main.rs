@@ -22,6 +22,7 @@ mod terrain_bake;
 mod textinput;
 mod touch;
 mod ui;
+mod vfx;
 mod voice;
 
 use render::{Assets, Fx};

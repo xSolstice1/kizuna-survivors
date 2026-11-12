@@ -1,0 +1,8 @@
+A sprite sheet of 16 visual effects for a 2D anime action game, in a strict 4x4 grid of equal square cells on a PURE BLACK (#000000) background. Each effect is centred in its cell, fills about 80% of it, and does not touch the cell edges or other cells. Glowing, luminous effects (they will be drawn with additive blending, so black means invisible). Polished modern anime game VFX style matching image 1: clean shapes, soft glows, crisp bright cores.
+
+Row 1: (1) a soft round glow, pure white, bright centre fading smoothly to black at the edges; (2) a four-point star sparkle, white; (3) a single pink sakura petal; (4) a soft round smoke puff, light grey.
+Row 2: (5) a crescent sword slash arc, white with a bright edge, curving left to right; (6) a thin circular shockwave ring, white; (7) a pink and gold magic circle with simple runes, seen from above; (8) a jagged lightning bolt, blue-white, top to bottom.
+Row 3: (9) a flame wisp, orange-gold, rising; (10) a motion streak: a tapered white trail, thick and bright on the right, thin and faded on the left; (11) a glowing pale-gold moon orb with a crescent moon shape inside; (12) a radial hit burst of white spikes from a bright centre.
+Row 4: (13) a single glowing ember spark, orange; (14) a small water splash with droplets, light blue; (15) a white paper talisman (ofuda) with red ink markings and a soft golden glow; (16) a single autumn leaf, orange-red.
+
+No text, no labels, no numbers, no grid lines, no borders between cells.

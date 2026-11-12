@@ -144,7 +144,8 @@ pub struct Assets {
     oni_outline: Texture2D,
     night_lord_outline: Texture2D,
     pub talisman: Texture2D,
-    pub orb: Texture2D,
+    /// Effect sprites and additive blending (crate::vfx).
+    pub vfx: crate::vfx::Vfx,
     pub gem: Texture2D,
     pub chest: Texture2D,
     pub chest_open: Texture2D,
@@ -227,7 +228,7 @@ impl Assets {
             oni_outline,
             night_lord_outline,
             talisman: sprites::art("talisman"),
-            orb: sprites::art("orb"),
+            vfx: crate::vfx::Vfx::load(),
             gem: sprites::art("gem"),
             chest: sprites::art("chest"),
             chest_open: sprites::art("chest_open"),
@@ -1449,15 +1450,21 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Sakura Field sits on the ground under everything.
     for w in &world.weapons {
         if w.kind == WeaponKind::SakuraField {
+            // A turning rune circle on the ground, a soft glow, and petals swirling through it.
             let r = world.field_radius_of(w);
-            let pulse = (1.0 - (w.phase / 0.25).min(1.0)) * 0.12;
-            let base = if w.awakened { Color::new(1.0, 0.75, 0.55, 0.14 + pulse) } else { Color::new(1.0, 0.55, 0.75, 0.10 + pulse) };
-            draw_circle(p.x, p.y, r, base);
-            draw_circle_lines(p.x, p.y, r, 1.0, Color::new(1.0, 0.7, 0.85, 0.55));
-            for k in 0..10 {
-                let ang = time as f32 * 0.8 + k as f32 * 0.628;
-                let rr = r * (0.55 + 0.4 * ((k * 37 % 10) as f32 / 10.0));
-                draw_rectangle(p.x + ang.cos() * rr, p.y + ang.sin() * rr, 2.0, 2.0, Color::from_rgba(255, 190, 215, 220));
+            let pulse = (1.0 - (w.phase / 0.25).min(1.0)) * 0.25;
+            let tint = if w.awakened { Color::new(1.0, 0.8, 0.5, 1.0) } else { Color::new(1.0, 0.6, 0.8, 1.0) };
+            let c = vec2(p.x, p.y);
+            let t = time as f32;
+            a.vfx.additive(|| {
+                a.vfx.draw("glow", c, r * 2.3, 0.0, Color::new(tint.r, tint.g, tint.b, 0.16 + pulse * 0.4));
+                a.vfx.draw("circle", c, r * 2.05, t * 0.25, Color::new(tint.r, tint.g, tint.b, 0.32 + pulse));
+            });
+            for k in 0..14 {
+                let ang = t * (0.7 + 0.05 * (k % 3) as f32) + k as f32 * 0.449;
+                let rr = r * (0.35 + 0.6 * ((k * 37 % 14) as f32 / 14.0));
+                let q = c + vec2(ang.cos(), ang.sin()) * rr;
+                a.vfx.draw("petal", q, 6.0, ang * 2.0 + k as f32, Color::new(1.0, 1.0, 1.0, 0.9));
             }
         }
     }
@@ -1796,18 +1803,29 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     draw_rectangle(p.x - 10.0, p.y + 9.0, 20.0 * frac, 2.0, Color::from_rgba(255, 80, 110, 255));
 
     for w in &world.weapons {
-        if w.kind == WeaponKind::YinYangOrbs {
-            let r = world.yinyang_radius(w);
-            for c in world.yinyang_positions(w) {
-                draw_circle(c.x, c.y, r * 1.5, Color::new(1.0, 0.75, 0.85, 0.15));
-                draw_yinyang(vec2(c.x, c.y), r, time as f32 * 4.0);
+        // Orbs: a moon orb with a halo and a twinkle (light added, not painted).
+        let orbs: Vec<(Vec2, f32)> = match w.kind {
+            WeaponKind::YinYangOrbs => {
+                let r = world.yinyang_radius(w);
+                world.yinyang_positions(w).into_iter().map(|c| (vec2(c.x, c.y), r)).collect()
             }
-        }
-        if w.kind == WeaponKind::MoonOrbs {
-            let r = world.orb_radius(w.level);
-            for c in world.orb_positions(w) {
-                draw_circle(c.x, c.y, r * 1.3, Color::new(1.0, 0.95, 0.7, 0.18));
-                draw_texture_ex(&a.orb, c.x - r, c.y - r, WHITE, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
+            WeaponKind::MoonOrbs => {
+                let r = world.orb_radius(w.level);
+                world.orb_positions(w).into_iter().map(|c| (vec2(c.x, c.y), r)).collect()
+            }
+            _ => Vec::new(),
+        };
+        if !orbs.is_empty() {
+            let t = time as f32;
+            a.vfx.additive(|| {
+                for (k, (c, r)) in orbs.iter().enumerate() {
+                    a.vfx.draw("glow", *c, r * 4.2, 0.0, Color::new(1.0, 0.9, 0.6, 0.35));
+                    let tw = 0.5 + 0.5 * (t * 5.0 + k as f32 * 1.7).sin();
+                    a.vfx.draw("sparkle", *c + vec2(r * 0.5, -r * 0.6), r * 1.4 * tw, t, Color::new(1.0, 1.0, 0.9, 0.7 * tw));
+                }
+            });
+            for (c, r) in &orbs {
+                a.vfx.draw("moon", *c, r * 2.4, time as f32 * 1.5, WHITE);
             }
         }
     }
@@ -1832,10 +1850,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_line(sx + 10.0, sy - 22.0, sx, sy, 3.0, Color::new(0.55, 0.85, 1.0, 0.6));
         draw_poly(sx, sy, 5, 5.0, time as f32 * 400.0, Color::new(1.0, 0.92, 0.4, 1.0));
     }
-    for (c, r, age) in &fx.impacts {
-        let t = age / 0.3;
-        draw_circle(c.x, c.y, r * (0.6 + 0.6 * t), Color::new(1.0, 0.95, 0.6, 0.45 * (1.0 - t)));
-    }
+    a.vfx.additive(|| {
+        for (c, r, age) in &fx.impacts {
+            let t = age / 0.3;
+            a.vfx.draw("burst", *c, r * (1.2 + 1.0 * t), t * 1.5, Color::new(1.0, 0.95, 0.65, 0.8 * (1.0 - t)));
+            a.vfx.draw("ring", *c, r * (0.8 + 2.0 * t), 0.0, Color::new(1.0, 0.9, 0.6, 0.6 * (1.0 - t)));
+        }
+    });
     for (from, to, age) in &fx.bolts {
         let a = 1.0 - age / 0.16;
         // Jagged line: offset midpoints perpendicular to the segment.
@@ -1873,13 +1894,25 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             continue;
         }
         match pr.kind[i] {
-            ProjKind::Talisman => sprites.push(
+            ProjKind::Talisman => {
+                // A glowing trail behind each talisman.
+                let speed = (v.x * v.x + v.y * v.y).sqrt();
+                if speed > 1.0 {
+                    let dir = vec2(v.x, v.y) / speed;
+                    let glow = if gold { Color::new(1.0, 0.8, 0.35, 0.7) } else { Color::new(1.0, 0.75, 0.85, 0.6) };
+                    a.vfx.additive(|| {
+                        a.vfx.draw_wh("streak", vec2(q.x, q.y) - dir * 9.0, vec2(22.0, 7.0), v.y.atan2(v.x), glow);
+                        a.vfx.draw("glow", vec2(q.x, q.y), 14.0, 0.0, Color::new(glow.r, glow.g, glow.b, 0.35));
+                    });
+                }
+                sprites.push(
                 &a.talisman,
                 q.x - 3.0,
                 q.y - 5.0,
                 ink,
                 DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.talisman)), rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() },
-            ),
+            )
+            }
             ProjKind::Foxfire | ProjKind::Comet => {
                 let comet = pr.kind[i] == ProjKind::Comet;
                 // While charging the orb swells and sparks spiral into it.
@@ -2136,12 +2169,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         draw_circle_lines(c.x, c.y, r, 3.0, Color::new(1.0, 0.9, 0.6, 0.9 * (1.0 - t)));
     }
 
-    for pt in fx.particles.iter().filter(|pt| near(&view, pt.pos.x, pt.pos.y, 4.0)) {
-        let alpha = 1.0 - pt.age / pt.life;
-        let mut c = pt.color;
-        c.a = alpha;
-        draw_rectangle(pt.pos.x - 1.0, pt.pos.y - 1.0, 2.0, 2.0, c);
-    }
+    // Particles: glowing embers that shrink as they fade.
+    a.vfx.additive(|| {
+        for pt in fx.particles.iter().filter(|pt| near(&view, pt.pos.x, pt.pos.y, 4.0)) {
+            let k = 1.0 - pt.age / pt.life;
+            let c = Color::new(pt.color.r, pt.color.g, pt.color.b, k);
+            a.vfx.draw("ember", vec2(pt.pos.x, pt.pos.y), 3.0 + 5.0 * k, 0.0, c);
+        }
+    });
     draw_drops(world, a, fx, &view, time);
 
     // The world was drawn into a screen-resolution target (cheap on high-DPI screens):
