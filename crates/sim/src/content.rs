@@ -31,7 +31,7 @@ pub const PERSISTENCE_PER_LEVEL: f32 = 0.12;
 pub const MIGHT_RIKU: f32 = 1.73;
 pub const MIGHT_REN: f32 = 2.07;
 pub const MIGHT_KUON: f32 = 1.82;
-/// shortcut: bot kites ~140 px so bosses sit outside reach; revisit with human playtests in phase 3.
+/// Boss HP multiplier (mid-run bosses; finals also take `FINAL_BOSS_HP`).
 pub const BOSS_HP: f32 = 2.0;
 /// Final bosses take this share of `BOSS_HP` (they must fall before dawn).
 pub const FINAL_BOSS_HP: f32 = 0.25;
