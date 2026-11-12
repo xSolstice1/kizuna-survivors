@@ -11,6 +11,7 @@ use sim::world::{style, ProjKind};
 use sim::{Event, World};
 
 use crate::sprites;
+use crate::vfx::shape;
 use crate::voice;
 
 /// World pixels → screen pixels (integer for crisp pixel art). Small screens (phones in
@@ -101,6 +102,18 @@ fn rig_name(h: HeroId) -> Option<&'static str> {
     })
 }
 
+/// The art name of a hero's transformed form.
+fn form_name(h: HeroId) -> Option<&'static str> {
+    Some(match h {
+        HeroId::Ren => "ren_divine",
+        HeroId::Riku => "riku_fox",
+        HeroId::Shun => "shun_hannya",
+        HeroId::Toya => "toya_mukade",
+        HeroId::Kuon => "kuon_domain",
+        _ => return None,
+    })
+}
+
 fn rig_json(name: &str) -> &'static str {
     match name {
         "ren" => include_str!("../../../art/rig/ren/game.json"),
@@ -126,6 +139,8 @@ pub struct Assets {
     rigs: Vec<Option<crate::rig::RigDef>>,
     /// Per hero: head crop of the front view, for the HUD portrait circle.
     faces: Vec<Option<Texture2D>>,
+    /// Per hero: head crop of its transformed form (art/hd/<form>_face.png).
+    form_faces: Vec<Option<Texture2D>>,
     cleaver: Texture2D,
     cleaver_hannya: Texture2D,
     cleaver_rest: Texture2D,
@@ -203,6 +218,7 @@ impl Assets {
             ren_divine: frames(sprites::sprite("ren_divine")),
             rigs: ALL_HEROES.iter().map(|h| rig_name(*h).map(|n| crate::rig::RigDef::load(n, rig_json(n)))).collect(),
             faces: ALL_HEROES.iter().map(|h| rig_name(*h).map(|n| sprites::hi_art(&format!("{n}_face")))).collect(),
+            form_faces: ALL_HEROES.iter().map(|h| form_name(*h).map(|n| sprites::hi_art(&format!("{n}_face")))).collect(),
             cleaver: sprites::art("cleaver"),
             cleaver_hannya: sprites::art("cleaver_hannya"),
             cleaver_rest: sprites::art("cleaver_rest"),
@@ -228,7 +244,11 @@ impl Assets {
             oni_outline,
             night_lord_outline,
             talisman: sprites::art("talisman"),
-            vfx: crate::vfx::Vfx::load(),
+            vfx: {
+                let v = crate::vfx::Vfx::load();
+                crate::vfx::install(&v);
+                v
+            },
             gem: sprites::art("gem"),
             chest: sprites::art("chest"),
             chest_open: sprites::art("chest_open"),
@@ -358,6 +378,11 @@ impl Assets {
     /// The hero's rig, if it has one.
     pub fn rig(&self, h: HeroId) -> Option<&crate::rig::RigDef> {
         self.rigs[ALL_HEROES.iter().position(|x| *x == h).unwrap()].as_ref()
+    }
+
+    /// The hero's transformed-form HUD face, if it has one.
+    pub fn form_face(&self, h: HeroId) -> Option<&Texture2D> {
+        self.form_faces[ALL_HEROES.iter().position(|x| *x == h).unwrap()].as_ref()
     }
 
     /// The hero's HUD face, if it has one.
@@ -1065,17 +1090,17 @@ fn draw_world_enemy<'a>(
     match ai {
         Ai::Charger { .. } if e.ai_state[i] == 1 => {
             let d = e.ai_dir[i];
-            draw_line(pos.x, pos.y, pos.x + d.x * 230.0, pos.y + d.y * 230.0, e.radius[i] * 0.8, Color::new(1.0, 0.2, 0.2, 0.22));
+            shape::line(pos.x, pos.y, pos.x + d.x * 230.0, pos.y + d.y * 230.0, e.radius[i] * 0.8, Color::new(1.0, 0.2, 0.2, 0.22));
             warn = true;
         }
         Ai::Boss if e.ai_busy[i] > 0.7 => {
             let d = e.ai_aux[i];
-            draw_line(pos.x, pos.y, pos.x + d.x * 320.0, pos.y + d.y * 320.0, e.radius[i] * 1.4, Color::new(1.0, 0.2, 0.2, 0.2));
+            shape::line(pos.x, pos.y, pos.x + d.x * 320.0, pos.y + d.y * 320.0, e.radius[i] * 1.4, Color::new(1.0, 0.2, 0.2, 0.2));
             warn = true;
         }
         Ai::Dash if e.ai_busy[i] > 0.5 => {
             let d = e.ai_aux[i];
-            draw_line(pos.x, pos.y, pos.x + d.x * 80.0, pos.y + d.y * 80.0, 3.0, Color::new(1.0, 0.3, 0.3, 0.35));
+            shape::line(pos.x, pos.y, pos.x + d.x * 80.0, pos.y + d.y * 80.0, 3.0, Color::new(1.0, 0.3, 0.3, 0.35));
             warn = true;
         }
         Ai::Blink if e.ai_state[i] != 0 => tint.a = blink_alpha(e, i),
@@ -1086,11 +1111,11 @@ fn draw_world_enemy<'a>(
     }
     if rank >= Rank::Mini {
         let pulse = 0.16 + 0.06 * (tf * 4.0).sin();
-        draw_circle(pos.x, pos.y - h * 0.3 + bob, w * 0.55, Color::new(accent.r, accent.g, accent.b, pulse * 0.6));
+        shape::circle(pos.x, pos.y - h * 0.3 + bob, w * 0.55, Color::new(accent.r, accent.g, accent.b, pulse * 0.6));
         let ring = crate::ui::element_color(kind.element());
-        draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 4.0, 2.0, Color::new(ring.r, ring.g, ring.b, 0.6));
+        shape::circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 4.0, 2.0, Color::new(ring.r, ring.g, ring.b, 0.6));
     } else if matches!(ai, Ai::Ranged { .. }) {
-        draw_circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
+        shape::circle(pos.x, pos.y - h * 0.3, w * 0.55, Color::new(accent.r, accent.g, accent.b, 0.10));
     }
     let (lift, sx, sy, rot) = enemy_pose(world, i, h, rank >= Rank::Mini, tf);
     // The shadow stays on the ground and shrinks as the sprite rises.
@@ -1115,8 +1140,8 @@ fn draw_world_enemy<'a>(
     if rarity == EnemyRarity::Leader {
         let c = leader_color();
         let pulse = 0.22 + 0.08 * (tf * 3.0).sin();
-        draw_circle(pos.x, pos.y, sim::content::BANNER_RADIUS, Color::new(c.r, c.g, c.b, 0.05));
-        draw_circle_lines(pos.x, pos.y, sim::content::BANNER_RADIUS, 2.0, Color::new(c.r, c.g, c.b, pulse));
+        shape::circle(pos.x, pos.y, sim::content::BANNER_RADIUS, Color::new(c.r, c.g, c.b, 0.05));
+        shape::circle_lines(pos.x, pos.y, sim::content::BANNER_RADIUS, 2.0, Color::new(c.r, c.g, c.b, pulse));
     }
     sprites.push(t, x, y, tint, params);
 }
@@ -1177,40 +1202,40 @@ fn draw_hazards(world: &World, t: f32, friendly: bool) {
             HazardKind::Blast { .. } if h.spare_enemies => {
                 // A Clay Bird's shell: a clay ring that fills from empty, with a fuse spark on top.
                 let k = (1.0 - h.warn / sim::content::CLAY_BLAST_WARN).clamp(0.0, 1.0);
-                draw_circle(x, y, r * k, Color::new(0.8, 0.5, 0.28, 0.24));
+                shape::circle(x, y, r * k, Color::new(0.8, 0.5, 0.28, 0.24));
                 for seg in (0..24).step_by(2) {
                     let a0 = seg as f32 / 24.0 * std::f32::consts::TAU;
                     let a1 = a0 + std::f32::consts::TAU / 24.0;
-                    draw_line(x + a0.cos() * r, y + a0.sin() * r, x + a1.cos() * r, y + a1.sin() * r, 2.0, Color::new(0.85, 0.55, 0.3, 0.6 + 0.35 * k));
+                    shape::line(x + a0.cos() * r, y + a0.sin() * r, x + a1.cos() * r, y + a1.sin() * r, 2.0, Color::new(0.85, 0.55, 0.3, 0.6 + 0.35 * k));
                 }
-                draw_circle(x, y, 4.0, Color::new(0.55, 0.32, 0.18, 0.95));
+                shape::circle(x, y, 4.0, Color::new(0.55, 0.32, 0.18, 0.95));
                 let spark = 0.6 + 0.4 * (t * 30.0).sin().abs();
-                draw_circle(x + 1.0, y - 5.0, 1.5 + k, Color::new(1.0, 0.85, 0.3, spark));
+                shape::circle(x + 1.0, y - 5.0, 1.5 + k, Color::new(1.0, 0.85, 0.3, spark));
             }
             HazardKind::Blast { .. } => {
                 // A paper tag / falling strike: a ring that fills as it is about to go off.
                 let k = (1.0 - h.warn / 1.3).clamp(0.0, 1.0);
-                draw_circle(x, y, r * k, Color::new(1.0, 0.35, 0.15, 0.22));
-                draw_circle_lines(x, y, r, 2.0, Color::new(1.0, 0.45, 0.2, 0.55 + 0.4 * (t * 14.0).sin().abs()));
-                draw_rectangle(x - 3.0, y - 5.0, 6.0, 10.0, Color::new(0.95, 0.9, 0.75, 0.9));
-                draw_rectangle(x - 1.0, y - 3.0, 2.0, 6.0, Color::new(0.85, 0.15, 0.15, 1.0));
+                shape::circle(x, y, r * k, Color::new(1.0, 0.35, 0.15, 0.22));
+                shape::circle_lines(x, y, r, 2.0, Color::new(1.0, 0.45, 0.2, 0.55 + 0.4 * (t * 14.0).sin().abs()));
+                shape::rectangle(x - 3.0, y - 5.0, 6.0, 10.0, Color::new(0.95, 0.9, 0.75, 0.9));
+                shape::rectangle(x - 1.0, y - 3.0, 2.0, 6.0, Color::new(0.85, 0.15, 0.15, 1.0));
             }
             HazardKind::Lightning { .. } => {
                 let k = (1.0 - h.warn / 1.2).clamp(0.0, 1.0);
-                draw_circle(x, y, r * k, Color::new(0.7, 0.85, 1.0, 0.18));
-                draw_circle_lines(x, y, r, 2.0, Color::new(0.75, 0.9, 1.0, 0.5 + 0.5 * (t * 18.0).sin().abs()));
-                draw_line(x - r * 0.4, y, x + r * 0.4, y, 1.5, Color::new(0.85, 0.95, 1.0, 0.6));
-                draw_line(x, y - r * 0.4, x, y + r * 0.4, 1.5, Color::new(0.85, 0.95, 1.0, 0.6));
+                shape::circle(x, y, r * k, Color::new(0.7, 0.85, 1.0, 0.18));
+                shape::circle_lines(x, y, r, 2.0, Color::new(0.75, 0.9, 1.0, 0.5 + 0.5 * (t * 18.0).sin().abs()));
+                shape::line(x - r * 0.4, y, x + r * 0.4, y, 1.5, Color::new(0.85, 0.95, 1.0, 0.6));
+                shape::line(x, y - r * 0.4, x, y + r * 0.4, 1.5, Color::new(0.85, 0.95, 1.0, 0.6));
             }
             HazardKind::Pressure => {
                 let live = h.warn <= 0.0;
                 let a = if live { (h.life / 2.0).min(1.0) } else { 0.4 * (1.0 - h.warn) };
-                draw_circle(x, y, r, Color::new(0.45, 0.6, 1.0, 0.14 * a));
+                shape::circle(x, y, r, Color::new(0.45, 0.6, 1.0, 0.14 * a));
                 for k in 0..3 {
                     let rr = r * (((t * 0.6 + k as f32 / 3.0) % 1.0) * 0.8 + 0.2);
-                    draw_circle_lines(x, y, rr, 1.5, Color::new(0.65, 0.8, 1.0, 0.35 * a * (1.0 - rr / r)));
+                    shape::circle_lines(x, y, rr, 1.5, Color::new(0.65, 0.8, 1.0, 0.35 * a * (1.0 - rr / r)));
                 }
-                draw_circle_lines(x, y, r, 2.0, Color::new(0.7, 0.85, 1.0, 0.45 * a));
+                shape::circle_lines(x, y, r, 2.0, Color::new(0.7, 0.85, 1.0, 0.45 * a));
             }
             HazardKind::Domain { .. } => {
                 if h.warn > 0.0 {
@@ -1220,16 +1245,16 @@ fn draw_hazards(world: &World, t: f32, friendly: bool) {
                     for k in (0..segs).step_by(2) {
                         let a0 = k as f32 / segs as f32 * std::f32::consts::TAU + t * 0.5;
                         let a1 = a0 + std::f32::consts::TAU / segs as f32;
-                        draw_line(x + a0.cos() * r, y + a0.sin() * r, x + a1.cos() * r, y + a1.sin() * r, 3.0, Color::new(0.75, 0.3, 1.0, 0.4 + 0.5 * blink));
+                        shape::line(x + a0.cos() * r, y + a0.sin() * r, x + a1.cos() * r, y + a1.sin() * r, 3.0, Color::new(0.75, 0.3, 1.0, 0.4 + 0.5 * blink));
                     }
                 } else {
                     let a = (h.life / 1.0).min(1.0);
-                    draw_circle(x, y, r, Color::new(0.18, 0.02, 0.28, 0.32 * a));
-                    draw_circle_lines(x, y, r, 4.0, Color::new(0.75, 0.3, 1.0, 0.8 * a));
+                    shape::circle(x, y, r, Color::new(0.18, 0.02, 0.28, 0.32 * a));
+                    shape::circle_lines(x, y, r, 4.0, Color::new(0.75, 0.3, 1.0, 0.8 * a));
                     for k in 0..12 {
                         let ang = k as f32 / 12.0 * std::f32::consts::TAU - t * 0.3;
                         let (cx, cy) = (x + ang.cos() * (r - 12.0), y + ang.sin() * (r - 12.0));
-                        draw_poly(cx, cy, 3, 5.0, ang.to_degrees(), Color::new(0.9, 0.5, 1.0, 0.7 * a));
+                        shape::poly(cx, cy, 3, 5.0, ang.to_degrees(), Color::new(0.9, 0.5, 1.0, 0.7 * a));
                     }
                 }
             }
@@ -1242,8 +1267,8 @@ fn draw_mask(world: &World, t: f32) {
     let p = world.player.pos;
     if world.mask > 0.0 {
         let a = 0.25 + 0.1 * (t * 10.0).sin();
-        draw_circle(p.x, p.y - 8.0, 30.0, Color::new(0.9, 0.1, 0.15, a));
-        draw_circle_lines(p.x, p.y - 8.0, 34.0, 2.0, Color::new(1.0, 0.9, 0.9, 0.6));
+        shape::circle(p.x, p.y - 8.0, 30.0, Color::new(0.9, 0.1, 0.15, a));
+        shape::circle_lines(p.x, p.y - 8.0, 34.0, 2.0, Color::new(1.0, 0.9, 0.9, 0.6));
     }
 }
 
@@ -1253,23 +1278,23 @@ fn draw_art(world: &World, t: f32) {
     match a.art {
         ArsenalArt::RaijinDrums => {
             for d in world.art_points() {
-                draw_circle(d.x, d.y, 16.0, Color::new(1.0, 0.85, 0.3, 0.18 + 0.08 * (t * 9.0).sin()));
-                draw_circle(d.x, d.y, 9.0, Color::new(0.55, 0.22, 0.12, 1.0));
-                draw_circle(d.x, d.y, 6.5, Color::new(0.95, 0.85, 0.6, 1.0));
-                draw_poly_lines(d.x, d.y, 3, 4.0, t * 120.0, 1.5, Color::new(0.85, 0.2, 0.1, 1.0));
-                draw_circle_lines(d.x, d.y, 9.0, 1.5, Color::new(1.0, 0.9, 0.4, 1.0));
+                shape::circle(d.x, d.y, 16.0, Color::new(1.0, 0.85, 0.3, 0.18 + 0.08 * (t * 9.0).sin()));
+                shape::circle(d.x, d.y, 9.0, Color::new(0.55, 0.22, 0.12, 1.0));
+                shape::circle(d.x, d.y, 6.5, Color::new(0.95, 0.85, 0.6, 1.0));
+                shape::poly_lines(d.x, d.y, 3, 4.0, t * 120.0, 1.5, Color::new(0.85, 0.2, 0.1, 1.0));
+                shape::circle_lines(d.x, d.y, 9.0, 1.5, Color::new(1.0, 0.9, 0.4, 1.0));
             }
         }
         ArsenalArt::DragonCoil => {
             let pts = world.art_points();
             for (k, c) in pts.iter().enumerate().rev() {
                 let r = if k == 0 { 13.0 } else { 10.0 - k as f32 * 0.25 };
-                draw_circle(c.x, c.y, r + 3.0, Color::new(0.2, 0.9, 0.6, 0.15));
-                draw_circle(c.x, c.y, r, if k % 2 == 0 { Color::new(0.15, 0.62, 0.42, 1.0) } else { Color::new(0.2, 0.75, 0.5, 1.0) });
-                draw_circle(c.x, c.y - r * 0.3, r * 0.35, Color::new(1.0, 0.85, 0.35, 0.9));
+                shape::circle(c.x, c.y, r + 3.0, Color::new(0.2, 0.9, 0.6, 0.15));
+                shape::circle(c.x, c.y, r, if k % 2 == 0 { Color::new(0.15, 0.62, 0.42, 1.0) } else { Color::new(0.2, 0.75, 0.5, 1.0) });
+                shape::circle(c.x, c.y - r * 0.3, r * 0.35, Color::new(1.0, 0.85, 0.35, 0.9));
             }
             if let Some(h) = pts.first() {
-                draw_circle(h.x + 4.0, h.y - 3.0, 2.5, Color::new(1.0, 0.3, 0.2, 1.0));
+                shape::circle(h.x + 4.0, h.y - 3.0, 2.5, Color::new(1.0, 0.3, 0.2, 1.0));
             }
         }
         ArsenalArt::FoxProcession => {
@@ -1278,19 +1303,19 @@ fn draw_art(world: &World, t: f32) {
                 let d = fv.normalize_or_zero();
                 for k in 1..5 {
                     let q = *fp - d * (k as f32 * 7.0);
-                    draw_circle(q.x, q.y, 7.0 - k as f32, Color::new(0.4, 0.75, 1.0, 0.35 * alpha));
+                    shape::circle(q.x, q.y, 7.0 - k as f32, Color::new(0.4, 0.75, 1.0, 0.35 * alpha));
                 }
-                draw_circle(fp.x, fp.y, 8.0, Color::new(0.95, 0.97, 1.0, alpha));
-                draw_triangle(vec2(fp.x - 5.0, fp.y - 4.0), vec2(fp.x - 2.0, fp.y - 13.0), vec2(fp.x + 1.0, fp.y - 5.0), Color::new(0.95, 0.97, 1.0, alpha));
-                draw_triangle(vec2(fp.x + 5.0, fp.y - 4.0), vec2(fp.x + 2.0, fp.y - 13.0), vec2(fp.x - 1.0, fp.y - 5.0), Color::new(0.95, 0.97, 1.0, alpha));
-                draw_circle(fp.x + 3.0 * d.x, fp.y - 1.0, 1.5, Color::new(0.9, 0.2, 0.3, alpha));
+                shape::circle(fp.x, fp.y, 8.0, Color::new(0.95, 0.97, 1.0, alpha));
+                shape::triangle(vec2(fp.x - 5.0, fp.y - 4.0), vec2(fp.x - 2.0, fp.y - 13.0), vec2(fp.x + 1.0, fp.y - 5.0), Color::new(0.95, 0.97, 1.0, alpha));
+                shape::triangle(vec2(fp.x + 5.0, fp.y - 4.0), vec2(fp.x + 2.0, fp.y - 13.0), vec2(fp.x - 1.0, fp.y - 5.0), Color::new(0.95, 0.97, 1.0, alpha));
+                shape::circle(fp.x + 3.0 * d.x, fp.y - 1.0, 1.5, Color::new(0.9, 0.2, 0.3, alpha));
             }
         }
         ArsenalArt::YinYangBreaker => {
             for (op, _) in &a.orbs {
-                draw_circle(op.x, op.y, 32.0, Color::new(1.0, 0.95, 0.8, 0.14));
-                draw_yinyang(vec2(op.x, op.y), 22.0, t * 4.0);
-                draw_circle_lines(op.x, op.y, 23.0, 2.0, Color::new(1.0, 0.82, 0.42, 1.0));
+                shape::circle(op.x, op.y, 32.0, Color::new(1.0, 0.95, 0.8, 0.14));
+                draw_moon_orb(vec2(op.x, op.y), 22.0, t * 4.0);
+                shape::circle_lines(op.x, op.y, 23.0, 2.0, Color::new(1.0, 0.82, 0.42, 1.0));
             }
         }
         _ => {}
@@ -1339,7 +1364,7 @@ fn draw_smokes(smokes: &[(Vec2, f32, f32)]) {
             let a = i as f32 * 0.9 + c.x * 0.05;
             let d = r * 0.5 * k.sqrt();
             let pr = r * (0.35 + 0.35 * k) * (0.8 + 0.2 * ((i * 37 % 10) as f32 / 10.0));
-            draw_circle(c.x + a.cos() * d, c.y - 6.0 + a.sin() * d * 0.7 - k * 6.0, pr, Color::new(0.85, 0.88, 0.95, 0.45 * (1.0 - k)));
+            shape::circle(c.x + a.cos() * d, c.y - 6.0 + a.sin() * d * 0.7 - k * 6.0, pr, Color::new(0.85, 0.88, 0.95, 0.45 * (1.0 - k)));
         }
     }
 }
@@ -1374,7 +1399,7 @@ fn draw_bursts(bursts: &[(Vec2, f32, f32, u8)]) {
             3 => (Color::new(0.25, 0.0, 0.05, 0.55 * fade), Color::new(1.0, 0.15, 0.2, fade), 8.0),
             _ => (Color::new(0.3, 0.65, 1.0, 0.35 * fade), Color::new(0.8, 0.95, 1.0, 0.9 * fade), 2.0),
         };
-        draw_circle(c.x, c.y, rr, fill);
+        shape::circle(c.x, c.y, rr, fill);
         match *style {
             style::SEAL => {
                 // A spinning seal glyph: square inside the ring.
@@ -1382,15 +1407,15 @@ fn draw_bursts(bursts: &[(Vec2, f32, f32, u8)]) {
                 let q = rr * 0.6;
                 for i in 0..4 {
                     let (a0, a1) = (a + i as f32 * std::f32::consts::FRAC_PI_2, a + (i + 1) as f32 * std::f32::consts::FRAC_PI_2);
-                    draw_line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, Color::new(1.0, 0.3, 0.25, fade));
+                    shape::line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, Color::new(1.0, 0.3, 0.25, fade));
                 }
             }
             style::METEOR => {
-                draw_circle(c.x, c.y, rr * 0.55, Color::new(1.0, 0.95, 0.7, 0.7 * fade));
+                shape::circle(c.x, c.y, rr * 0.55, Color::new(1.0, 0.95, 0.7, 0.7 * fade));
                 for i in 0..12 {
                     let a = i as f32 * 0.52 + c.x;
                     let d = rr * (0.4 + 0.8 * k);
-                    draw_rectangle(c.x + a.cos() * d, c.y + a.sin() * d * 0.7, 3.0, 3.0, Color::new(0.4, 0.2, 0.1, fade));
+                    shape::rectangle(c.x + a.cos() * d, c.y + a.sin() * d * 0.7, 3.0, 3.0, Color::new(0.4, 0.2, 0.1, fade));
                 }
             }
             style::SKYBOLT => {
@@ -1399,13 +1424,13 @@ fn draw_bursts(bursts: &[(Vec2, f32, f32, u8)]) {
                 for s in 1..=8 {
                     let y = c.y - 300.0 + 300.0 * s as f32 / 8.0;
                     let x = if s < 8 { c.x + ((s as f32 * 5.3 + c.y).sin()) * 10.0 } else { c.x };
-                    draw_line(prev.x, prev.y, x, y, 6.0 * fade, Color::new(0.6, 0.8, 1.0, 0.7 * fade));
-                    draw_line(prev.x, prev.y, x, y, 2.5 * fade, Color::new(1.0, 1.0, 1.0, fade));
+                    shape::line(prev.x, prev.y, x, y, 6.0 * fade, Color::new(0.6, 0.8, 1.0, 0.7 * fade));
+                    shape::line(prev.x, prev.y, x, y, 2.5 * fade, Color::new(1.0, 1.0, 1.0, fade));
                     prev = vec2(x, y);
                 }
             }
             style::QUAKE => {
-                draw_circle_lines(c.x, c.y, rr * 0.6, 3.0, Color::new(1.0, 0.4, 0.3, 0.8 * fade));
+                shape::circle_lines(c.x, c.y, rr * 0.6, 3.0, Color::new(1.0, 0.4, 0.3, 0.8 * fade));
             }
             style::SPINE => draw_spine_burst(vec2(c.x, c.y), *r, k),
             style::FRENZY => {
@@ -1418,20 +1443,20 @@ fn draw_bursts(bursts: &[(Vec2, f32, f32, u8)]) {
                     let l = base + vec2((a - 0.05).cos(), (a - 0.05).sin()) * r0;
                     let rgt = base + vec2((a + 0.05).cos(), (a + 0.05).sin()) * r0;
                     let tip = base + vec2(a.cos(), a.sin()) * r1;
-                    draw_triangle(l, rgt, tip, Color::new(0.75, 0.08, 0.15, fade));
+                    shape::triangle(l, rgt, tip, Color::new(0.75, 0.08, 0.15, fade));
                 }
             }
             _ => {}
         }
         if *style == style::PURIFY {
-            draw_circle_lines(c.x, c.y, rr * 0.8, 5.0, Color::new(1.0, 0.95, 0.75, fade));
-            draw_circle_lines(c.x, c.y, rr * 0.55, 3.0, Color::new(1.0, 0.5, 0.6, fade));
+            shape::circle_lines(c.x, c.y, rr * 0.8, 5.0, Color::new(1.0, 0.95, 0.75, fade));
+            shape::circle_lines(c.x, c.y, rr * 0.55, 3.0, Color::new(1.0, 0.5, 0.6, fade));
         }
         if *style == 3 {
-            draw_circle(c.x, c.y, rr * 0.6, Color::new(0.05, 0.0, 0.02, 0.5 * fade));
-            draw_circle_lines(c.x, c.y, rr * 0.8, 4.0, Color::new(0.9, 0.05, 0.1, 0.7 * fade));
+            shape::circle(c.x, c.y, rr * 0.6, Color::new(0.05, 0.0, 0.02, 0.5 * fade));
+            shape::circle_lines(c.x, c.y, rr * 0.8, 4.0, Color::new(0.9, 0.05, 0.1, 0.7 * fade));
         }
-        draw_circle_lines(c.x, c.y, rr, width, edge);
+        shape::circle_lines(c.x, c.y, rr, width, edge);
     }
 }
 
@@ -1473,24 +1498,33 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let life = pl.life / pl.max_life;
         let flicker = 0.85 + 0.15 * ((time * 13.0) as f32 + pl.pos.x).sin();
         let fade = (life * 3.0).min(1.0) * flicker;
-        draw_circle(pl.pos.x, pl.pos.y, pl.radius, Color::new(1.0, 0.45, 0.1, 0.45 * fade));
-        draw_circle(pl.pos.x, pl.pos.y, pl.radius * 0.6, Color::new(1.0, 0.8, 0.3, 0.45 * fade));
-        draw_circle_lines(pl.pos.x, pl.pos.y, pl.radius, 1.5, Color::new(1.0, 0.6, 0.2, 0.8 * fade));
-        for k in 0..5 {
-            let a = k as f32 * 1.256 + pl.pos.y * 0.1;
-            let rise = ((time as f32 * 2.0 + k as f32 * 0.3) % 1.0) * 10.0;
-            draw_rectangle(pl.pos.x + a.cos() * pl.radius * 0.6, pl.pos.y + a.sin() * pl.radius * 0.5 - rise, 2.0, 2.0, Color::new(1.0, 0.85, 0.3, 0.9));
-        }
+        let (c, r) = (vec2(pl.pos.x, pl.pos.y), pl.radius);
+        a.vfx.additive(|| {
+            a.vfx.draw_wh("glow", c, vec2(r * 2.2, r * 1.6), 0.0, Color::new(1.0, 0.4, 0.08, 0.28 * fade));
+            // Flames licking up across the pool, each on its own flicker.
+            for k in 0..6 {
+                let ang = k as f32 * 1.047 + pl.pos.y * 0.1;
+                let ph = (time as f32 * 1.6 + k as f32 * 0.37 + pl.pos.x * 0.01) % 1.0;
+                let q = c + vec2(ang.cos() * r * 0.55, ang.sin() * r * 0.35);
+                let h = r * (0.5 + 0.3 * (ph * std::f32::consts::PI).sin());
+                a.vfx.draw_wh("flame", q - vec2(0.0, h * 0.4), vec2(h * 0.6, h), 0.0, Color::new(1.0, 0.6, 0.2, 0.55 * fade * (1.0 - ph * 0.6)));
+            }
+            for k in 0..4 {
+                let ang = k as f32 * 1.57 + pl.pos.x * 0.1;
+                let rise = ((time as f32 * 1.2 + k as f32 * 0.25) % 1.0) * 14.0;
+                a.vfx.draw("ember", c + vec2(ang.cos() * r * 0.5, ang.sin() * r * 0.3 - rise), 5.0, 0.0, Color::new(1.0, 0.8, 0.35, 0.9 * fade));
+            }
+        });
     }
     for st in &world.strikes {
         // Landing marker shrinks as the star approaches.
         let t = (st.delay / 0.6).clamp(0.0, 1.0);
-        draw_circle_lines(st.pos.x, st.pos.y, st.radius * (0.4 + 0.6 * t), 1.5, Color::new(1.0, 0.95, 0.5, 0.7));
+        shape::circle_lines(st.pos.x, st.pos.y, st.radius * (0.4 + 0.6 * t), 1.5, Color::new(1.0, 0.95, 0.5, 0.7));
     }
     if let Some(s) = world.shrine {
         let pulse = 0.5 + 0.5 * (time * 3.0).sin() as f32;
-        draw_rectangle(s.x - 5.0, s.y - 120.0, 10.0, 120.0, Color::new(1.0, 0.9, 0.6, 0.10 + 0.06 * pulse));
-        draw_circle(s.x, s.y, 22.0 + 3.0 * pulse, Color::new(1.0, 0.85, 0.5, 0.16 + 0.08 * pulse));
+        shape::rectangle(s.x - 5.0, s.y - 120.0, 10.0, 120.0, Color::new(1.0, 0.9, 0.6, 0.10 + 0.06 * pulse));
+        shape::circle(s.x, s.y, 22.0 + 3.0 * pulse, Color::new(1.0, 0.85, 0.5, 0.16 + 0.08 * pulse));
         draw_texture_ex(&a.shrine, (s.x - 16.0).round(), (s.y - 30.0).round(), WHITE, DrawTextureParams { dest_size: Some(vec2(32.0, 36.0)), ..Default::default() });
     }
     for wl in &world.wells {
@@ -1503,14 +1537,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     for l in &world.lanterns {
         let fade = (l.life / 0.4).min(1.0) * ((l.max_life - l.life) / 0.3).min(1.0);
         let bob = ((time * 3.0 + l.pos.x as f64).sin() * 2.0) as f32;
-        draw_circle(l.pos.x, l.pos.y, l.radius, Color::new(0.5, 0.75, 1.0, 0.06 * fade));
-        draw_circle_lines(l.pos.x, l.pos.y, l.radius, 1.0, Color::new(0.7, 0.85, 1.0, 0.35 * fade));
+        shape::circle(l.pos.x, l.pos.y, l.radius, Color::new(0.5, 0.75, 1.0, 0.06 * fade));
+        shape::circle_lines(l.pos.x, l.pos.y, l.radius, 1.0, Color::new(0.7, 0.85, 1.0, 0.35 * fade));
         let (x, y) = (l.pos.x, l.pos.y - 12.0 + bob);
-        draw_circle(x, y, 10.0, Color::new(0.55, 0.8, 1.0, 0.18 * fade));
-        draw_rectangle(x - 2.0, y - 8.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
-        draw_ellipse(x, y, 5.0, 6.0, 0.0, Color::new(0.95, 0.92, 0.86, fade));
-        draw_circle(x, y, 2.5, Color::new(0.55, 0.82, 1.0, fade));
-        draw_rectangle(x - 2.0, y + 6.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
+        shape::circle(x, y, 10.0, Color::new(0.55, 0.8, 1.0, 0.18 * fade));
+        shape::rectangle(x - 2.0, y - 8.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
+        shape::ellipse(x, y, 5.0, 6.0, 0.0, Color::new(0.95, 0.92, 0.86, fade));
+        shape::circle(x, y, 2.5, Color::new(0.55, 0.82, 1.0, fade));
+        shape::rectangle(x - 2.0, y + 6.0, 4.0, 2.0, Color::new(0.16, 0.14, 0.2, fade));
     }
 
     let e = &world.enemies;
@@ -1540,13 +1574,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         };
         if e.banner[i] {
             let c = leader_color();
-            draw_circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 3.0, 1.0, Color::new(c.r, c.g, c.b, 0.45));
+            shape::circle_lines(pos.x, pos.y + 2.0, e.radius[i] + 3.0, 1.0, Color::new(c.r, c.g, c.b, 0.45));
         }
         // Champions: a pulsing crimson-gold aura and a warm tint.
         let tint = if e.champion[i] {
             let pulse = 0.5 + 0.5 * (time as f32 * 6.0 + i as f32).sin();
-            draw_circle(pos.x, pos.y - 4.0, e.radius[i] + 6.0, Color::new(1.0, 0.35, 0.2, 0.12 + 0.08 * pulse));
-            draw_circle_lines(pos.x, pos.y - 4.0, e.radius[i] + 4.0, 1.5, Color::new(1.0, 0.75, 0.3, 0.55 + 0.3 * pulse));
+            shape::circle(pos.x, pos.y - 4.0, e.radius[i] + 6.0, Color::new(1.0, 0.35, 0.2, 0.12 + 0.08 * pulse));
+            shape::circle_lines(pos.x, pos.y - 4.0, e.radius[i] + 4.0, 1.5, Color::new(1.0, 0.75, 0.3, 0.55 + 0.3 * pulse));
             if e.flash[i] > 0 { tint } else { Color::new(1.0, 0.78, 0.6, 1.0) }
         } else {
             tint
@@ -1558,7 +1592,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let winding = e.ai_state[i] == 1;
             if winding {
                 let d = e.ai_dir[i];
-                draw_line(pos.x, pos.y, pos.x + d.x * 230.0, pos.y + d.y * 230.0, 10.0, Color::new(1.0, 0.2, 0.2, 0.22));
+                shape::line(pos.x, pos.y, pos.x + d.x * 230.0, pos.y + d.y * 230.0, 10.0, Color::new(1.0, 0.2, 0.2, 0.22));
             }
             let tint = if winding && ((time * 16.0) as i32) % 2 == 0 {
                 Color::new(1.0, 1.0, 1.0, 1.0)
@@ -1568,7 +1602,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 Color::new(0.85, 0.7, 1.0, 1.0)
             };
             let tint = if out_of_reach { dimmed(tint) } else { tint };
-            draw_ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+            shape::ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
             draw_outline_now(&a.oni_outline, (pos.x - 32.0).round(), (pos.y - 52.0).round(), vec2(64.0, 64.0), flip, e.kind[i].rarity());
             cues.push((pos.x, (pos.y - 52.0).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
@@ -1585,8 +1619,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let bob = ((time * 2.0).sin() * 3.0) as f32;
             let glow = 0.18 + 0.06 * (time * 5.0).sin() as f32;
             let tint = if out_of_reach { dimmed(tint) } else { tint };
-            draw_circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
-            draw_ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
+            shape::circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
+            shape::ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
             draw_outline_now(&a.night_lord_outline, (pos.x - 48.0).round(), (pos.y - 84.0 + bob).round(), vec2(96.0, 96.0), false, e.kind[i].rarity());
             cues.push((pos.x, (pos.y - 84.0 + bob).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
@@ -1612,7 +1646,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         };
         let mut tint = tint;
         if e.kind[i] == EnemyKind::Chochin {
-            draw_circle(pos.x, pos.y - 4.0, 11.0, Color::new(1.0, 0.6, 0.25, 0.14));
+            shape::circle(pos.x, pos.y - 4.0, 11.0, Color::new(1.0, 0.6, 0.25, 0.14));
         } else if e.kind[i] == EnemyKind::Nopperabo && e.ai_state[i] != 0 {
             tint.a = blink_alpha(e, i);
         }
@@ -1669,7 +1703,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
     if world.cfg.hero == HeroId::Ren && !divine && world.barrier_cd <= 0.0 {
         // Barrier ready: a soft pink shimmer.
-        draw_circle_lines(p.x, p.y - 8.0, 18.0 + 1.5 * (t * 4.0).sin(), 1.5, Color::new(1.0, 0.7, 0.85, 0.5));
+        shape::circle_lines(p.x, p.y - 8.0, 18.0 + 1.5 * (t * 4.0).sin(), 1.5, Color::new(1.0, 0.7, 0.85, 0.5));
     }
     if world.cfg.hero == HeroId::Kuon && !domain {
         draw_stillness(world, t);
@@ -1685,55 +1719,60 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Shadow Step afterimages (explode shortly) and streaks.
     for (c, left) in &world.afterimages {
         let k = left / 0.35;
-        draw_circle(c.x, c.y - 10.0, 18.0 * (1.5 - k), Color::new(0.6, 0.05, 0.1, 0.25 * (1.0 - k) + 0.1));
+        shape::circle(c.x, c.y - 10.0, 18.0 * (1.5 - k), Color::new(0.6, 0.05, 0.1, 0.25 * (1.0 - k) + 0.1));
         draw_texture_ex(&a.shun_hannya[0], (c.x - 12.0).round(), (c.y - 26.0).round(), Color::new(0.9, 0.15, 0.2, 0.55 * k + 0.2), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.shun_hannya[0])), ..Default::default() });
     }
     for (from, to, age) in &fx.steps {
         let k = 1.0 - age / 0.3;
-        draw_line(from.x, from.y - 10.0, to.x, to.y - 10.0, 6.0 * k, Color::new(0.5, 0.0, 0.08, 0.6 * k));
-        draw_line(from.x, from.y - 10.0, to.x, to.y - 10.0, 2.0 * k, Color::new(1.0, 0.4, 0.4, 0.8 * k));
+        shape::line(from.x, from.y - 10.0, to.x, to.y - 10.0, 6.0 * k, Color::new(0.5, 0.0, 0.08, 0.6 * k));
+        shape::line(from.x, from.y - 10.0, to.x, to.y - 10.0, 2.0 * k, Color::new(1.0, 0.4, 0.4, 0.8 * k));
     }
-    // Fox Mirage clones: translucent, blue-shifted copies of Riku (gold while he's transformed).
+    // Fox Mirage clones: translucent, blue-shifted copies of the hero in the player's current
+    // pose (the rig, at true size, holding what the hero holds); the form sprite while
+    // transformed. Their strike is a glowing slash.
     for c in &world.clones {
-        let f = if c.moving { 1 + ((time * 9.0 + c.pos.x as f64 * 0.1) as usize % 2) } else { 0 };
-        let ctex = if fox { &a.riku_fox[f] } else { &a.hero(world.cfg.hero)[f] };
         let fade = (c.life / 0.4).min(1.0);
-        let flicker = 0.7 + 0.15 * (t * 13.0 + c.pos.y).sin();
-        let tint = Color::new(0.75, 0.85, 1.0, flicker * fade);
-        let (cx, cy) = ((c.pos.x - 12.0).round(), (c.pos.y - 26.0).round());
-        draw_ellipse(c.pos.x, c.pos.y + 5.0, 8.0, 2.5, 0.0, Color::new(0.0, 0.0, 0.0, 0.2 * fade));
-        // Afterimage trailing behind when moving.
-        if c.moving {
-            let back = c.facing * -5.0;
-            draw_texture_ex(ctex, cx + back.x, cy + back.y, Color::new(0.5, 0.65, 1.0, 0.25 * fade), DrawTextureParams { dest_size: Some(crate::sprites::nat(ctex)), flip_x: c.facing.x < 0.0, ..Default::default() });
-        }
-        draw_texture_ex(ctex, cx, cy, tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(ctex)), flip_x: c.facing.x < 0.0, ..Default::default() });
-        if c.striking > 0.0 {
-            let base = c.facing.y.atan2(c.facing.x);
-            let k = c.striking / 0.15;
-            for s in 0..6 {
-                let a0 = base - 0.9 + s as f32 * 0.3;
-                let a1 = a0 + 0.3;
-                let r = 16.0;
-                draw_line(c.pos.x + a0.cos() * r, c.pos.y - 8.0 + a0.sin() * r, c.pos.x + a1.cos() * r, c.pos.y - 8.0 + a1.sin() * r, 3.0, Color::new(0.85, 0.95, 1.0, 0.9 * k));
+        let flicker = 0.78 + 0.12 * (t * 13.0 + c.pos.y).sin();
+        let tint = Color::new(0.62, 0.8, 1.0, flicker * fade);
+        let left = c.facing.x < 0.0;
+        a.vfx.additive(|| a.vfx.draw("glow", vec2(c.pos.x, c.pos.y - 10.0), 34.0, 0.0, Color::new(0.45, 0.65, 1.0, 0.25 * fade)));
+        shape::ellipse(c.pos.x, c.pos.y + 5.0, 8.0, 2.5, 0.0, Color::new(0.0, 0.0, 0.0, 0.2 * fade));
+        let feet = vec2(c.pos.x, c.pos.y + 6.0);
+        match a.rig(world.cfg.hero).filter(|_| !(fox || hannya || mukade || domain || divine)) {
+            Some(rig) => {
+                // A faint afterimage trailing behind when moving.
+                if c.moving {
+                    crate::rig::draw(rig, &fx.hero_rig, feet - vec2(c.facing.x, c.facing.y) * 5.0, left, Color::new(0.5, 0.65, 1.0, 0.22 * fade));
+                }
+                crate::rig::draw(rig, &fx.hero_rig, feet, left, tint);
             }
+            None => {
+                let ctex = a.portrait(world.cfg.hero, true);
+                let n = crate::sprites::nat(ctex);
+                draw_texture_ex(ctex, c.pos.x - n.x / 2.0, c.pos.y + 6.0 - n.y, tint, DrawTextureParams { dest_size: Some(n), flip_x: left, ..Default::default() });
+            }
+        }
+        if c.striking > 0.0 {
+            let k = c.striking / 0.15;
+            let dir = vec2(c.facing.x, c.facing.y);
+            a.vfx.additive(|| a.vfx.draw_wh("slash", vec2(c.pos.x, c.pos.y - 8.0) + dir * 12.0, vec2(30.0, 30.0), dir.y.atan2(dir.x), Color::new(0.8, 0.92, 1.0, 0.9 * k)));
         }
     }
     let awakened = world.weapons.iter().filter(|w| w.awakened).count();
     if awakened > 0 {
         // A golden rune circle that grows richer with every Awakening.
         let r = 16.0 + 3.0 * awakened as f32;
-        draw_circle_lines(p.x, p.y + 3.0, r, 1.5, Color::new(1.0, 0.85, 0.4, 0.55));
+        shape::circle_lines(p.x, p.y + 3.0, r, 1.5, Color::new(1.0, 0.85, 0.4, 0.55));
         for k in 0..(6 + 2 * awakened) {
             let a = t * 1.2 + k as f32 * std::f32::consts::TAU / (6 + 2 * awakened) as f32;
-            draw_rectangle(p.x + a.cos() * r - 1.0, p.y + 3.0 + a.sin() * r * 0.45 - 1.0, 2.0, 2.0, Color::new(1.0, 0.9, 0.5, 0.9));
+            shape::rectangle(p.x + a.cos() * r - 1.0, p.y + 3.0 + a.sin() * r * 0.45 - 1.0, 2.0, 2.0, Color::new(1.0, 0.9, 0.5, 0.9));
         }
     }
     for age in &fx.sig_rings {
         let k = age / 0.5;
-        draw_circle_lines(p.x, p.y + 3.0, 20.0 + 60.0 * k, 3.0 * (1.0 - k) + 1.0, Color::new(1.0, 0.9, 0.5, 0.8 * (1.0 - k)));
+        shape::circle_lines(p.x, p.y + 3.0, 20.0 + 60.0 * k, 3.0 * (1.0 - k) + 1.0, Color::new(1.0, 0.9, 0.5, 0.8 * (1.0 - k)));
     }
-    draw_ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+    shape::ellipse(p.x, p.y + 5.0, 9.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
     // Rigged heroes (crate::rig), except in a transformed form (those keep their sprite).
     let rig = a.rig(world.cfg.hero).filter(|_| !(fox || hannya || mukade || domain || divine));
     let rigged = rig.is_some();
@@ -1833,22 +1872,22 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     for wv in &world.waves {
         if wv.radius > 0.0 && wv.purify {
             let f = 1.0 - wv.radius / wv.max_radius;
-            draw_circle(wv.center.x, wv.center.y, wv.radius, Color::new(1.0, 0.85, 0.92, 0.08 * f));
-            draw_circle_lines(wv.center.x, wv.center.y, wv.radius, 6.0, Color::new(1.0, 0.6, 0.75, 0.8 * f + 0.1));
-            draw_circle_lines(wv.center.x, wv.center.y, wv.radius - 6.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.7 * f));
+            shape::circle(wv.center.x, wv.center.y, wv.radius, Color::new(1.0, 0.85, 0.92, 0.08 * f));
+            shape::circle_lines(wv.center.x, wv.center.y, wv.radius, 6.0, Color::new(1.0, 0.6, 0.75, 0.8 * f + 0.1));
+            shape::circle_lines(wv.center.x, wv.center.y, wv.radius - 6.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.7 * f));
             continue;
         }
         if wv.radius > 0.0 {
             let f = 1.0 - wv.radius / wv.max_radius;
-            draw_circle_lines(wv.center.x, wv.center.y, wv.radius, 4.0, Color::new(1.0, 0.7, 0.3, 0.75 * f + 0.1));
-            draw_circle_lines(wv.center.x, wv.center.y, wv.radius - 5.0, 1.5, Color::new(1.0, 0.95, 0.8, 0.5 * f));
+            shape::circle_lines(wv.center.x, wv.center.y, wv.radius, 4.0, Color::new(1.0, 0.7, 0.3, 0.75 * f + 0.1));
+            shape::circle_lines(wv.center.x, wv.center.y, wv.radius - 5.0, 1.5, Color::new(1.0, 0.95, 0.8, 0.5 * f));
         }
     }
     for st in &world.strikes {
         let drop = st.delay * 320.0;
         let (sx, sy) = (st.pos.x + drop * 0.35, st.pos.y - drop);
-        draw_line(sx + 10.0, sy - 22.0, sx, sy, 3.0, Color::new(0.55, 0.85, 1.0, 0.6));
-        draw_poly(sx, sy, 5, 5.0, time as f32 * 400.0, Color::new(1.0, 0.92, 0.4, 1.0));
+        shape::line(sx + 10.0, sy - 22.0, sx, sy, 3.0, Color::new(0.55, 0.85, 1.0, 0.6));
+        shape::poly(sx, sy, 5, 5.0, time as f32 * 400.0, Color::new(1.0, 0.92, 0.4, 1.0));
     }
     a.vfx.additive(|| {
         for (c, r, age) in &fx.impacts {
@@ -1867,8 +1906,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let t = k as f32 / 4.0;
             let jag = if k < 4 { ((k as f32 * 7.3 + from.x) .sin()) * 7.0 } else { 0.0 };
             let p2 = *from + d * t + n * jag;
-            draw_line(prev.x, prev.y, p2.x, p2.y, 3.0, Color::new(0.75, 0.85, 1.0, a));
-            draw_line(prev.x, prev.y, p2.x, p2.y, 1.2, Color::new(1.0, 1.0, 1.0, a));
+            shape::line(prev.x, prev.y, p2.x, p2.y, 3.0, Color::new(0.75, 0.85, 1.0, a));
+            shape::line(prev.x, prev.y, p2.x, p2.y, 1.2, Color::new(1.0, 1.0, 1.0, a));
             prev = p2;
         }
     }
@@ -1880,7 +1919,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let t0 = base - span + 2.0 * span * k as f32 / segs as f32;
             let t1 = base - span + 2.0 * span * (k + 1) as f32 / segs as f32;
             let rr = r * (0.75 + 0.25 * (age / 0.2));
-            draw_line(c.x + t0.cos() * rr, c.y + t0.sin() * rr, c.x + t1.cos() * rr, c.y + t1.sin() * rr, 5.0, Color::new(0.85, 0.95, 1.0, 0.8 * a));
+            shape::line(c.x + t0.cos() * rr, c.y + t0.sin() * rr, c.x + t1.cos() * rr, c.y + t1.sin() * rr, 5.0, Color::new(0.85, 0.95, 1.0, 0.8 * a));
         }
     }
 
@@ -1922,13 +1961,13 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     for k in 0..5 {
                         let a = t * 9.0 + k as f32 * 1.256;
                         let d = 14.0 * (1.0 - ((t * 2.5 + k as f32 * 0.2) % 1.0));
-                        draw_rectangle(q.x + a.cos() * d - 1.0, q.y + a.sin() * d - 1.0, 2.0, 2.0, Color::new(0.75, 0.95, 1.0, 0.9));
+                        shape::rectangle(q.x + a.cos() * d - 1.0, q.y + a.sin() * d - 1.0, 2.0, 2.0, Color::new(0.75, 0.95, 1.0, 0.9));
                     }
                 } else {
                     let back = v.normalize_or_zero() * -1.0;
                     for k in 1..4 {
                         let c = q + back * (k as f32 * 4.0);
-                        draw_circle(c.x, c.y, r * (1.0 - k as f32 * 0.22), Color::new(0.25, 0.6, 1.0, 0.35 / k as f32));
+                        shape::circle(c.x, c.y, r * (1.0 - k as f32 * 0.22), Color::new(0.25, 0.6, 1.0, 0.35 / k as f32));
                     }
                 }
                 let (outer, mid) = if comet {
@@ -1936,35 +1975,35 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 } else {
                     (Color::new(0.2, 0.55, 1.0, 0.3), Color::new(0.25, 0.65, 1.0, 1.0))
                 };
-                draw_circle(q.x, q.y, r * 1.8, outer);
-                draw_circle(q.x, q.y, r, mid);
-                draw_circle(q.x, q.y, r * 0.55, Color::new(0.85, 0.97, 1.0, 1.0));
+                shape::circle(q.x, q.y, r * 1.8, outer);
+                shape::circle(q.x, q.y, r, mid);
+                shape::circle(q.x, q.y, r * 0.55, Color::new(0.85, 0.97, 1.0, 1.0));
                 // Swirl: two bright arcs rotating around the core.
                 for k in 0..2 {
                     let a = t * 14.0 + k as f32 * std::f32::consts::PI;
-                    draw_circle(q.x + a.cos() * r * 0.7, q.y + a.sin() * r * 0.7, r * 0.22, WHITE);
+                    shape::circle(q.x + a.cos() * r * 0.7, q.y + a.sin() * r * 0.7, r * 0.22, WHITE);
                 }
             }
             ProjKind::Spark => {
-                draw_circle(q.x, q.y, 5.0, Color::new(0.4, 0.7, 1.0, 0.35));
-                draw_circle(q.x, q.y, 2.5, Color::new(0.85, 0.97, 1.0, 1.0));
+                shape::circle(q.x, q.y, 5.0, Color::new(0.4, 0.7, 1.0, 0.35));
+                shape::circle(q.x, q.y, 2.5, Color::new(0.85, 0.97, 1.0, 1.0));
             }
             ProjKind::GoldenOrb => {
                 let r = 13.0;
-                draw_circle(q.x, q.y, r * 1.7, Color::new(1.0, 0.55, 0.1, 0.22));
-                draw_circle(q.x, q.y, r, Color::new(1.0, 0.65, 0.15, 0.95));
-                draw_circle(q.x, q.y, r * 0.65, Color::new(1.0, 0.88, 0.4, 1.0));
-                draw_circle(q.x, q.y, r * 0.3, WHITE);
+                shape::circle(q.x, q.y, r * 1.7, Color::new(1.0, 0.55, 0.1, 0.22));
+                shape::circle(q.x, q.y, r, Color::new(1.0, 0.65, 0.15, 0.95));
+                shape::circle(q.x, q.y, r * 0.65, Color::new(1.0, 0.88, 0.4, 1.0));
+                shape::circle(q.x, q.y, r * 0.3, WHITE);
                 for k in 0..4 {
                     let a = t * 16.0 + k as f32 * std::f32::consts::FRAC_PI_2;
-                    draw_line(q.x + a.cos() * r * 0.3, q.y + a.sin() * r * 0.3, q.x + (a + 0.9).cos() * r * 0.95, q.y + (a + 0.9).sin() * r * 0.95, 2.0, Color::new(1.0, 1.0, 0.85, 0.9));
+                    shape::line(q.x + a.cos() * r * 0.3, q.y + a.sin() * r * 0.3, q.x + (a + 0.9).cos() * r * 0.95, q.y + (a + 0.9).sin() * r * 0.95, 2.0, Color::new(1.0, 1.0, 0.85, 0.9));
                 }
             }
             ProjKind::Familiar => {
                 let back = v.normalize_or_zero() * -1.0;
                 for k in 1..4 {
                     let c = q + back * (k as f32 * 3.5);
-                    draw_rectangle(c.x - 1.0, c.y - 1.0, 2.0, 2.0, Color::new(1.0, 0.75, 0.3, 0.8 - k as f32 * 0.2));
+                    shape::rectangle(c.x - 1.0, c.y - 1.0, 2.0, 2.0, Color::new(1.0, 0.75, 0.3, 0.8 - k as f32 * 0.2));
                 }
                 sprites.push(&a.familiar, (q.x - 6.0).round(), (q.y - 5.0).round(), WHITE, DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.familiar)), flip_x: v.x < 0.0, ..Default::default() });
             }
@@ -1982,88 +2021,88 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                     let a0 = base - 1.2 + s as f32 * 0.24;
                     let a1 = a0 + 0.24;
                     let thick = 6.0 * (1.0 - ((s as f32 - 4.5).abs() / 5.0));
-                    draw_line(q.x + a0.cos() * r, q.y + a0.sin() * r, q.x + a1.cos() * r, q.y + a1.sin() * r, thick + 2.0, outer);
-                    draw_line(q.x + a0.cos() * r, q.y + a0.sin() * r, q.x + a1.cos() * r, q.y + a1.sin() * r, thick * 0.5, inner);
+                    shape::line(q.x + a0.cos() * r, q.y + a0.sin() * r, q.x + a1.cos() * r, q.y + a1.sin() * r, thick + 2.0, outer);
+                    shape::line(q.x + a0.cos() * r, q.y + a0.sin() * r, q.x + a1.cos() * r, q.y + a1.sin() * r, thick * 0.5, inner);
                 }
             }
             ProjKind::Seal => {
                 let back = v.normalize_or_zero() * -1.0;
                 for k in 1..5 {
                     let c = q + back * (k as f32 * 4.0);
-                    draw_circle(c.x, c.y, 4.0 - k as f32 * 0.7, Color::new(1.0, 0.8, 0.3, 0.5 - k as f32 * 0.1));
+                    shape::circle(c.x, c.y, 4.0 - k as f32 * 0.7, Color::new(1.0, 0.8, 0.3, 0.5 - k as f32 * 0.1));
                 }
-                draw_circle(q.x, q.y, 8.0, Color::new(1.0, 0.85, 0.35, 0.25));
+                shape::circle(q.x, q.y, 8.0, Color::new(1.0, 0.85, 0.35, 0.25));
                 sprites.push(&a.talisman, q.x - 3.0, q.y - 5.0, Color::new(1.0, 0.85, 0.35, 1.0), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.talisman)), rotation: v.y.atan2(v.x) + std::f32::consts::FRAC_PI_2, ..Default::default() });
             }
             ProjKind::Petal => {
                 let a = t * 10.0 + q.x * 0.1;
-                draw_circle(q.x, q.y, 5.0, Color::new(1.0, 0.6, 0.8, 0.25));
-                draw_ellipse(q.x, q.y, 3.5, 2.0, a.to_degrees(), Color::new(1.0, 0.72, 0.85, 1.0));
-                draw_ellipse(q.x, q.y, 1.5, 1.0, a.to_degrees(), Color::new(1.0, 0.95, 0.98, 1.0));
+                shape::circle(q.x, q.y, 5.0, Color::new(1.0, 0.6, 0.8, 0.25));
+                shape::ellipse(q.x, q.y, 3.5, 2.0, a.to_degrees(), Color::new(1.0, 0.72, 0.85, 1.0));
+                shape::ellipse(q.x, q.y, 1.5, 1.0, a.to_degrees(), Color::new(1.0, 0.95, 0.98, 1.0));
             }
             ProjKind::SpiritBolt => {
                 let back = v.normalize_or_zero() * -1.0;
                 for k in 1..4 {
                     let c = q + back * (k as f32 * 4.0);
-                    draw_circle(c.x, c.y, 3.5 - k as f32 * 0.8, Color::new(0.6, 0.8, 1.0, 0.5 - k as f32 * 0.12));
+                    shape::circle(c.x, c.y, 3.5 - k as f32 * 0.8, Color::new(0.6, 0.8, 1.0, 0.5 - k as f32 * 0.12));
                 }
-                draw_circle(q.x, q.y, 6.0, Color::new(0.55, 0.8, 1.0, 0.3));
-                draw_circle(q.x, q.y, 3.0, Color::new(0.9, 0.97, 1.0, 1.0));
+                shape::circle(q.x, q.y, 6.0, Color::new(0.55, 0.8, 1.0, 0.3));
+                shape::circle(q.x, q.y, 3.0, Color::new(0.9, 0.97, 1.0, 1.0));
             }
             ProjKind::SealOrb => {
                 let r = pr.radius[i];
                 let hue = (q.x * 0.01 + q.y * 0.013).sin() * 0.5 + 0.5;
                 let col = Color::new(1.0, 0.55 + 0.3 * hue, 0.75 - 0.2 * hue, 1.0);
-                draw_circle(q.x, q.y, r * 1.9, Color::new(col.r, col.g, col.b, 0.22));
-                draw_circle(q.x, q.y, r, col);
-                draw_circle(q.x, q.y, r * 0.5, WHITE);
+                shape::circle(q.x, q.y, r * 1.9, Color::new(col.r, col.g, col.b, 0.22));
+                shape::circle(q.x, q.y, r, col);
+                shape::circle(q.x, q.y, r * 0.5, WHITE);
             }
             ProjKind::RedStar => {
                 let r = pr.radius[i];
                 let back = v.normalize_or_zero() * -1.0;
                 for k in 1..5 {
                     let c = q + back * (k as f32 * 5.0);
-                    draw_circle(c.x, c.y, r * (0.6 - k as f32 * 0.1), Color::new(1.0, 0.2, 0.25, 0.4 - k as f32 * 0.08));
+                    shape::circle(c.x, c.y, r * (0.6 - k as f32 * 0.1), Color::new(1.0, 0.2, 0.25, 0.4 - k as f32 * 0.08));
                 }
-                draw_circle(q.x, q.y, r * 1.6, Color::new(1.0, 0.2, 0.25, 0.22));
+                shape::circle(q.x, q.y, r * 1.6, Color::new(1.0, 0.2, 0.25, 0.22));
                 let rot = t * 10.0;
                 for k in 0..4 {
                     let a = rot + k as f32 * std::f32::consts::FRAC_PI_2;
                     let tip = vec2(q.x, q.y) + vec2(a.cos(), a.sin()) * r * 1.3;
                     let l = vec2(q.x, q.y) + vec2((a + 0.6).cos(), (a + 0.6).sin()) * r * 0.35;
                     let rr = vec2(q.x, q.y) + vec2((a - 0.6).cos(), (a - 0.6).sin()) * r * 0.35;
-                    draw_triangle(tip, l, rr, Color::new(1.0, 0.25, 0.3, 1.0));
+                    shape::triangle(tip, l, rr, Color::new(1.0, 0.25, 0.3, 1.0));
                 }
-                draw_circle(q.x, q.y, r * 0.35, Color::new(1.0, 0.9, 0.9, 1.0));
+                shape::circle(q.x, q.y, r * 0.35, Color::new(1.0, 0.9, 0.9, 1.0));
             }
             ProjKind::VoidOrb => {
                 let r = pr.radius[i];
-                draw_circle(q.x, q.y, r * 1.5, Color::new(0.5, 0.2, 1.0, 0.18));
-                draw_circle(q.x, q.y, r, Color::new(0.55, 0.25, 1.0, 0.9));
-                draw_circle(q.x, q.y, r * 0.72, Color::new(0.05, 0.02, 0.12, 1.0));
+                shape::circle(q.x, q.y, r * 1.5, Color::new(0.5, 0.2, 1.0, 0.18));
+                shape::circle(q.x, q.y, r, Color::new(0.55, 0.25, 1.0, 0.9));
+                shape::circle(q.x, q.y, r * 0.72, Color::new(0.05, 0.02, 0.12, 1.0));
                 for k in 0..10 {
                     let a = t * 3.0 + k as f32 * 0.628;
                     let rr = r * (0.9 + 0.12 * (t * 9.0 + k as f32).sin());
-                    draw_rectangle(q.x + a.cos() * rr - 1.0, q.y + a.sin() * rr - 1.0, 2.0, 2.0, Color::new(0.9, 0.8, 1.0, 1.0));
+                    shape::rectangle(q.x + a.cos() * rr - 1.0, q.y + a.sin() * rr - 1.0, 2.0, 2.0, Color::new(0.9, 0.8, 1.0, 1.0));
                 }
-                draw_circle_lines(q.x, q.y, r, 2.0, Color::new(0.85, 0.7, 1.0, 1.0));
+                shape::circle_lines(q.x, q.y, r, 2.0, Color::new(0.85, 0.7, 1.0, 1.0));
             }
             ProjKind::Fang => {
                 let back = v.normalize_or_zero() * -1.0;
                 for k in 1..4 {
                     let c = q + back * (k as f32 * 3.5);
-                    draw_circle(c.x, c.y, 2.5 - k as f32 * 0.5, Color::new(0.45, 0.9, 0.3, 0.6 - k as f32 * 0.15));
+                    shape::circle(c.x, c.y, 2.5 - k as f32 * 0.5, Color::new(0.45, 0.9, 0.3, 0.6 - k as f32 * 0.15));
                 }
                 let a0 = v.y.atan2(v.x);
                 let tip = q + sim::Vec2::from_angle(a0) * 6.0;
                 let b1 = q + sim::Vec2::from_angle(a0 + 2.4) * 4.0;
                 let b2 = q + sim::Vec2::from_angle(a0 - 2.4) * 4.0;
-                draw_triangle(vec2(tip.x, tip.y), vec2(b1.x, b1.y), vec2(b2.x, b2.y), Color::new(0.95, 0.92, 0.85, 1.0));
-                draw_circle(q.x, q.y, 1.5, Color::new(0.5, 0.95, 0.35, 1.0));
+                shape::triangle(vec2(tip.x, tip.y), vec2(b1.x, b1.y), vec2(b2.x, b2.y), Color::new(0.95, 0.92, 0.85, 1.0));
+                shape::circle(q.x, q.y, 1.5, Color::new(0.5, 0.95, 0.35, 1.0));
             }
             ProjKind::Shuriken => {
                 let size = pr.radius[i] * 2.2;
-                draw_circle(q.x, q.y, size * 0.55, Color::new(0.8, 0.9, 1.0, 0.12));
+                shape::circle(q.x, q.y, size * 0.55, Color::new(0.8, 0.9, 1.0, 0.12));
                 draw_texture_ex(
                     &a.shuriken,
                     q.x - size / 2.0,
@@ -2088,20 +2127,20 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
                 let u = k as f32 / links as f32;
                 let c = from + d * u + sag * (4.0 * u * (1.0 - u));
                 let col = if k % 2 == 0 { Color::new(0.7, 0.55, 1.0, 0.9) } else { Color::new(0.4, 0.28, 0.8, 0.9) };
-                draw_circle_lines(c.x, c.y, 2.2, 1.2, col);
+                shape::circle_lines(c.x, c.y, 2.2, 1.2, col);
             }
-            draw_circle(to.x, to.y, 6.0, Color::new(0.6, 0.45, 1.0, 0.25));
+            shape::circle(to.x, to.y, 6.0, Color::new(0.6, 0.45, 1.0, 0.25));
         }
     }
     for s in &world.scars {
         let k = (s.life / 1.5).min(1.0);
-        draw_line(s.from.x, s.from.y - 6.0, s.to.x, s.to.y - 6.0, 4.0, Color::new(0.55, 0.4, 1.0, 0.35 * k));
-        draw_line(s.from.x, s.from.y - 6.0, s.to.x, s.to.y - 6.0, 1.5, Color::new(1.0, 1.0, 1.0, 0.6 * k));
+        shape::line(s.from.x, s.from.y - 6.0, s.to.x, s.to.y - 6.0, 4.0, Color::new(0.55, 0.4, 1.0, 0.35 * k));
+        shape::line(s.from.x, s.from.y - 6.0, s.to.x, s.to.y - 6.0, 1.5, Color::new(1.0, 1.0, 1.0, 0.6 * k));
     }
     for (from, to, age) in &fx.iai {
         let k = 1.0 - age / 0.25;
-        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 10.0 * k, Color::new(0.55, 0.45, 1.0, 0.5 * k));
-        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0, Color::new(1.0, 1.0, 1.0, k));
+        shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 10.0 * k, Color::new(0.55, 0.45, 1.0, 0.5 * k));
+        shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0, Color::new(1.0, 1.0, 1.0, k));
     }
     for (from, to, age) in &fx.lashes {
         let k = 1.0 - age / 0.22;
@@ -2113,35 +2152,35 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let bend = (u * std::f32::consts::PI).sin() * 10.0 * (1.0 - age / 0.22);
             let pt = *from + d * u + n * bend;
             let wdt = (9.0 * (1.0 - u * 0.65)) * k;
-            draw_line(prev.x, prev.y - 8.0, pt.x, pt.y - 8.0, wdt + 2.0, Color::new(0.08, 0.0, 0.02, 0.8 * k));
-            draw_line(prev.x, prev.y - 8.0, pt.x, pt.y - 8.0, wdt, Color::new(0.85, 0.12, 0.2, k));
+            shape::line(prev.x, prev.y - 8.0, pt.x, pt.y - 8.0, wdt + 2.0, Color::new(0.08, 0.0, 0.02, 0.8 * k));
+            shape::line(prev.x, prev.y - 8.0, pt.x, pt.y - 8.0, wdt, Color::new(0.85, 0.12, 0.2, k));
             prev = pt;
         }
-        draw_circle(to.x, to.y - 8.0, 4.0 * k, Color::new(1.0, 0.4, 0.4, k));
+        shape::circle(to.x, to.y - 8.0, 4.0 * k, Color::new(1.0, 0.4, 0.4, k));
     }
     for (c, r, age) in &fx.devours {
         // Collapses inward: the hunger pulls.
         let k = age / 0.4;
         let rr = r * (1.0 - 0.7 * k);
-        draw_circle(c.x, c.y, rr, Color::new(0.35, 0.0, 0.06, 0.2 * (1.0 - k)));
-        draw_circle_lines(c.x, c.y, rr, 3.0, Color::new(0.9, 0.15, 0.2, 0.8 * (1.0 - k)));
+        shape::circle(c.x, c.y, rr, Color::new(0.35, 0.0, 0.06, 0.2 * (1.0 - k)));
+        shape::circle_lines(c.x, c.y, rr, 3.0, Color::new(0.9, 0.15, 0.2, 0.8 * (1.0 - k)));
     }
     for (c, r, age) in &fx.pulses {
         let k = age / 0.4;
-        draw_circle_lines(c.x, c.y, r * (0.4 + 0.6 * k), 2.5, Color::new(0.6, 0.85, 1.0, 0.8 * (1.0 - k)));
+        shape::circle_lines(c.x, c.y, r * (0.4 + 0.6 * k), 2.5, Color::new(0.6, 0.85, 1.0, 0.8 * (1.0 - k)));
     }
     for (from, to, age, st) in &fx.beams {
         if *st == style::MOON {
             let k = 1.0 - age / 0.45;
-            draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 26.0 * k, Color::new(0.45, 0.6, 1.0, 0.25 * k));
-            draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 13.0 * k, Color::new(0.75, 0.85, 1.0, 0.6 * k));
-            draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 4.0 * k, Color::new(1.0, 1.0, 0.95, k));
+            shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 26.0 * k, Color::new(0.45, 0.6, 1.0, 0.25 * k));
+            shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 13.0 * k, Color::new(0.75, 0.85, 1.0, 0.6 * k));
+            shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 4.0 * k, Color::new(1.0, 1.0, 0.95, k));
             continue;
         }
         let k = 1.0 - age / 0.3;
-        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 16.0 * k, Color::new(0.35, 0.0, 0.05, 0.55 * k));
-        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 9.0 * k, Color::new(0.9, 0.05, 0.15, 0.85 * k));
-        draw_line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0 * k, Color::new(1.0, 0.75, 0.75, k));
+        shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 16.0 * k, Color::new(0.35, 0.0, 0.05, 0.55 * k));
+        shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 9.0 * k, Color::new(0.9, 0.05, 0.15, 0.85 * k));
+        shape::line(from.x, from.y - 6.0, to.x, to.y - 6.0, 3.0 * k, Color::new(1.0, 0.75, 0.75, k));
     }
     draw_blasts(world, time as f32);
     draw_bursts(&fx.bursts);
@@ -2157,16 +2196,16 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let r = sim::content::SHOT_RADIUS;
         let flick = 0.8 + 0.2 * (time as f32 * 20.0 + s.pos.x).sin();
         let c = crate::stage::bullet_color(s.style);
-        draw_circle(s.pos.x, s.pos.y, r * 2.0, Color::new(c.r, c.g * 0.8, c.b * 0.8, 0.24 * flick));
-        draw_circle(s.pos.x, s.pos.y, r, c);
-        draw_circle(s.pos.x, s.pos.y, r * 0.5, Color::new(1.0, 0.97, 0.9, 1.0));
+        shape::circle(s.pos.x, s.pos.y, r * 2.0, Color::new(c.r, c.g * 0.8, c.b * 0.8, 0.24 * flick));
+        shape::circle(s.pos.x, s.pos.y, r, c);
+        shape::circle(s.pos.x, s.pos.y, r * 0.5, Color::new(1.0, 0.97, 0.9, 1.0));
     }
 
     for (c, age) in &fx.rings {
         let t = age / 0.45;
         let r = sim::content::BARRIER_RADIUS * (0.2 + 0.8 * t.sqrt());
-        draw_circle(c.x, c.y, r, Color::new(1.0, 0.95, 0.85, 0.18 * (1.0 - t)));
-        draw_circle_lines(c.x, c.y, r, 3.0, Color::new(1.0, 0.9, 0.6, 0.9 * (1.0 - t)));
+        shape::circle(c.x, c.y, r, Color::new(1.0, 0.95, 0.85, 0.18 * (1.0 - t)));
+        shape::circle_lines(c.x, c.y, r, 3.0, Color::new(1.0, 0.9, 0.6, 0.9 * (1.0 - t)));
     }
 
     // Particles: glowing embers that shrink as they fade.
@@ -2230,7 +2269,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let tip = c + d * t;
             let side = vec2(-d.y, d.x);
             let pulse = 0.7 + 0.3 * (time * 5.0).sin() as f32;
-            draw_triangle(tip + d * 14.0, tip - d * 8.0 + side * 10.0, tip - d * 8.0 - side * 10.0, Color::new(1.0, 0.85, 0.4, pulse));
+            shape::triangle(tip + d * 14.0, tip - d * 8.0 + side * 10.0, tip - d * 8.0 - side * 10.0, Color::new(1.0, 0.85, 0.4, pulse));
             draw_texture_ex(&a.shrine, tip.x - d.x * 34.0 - 12.0, tip.y - d.y * 34.0 - 14.0, Color::new(1.0, 1.0, 1.0, 0.85), DrawTextureParams { dest_size: Some(vec2(24.0, 27.0)), ..Default::default() });
         }
     }
@@ -2251,7 +2290,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let s = kit::to_ui(cam.world_to_screen(vec2(p.x, p.y - 34.0)));
         let d = kit::measure(line, 20);
         let alpha = left.min(0.4) / 0.4;
-        draw_rectangle(s.x - d.width / 2.0 - 8.0, s.y - 20.0, d.width + 16.0, 28.0, Color::new(0.05, 0.03, 0.1, 0.8 * alpha));
+        shape::rectangle(s.x - d.width / 2.0 - 8.0, s.y - 20.0, d.width + 16.0, 28.0, Color::new(0.05, 0.03, 0.1, 0.8 * alpha));
         kit::text(line, s.x - d.width / 2.0, s.y, 20.0, Color::new(1.0, 0.9, 0.95, alpha));
     }
 }
@@ -2261,9 +2300,9 @@ fn draw_fox_aura_and_tails(world: &World, t: f32) {
     let p = world.player.pos;
     let pulse = 0.5 + 0.5 * (t * 6.0).sin();
     let ar = sim::content::FOX_AURA_RADIUS;
-    draw_circle(p.x, p.y - 6.0, ar * 1.25, Color::new(1.0, 0.55, 0.1, 0.07 + 0.04 * pulse));
-    draw_circle(p.x, p.y - 6.0, ar, Color::new(1.0, 0.7, 0.2, 0.10 + 0.05 * pulse));
-    draw_circle_lines(p.x, p.y - 6.0, ar, 1.5, Color::new(1.0, 0.85, 0.4, 0.5));
+    shape::circle(p.x, p.y - 6.0, ar * 1.25, Color::new(1.0, 0.55, 0.1, 0.07 + 0.04 * pulse));
+    shape::circle(p.x, p.y - 6.0, ar, Color::new(1.0, 0.7, 0.2, 0.10 + 0.05 * pulse));
+    shape::circle_lines(p.x, p.y - 6.0, ar, 1.5, Color::new(1.0, 0.85, 0.4, 0.5));
     for (k, (root, tip)) in world.fox_tails().iter().enumerate() {
         let d = *tip - *root;
         let n = vec2(-d.y, d.x).normalize_or_zero();
@@ -2276,9 +2315,9 @@ fn draw_fox_aura_and_tails(world: &World, t: f32) {
             let off = n * (bend * 4.0 * u * (1.0 - u) + (t * 11.0 - u * 6.0 + k as f32).sin() * 2.0 * u);
             let c = base + off;
             let r = 7.5 * (1.0 - u * 0.7);
-            draw_circle(c.x, c.y, r * 1.5, Color::new(1.0, 0.45, 0.05, 0.12));
-            draw_circle(c.x, c.y, r, Color::new(1.0, 0.62, 0.12, 0.55));
-            draw_circle(c.x, c.y, r * 0.5, Color::new(1.0, 0.92, 0.55, 0.75));
+            shape::circle(c.x, c.y, r * 1.5, Color::new(1.0, 0.45, 0.05, 0.12));
+            shape::circle(c.x, c.y, r, Color::new(1.0, 0.62, 0.12, 0.55));
+            shape::circle(c.x, c.y, r * 0.5, Color::new(1.0, 0.92, 0.55, 0.75));
         }
     }
 }
@@ -2295,7 +2334,7 @@ fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
         let y = p.y - 8.0 + ang.sin() * rad * 0.5 - phase * if fox { 46.0 } else { 18.0 };
         let a = (1.0 - phase) * if fox { 0.95 } else { 0.55 };
         let s = if fox && k % 3 == 0 { 2.0 } else { 1.0 };
-        draw_rectangle(x, y, s, s, Color::new(1.0, 0.85, 0.35, a));
+        shape::rectangle(x, y, s, s, Color::new(1.0, 0.85, 0.35, a));
     }
 }
 
@@ -2369,9 +2408,9 @@ fn draw_hannya_aura(world: &World, t: f32) {
     let p = world.player.pos;
     let pulse = 0.5 + 0.5 * (t * 7.0).sin();
     let r = sim::content::HANNYA_AURA_RADIUS;
-    draw_circle(p.x, p.y - 6.0, r * 1.3, Color::new(0.3, 0.0, 0.05, 0.16 + 0.06 * pulse));
-    draw_circle(p.x, p.y - 6.0, r, Color::new(0.55, 0.0, 0.08, 0.14 + 0.06 * pulse));
-    draw_circle_lines(p.x, p.y - 6.0, r * (0.95 + 0.05 * pulse), 2.0, Color::new(1.0, 0.2, 0.25, 0.6));
+    shape::circle(p.x, p.y - 6.0, r * 1.3, Color::new(0.3, 0.0, 0.05, 0.16 + 0.06 * pulse));
+    shape::circle(p.x, p.y - 6.0, r, Color::new(0.55, 0.0, 0.08, 0.14 + 0.06 * pulse));
+    shape::circle_lines(p.x, p.y - 6.0, r * (0.95 + 0.05 * pulse), 2.0, Color::new(1.0, 0.2, 0.25, 0.6));
     for k in 0..18 {
         let kf = k as f32;
         let ph = (t * 1.6 + kf * 0.29).fract();
@@ -2380,15 +2419,15 @@ fn draw_hannya_aura(world: &World, t: f32) {
         let x = p.x + a.cos() * rr;
         let y = p.y - 4.0 + a.sin() * rr * 0.5 - ph * 40.0;
         let c = if k % 3 == 0 { Color::new(0.05, 0.0, 0.02, 0.8 * (1.0 - ph)) } else { Color::new(0.95, 0.1, 0.15, 0.85 * (1.0 - ph)) };
-        draw_rectangle(x, y, 2.0, 3.0, c);
+        shape::rectangle(x, y, 2.0, 3.0, c);
     }
     // Hannya's Wrath charging: a ring of dread collapsing inward.
     if world.player.form <= sim::content::HANNYA_FINALE_CHARGE {
         let k = 1.0 - world.player.form / sim::content::HANNYA_FINALE_CHARGE;
         let rr = world.reach_cap(sim::content::HANNYA_FINALE_RADIUS) * (1.0 - k * 0.8);
-        draw_circle_lines(p.x, p.y - 6.0, rr, 4.0, Color::new(1.0, 0.1, 0.15, 0.4 + 0.5 * k));
-        draw_circle(p.x, p.y - 30.0, 6.0 + 16.0 * k, Color::new(0.1, 0.0, 0.03, 0.9));
-        draw_circle_lines(p.x, p.y - 30.0, 6.0 + 16.0 * k, 2.0, Color::new(1.0, 0.2, 0.25, 1.0));
+        shape::circle_lines(p.x, p.y - 6.0, rr, 4.0, Color::new(1.0, 0.1, 0.15, 0.4 + 0.5 * k));
+        shape::circle(p.x, p.y - 30.0, 6.0 + 16.0 * k, Color::new(0.1, 0.0, 0.03, 0.9));
+        shape::circle_lines(p.x, p.y - 30.0, 6.0 + 16.0 * k, 2.0, Color::new(1.0, 0.2, 0.25, 1.0));
     }
 }
 
@@ -2408,7 +2447,7 @@ fn draw_reaper_wisps(p: sim::Vec2, t: f32, hannya: bool) {
         } else {
             Color::new(0.75, 0.7, 1.0, 0.55)
         };
-        draw_rectangle(x, y, 2.0, 2.0, c);
+        shape::rectangle(x, y, 2.0, 2.0, c);
     }
 }
 
@@ -2425,8 +2464,8 @@ fn draw_blasts(world: &World, t: f32) {
                 } else {
                     (Color::new(0.3, 0.6, 1.0, 0.3 + 0.4 * k), Color::new(0.3, 0.65, 1.0, 1.0), Color::new(0.9, 0.97, 1.0, 1.0))
                 };
-                draw_circle(c.x, c.y, b.radius * k, Color::new(ring.r, ring.g, ring.b, 0.12));
-                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.6 * k) + 4.0, 2.0, ring);
+                shape::circle(c.x, c.y, b.radius * k, Color::new(ring.r, ring.g, ring.b, 0.12));
+                shape::circle_lines(c.x, c.y, b.radius * (1.0 - 0.6 * k) + 4.0, 2.0, ring);
                 // The body falls in from the upper right with a fiery trail.
                 let size = if meteor { 18.0 } else { 9.0 };
                 let off = vec2(1.0, -1.6) * (1.0 - k) * 320.0;
@@ -2434,32 +2473,32 @@ fn draw_blasts(world: &World, t: f32) {
                 for i in 1..10 {
                     let tp = head + vec2(1.0, -1.6).normalize() * (i as f32 * size * 0.7);
                     let a = 0.7 * (1.0 - i as f32 / 10.0);
-                    draw_circle(tp.x, tp.y, size * (1.0 - i as f32 / 12.0), Color::new(body.r, body.g * 0.8, body.b, a * 0.6));
+                    shape::circle(tp.x, tp.y, size * (1.0 - i as f32 / 12.0), Color::new(body.r, body.g * 0.8, body.b, a * 0.6));
                 }
-                draw_circle(head.x, head.y, size * 1.4, Color::new(body.r, body.g, body.b, 0.3));
-                draw_circle(head.x, head.y, size, body);
-                draw_circle(head.x, head.y, size * 0.5, core);
+                shape::circle(head.x, head.y, size * 1.4, Color::new(body.r, body.g, body.b, 0.3));
+                shape::circle(head.x, head.y, size, body);
+                shape::circle(head.x, head.y, size * 0.5, core);
                 let _ = t;
             }
             style::SKYBOLT => {
-                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k), 1.5, Color::new(0.8, 0.9, 1.0, 0.8));
+                shape::circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k), 1.5, Color::new(0.8, 0.9, 1.0, 0.8));
             }
             style::SEAL => {
                 let gold = Color::new(1.0, 0.85, 0.3, 0.5 + 0.5 * k);
-                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.6 * k), 1.5, Color::new(1.0, 0.4, 0.3, 0.3 + 0.5 * k));
+                shape::circle_lines(c.x, c.y, b.radius * (1.0 - 0.6 * k), 1.5, Color::new(1.0, 0.4, 0.3, 0.3 + 0.5 * k));
                 let (spin, q) = (t * 3.0, 9.0);
                 for i in 0..4 {
                     let (a0, a1) = (spin + i as f32 * std::f32::consts::FRAC_PI_2, spin + (i + 1) as f32 * std::f32::consts::FRAC_PI_2);
-                    draw_line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, gold);
+                    shape::line(c.x + a0.cos() * q, c.y + a0.sin() * q, c.x + a1.cos() * q, c.y + a1.sin() * q, 2.0, gold);
                 }
-                draw_circle(c.x, c.y, 2.0, gold);
+                shape::circle(c.x, c.y, 2.0, gold);
             }
             style::YINYANG => {
-                draw_circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k) + 4.0, 2.0, Color::new(1.0, 0.5, 0.6, 0.4 + 0.5 * k));
+                shape::circle_lines(c.x, c.y, b.radius * (1.0 - 0.5 * k) + 4.0, 2.0, Color::new(1.0, 0.5, 0.6, 0.4 + 0.5 * k));
                 // The orb drops from above, spinning.
                 let size = b.radius * 0.45;
                 let y = c.y - (1.0 - k) * 220.0;
-                draw_yinyang(vec2(c.x, y), size, t * 8.0);
+                draw_moon_orb(vec2(c.x, y), size, t * 8.0);
             }
             _ => {}
         }
@@ -2470,7 +2509,7 @@ fn draw_blasts(world: &World, t: f32) {
 fn draw_spine_burst(c: Vec2, r: f32, k: f32) {
     let rise = (k / 0.35).min(1.0);
     let fade = 1.0 - k;
-    draw_ellipse(c.x, c.y + 2.0, r * 0.8, r * 0.3, 0.0, Color::new(0.1, 0.0, 0.02, 0.5 * fade));
+    shape::ellipse(c.x, c.y + 2.0, r * 0.8, r * 0.3, 0.0, Color::new(0.1, 0.0, 0.02, 0.5 * fade));
     for i in 0..5 {
         let a = i as f32 * 1.256 + c.x * 0.01;
         let off = vec2(a.cos() * r * 0.35, a.sin() * r * 0.15);
@@ -2481,9 +2520,9 @@ fn draw_spine_burst(c: Vec2, r: f32, k: f32) {
             let y0 = base.y - h * s as f32 / 4.0;
             let w = (4.0 - s as f32) * 1.4;
             let col = if s % 2 == 0 { Color::new(0.75, 0.1, 0.18, fade) } else { Color::new(0.3, 0.02, 0.06, fade) };
-            draw_rectangle(base.x - w / 2.0, y0 - h / 4.0, w, h / 4.0 + 1.0, col);
+            shape::rectangle(base.x - w / 2.0, y0 - h / 4.0, w, h / 4.0 + 1.0, col);
         }
-        draw_triangle(vec2(base.x - 1.5, base.y - h), vec2(base.x + 1.5, base.y - h), vec2(base.x, base.y - h - 6.0), Color::new(0.92, 0.86, 0.78, fade));
+        shape::triangle(vec2(base.x - 1.5, base.y - h), vec2(base.x + 1.5, base.y - h), vec2(base.x, base.y - h - 6.0), Color::new(0.92, 0.86, 0.78, fade));
     }
 }
 
@@ -2503,11 +2542,11 @@ fn draw_tendrils_and_tail(world: &World, t: f32, mukade: bool) {
             let a = base_a + sway + back * u * 0.8;
             let pt = prev + vec2(a.cos(), a.sin()) * (len / 8.0);
             let wd = width * (1.0 - u * 0.6);
-            draw_line(prev.x, prev.y, pt.x, pt.y, wd + 1.5, Color::new(0.06, 0.0, 0.02, 0.9));
-            draw_line(prev.x, prev.y, pt.x, pt.y, wd, Color::new(0.78, 0.1, 0.18, 1.0));
+            shape::line(prev.x, prev.y, pt.x, pt.y, wd + 1.5, Color::new(0.06, 0.0, 0.02, 0.9));
+            shape::line(prev.x, prev.y, pt.x, pt.y, wd, Color::new(0.78, 0.1, 0.18, 1.0));
             prev = pt;
         }
-        draw_circle(prev.x, prev.y, width * 0.5, Color::new(1.0, 0.45, 0.45, 1.0));
+        shape::circle(prev.x, prev.y, width * 0.5, Color::new(1.0, 0.45, 0.45, 1.0));
     }
     if mukade {
         // The great centipede tail: a segmented arc over his back with legs along it.
@@ -2526,20 +2565,20 @@ fn draw_tendrils_and_tail(world: &World, t: f32, mukade: bool) {
             let r = 7.0 * (1.0 - u * 0.55);
             // Legs.
             let leg = (t * 12.0 + s as f32).sin() * 3.0;
-            draw_line(pt.x - r, pt.y, pt.x - r - 5.0, pt.y + 4.0 + leg, 1.5, Color::new(0.85, 0.2, 0.25, 1.0));
-            draw_line(pt.x + r, pt.y, pt.x + r + 5.0, pt.y + 4.0 - leg, 1.5, Color::new(0.85, 0.2, 0.25, 1.0));
-            draw_circle(pt.x, pt.y, r + 1.5, Color::new(0.06, 0.0, 0.02, 1.0));
-            draw_circle(pt.x, pt.y, r, if s % 2 == 0 { Color::new(0.55, 0.05, 0.12, 1.0) } else { Color::new(0.25, 0.02, 0.05, 1.0) });
+            shape::line(pt.x - r, pt.y, pt.x - r - 5.0, pt.y + 4.0 + leg, 1.5, Color::new(0.85, 0.2, 0.25, 1.0));
+            shape::line(pt.x + r, pt.y, pt.x + r + 5.0, pt.y + 4.0 - leg, 1.5, Color::new(0.85, 0.2, 0.25, 1.0));
+            shape::circle(pt.x, pt.y, r + 1.5, Color::new(0.06, 0.0, 0.02, 1.0));
+            shape::circle(pt.x, pt.y, r, if s % 2 == 0 { Color::new(0.55, 0.05, 0.12, 1.0) } else { Color::new(0.25, 0.02, 0.05, 1.0) });
             // Blood-red energy pulsing down the segments.
             let pulse = ((t * 6.0 - u * 8.0).sin() * 0.5 + 0.5).powi(3);
-            draw_circle(pt.x, pt.y - r * 0.3, r * 0.45, Color::new(1.0, 0.25, 0.3, 0.3 + 0.6 * pulse));
+            shape::circle(pt.x, pt.y - r * 0.3, r * 0.45, Color::new(1.0, 0.25, 0.3, 0.3 + 0.6 * pulse));
         }
         // Pincers at the tip.
         if let Some(tip) = pts.last() {
-            draw_triangle(*tip, *tip + vec2(-6.0, -6.0), *tip + vec2(-1.0, -9.0), Color::new(0.92, 0.86, 0.78, 1.0));
-            draw_triangle(*tip, *tip + vec2(6.0, -6.0), *tip + vec2(1.0, -9.0), Color::new(0.92, 0.86, 0.78, 1.0));
+            shape::triangle(*tip, *tip + vec2(-6.0, -6.0), *tip + vec2(-1.0, -9.0), Color::new(0.92, 0.86, 0.78, 1.0));
+            shape::triangle(*tip, *tip + vec2(6.0, -6.0), *tip + vec2(1.0, -9.0), Color::new(0.92, 0.86, 0.78, 1.0));
         }
-        draw_circle(p.x, p.y - 6.0, 60.0, Color::new(0.5, 0.0, 0.08, 0.08 + 0.04 * (t * 6.0).sin()));
+        shape::circle(p.x, p.y - 6.0, 60.0, Color::new(0.5, 0.0, 0.08, 0.08 + 0.04 * (t * 6.0).sin()));
     }
 }
 
@@ -2554,7 +2593,7 @@ fn draw_curse_motes(p: sim::Vec2, t: f32, mukade: bool) {
         let x = p.x + a.cos() * r;
         let y = p.y - 8.0 + a.sin() * r * 0.5 - ph * if mukade { 34.0 } else { 14.0 };
         let c = if k % 3 == 0 { Color::new(0.05, 0.0, 0.02, 0.9 * (1.0 - ph)) } else { Color::new(0.9, 0.12, 0.2, 0.8 * (1.0 - ph)) };
-        draw_rectangle(x, y, 2.0, 2.0, c);
+        shape::rectangle(x, y, 2.0, 2.0, c);
     }
 }
 
@@ -2574,8 +2613,8 @@ fn draw_drops(world: &World, a: &Assets, fx: &Fx, view: &Rect, time: f64) {
         };
         if v >= 25 {
             let pulse = 0.2 + 0.1 * (time * 4.0 + g.x as f64).sin() as f32;
-            draw_circle(g.x, g.y, size * 0.9, Color::new(tint.r, tint.g, tint.b, pulse));
-            draw_circle_lines(g.x, g.y, size * 0.9, 1.5, tint);
+            shape::circle(g.x, g.y, size * 0.9, Color::new(tint.r, tint.g, tint.b, pulse));
+            shape::circle_lines(g.x, g.y, size * 0.9, 1.5, tint);
         }
         sprites.push(&a.gem, (g.x - size / 2.0).round(), (g.y - size / 2.0).round(), tint, DrawTextureParams { dest_size: Some(vec2(size, size)), ..Default::default() });
     }
@@ -2607,14 +2646,14 @@ fn draw_drops(world: &World, a: &Assets, fx: &Fx, view: &Rect, time: f64) {
         };
         let pulse = 0.5 + 0.5 * (t * 4.0 + c.x * 0.1).sin();
         let ph = if *tier >= 3 { 220.0 } else { 150.0 };
-        draw_rectangle(c.x - 7.0 * size, c.y - ph, 14.0 * size, ph, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
-        draw_rectangle(c.x - 2.0 * size, c.y - ph, 4.0 * size, ph, Color::new(col.r, col.g, col.b, 0.2 + 0.1 * pulse));
-        draw_ellipse(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, Color::new(col.r, col.g, col.b, 0.22));
+        shape::rectangle(c.x - 7.0 * size, c.y - ph, 14.0 * size, ph, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
+        shape::rectangle(c.x - 2.0 * size, c.y - ph, 4.0 * size, ph, Color::new(col.r, col.g, col.b, 0.2 + 0.1 * pulse));
+        shape::ellipse(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, Color::new(col.r, col.g, col.b, 0.22));
         draw_ellipse_lines(c.x, c.y + 3.0, (17.0 + 4.0 * pulse) * size, (6.0 + 1.5 * pulse) * size, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.85));
         for i in 0..5 {
             let rise = (t * 0.8 + i as f32 * 0.2).fract();
             let x = c.x + ((i as f32 * 2.3 + t).sin()) * 10.0 * size;
-            draw_rectangle(x, c.y - 6.0 - rise * 46.0 * size, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - rise));
+            shape::rectangle(x, c.y - 6.0 - rise * 46.0 * size, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - rise));
         }
         backing(vec2(c.x, c.y - 3.0 * size + bob), 11.0 * size, col, 0.6 + 0.4 * pulse);
         draw_texture_ex(
@@ -2629,8 +2668,8 @@ fn draw_drops(world: &World, a: &Assets, fx: &Fx, view: &Rect, time: f64) {
         let c = crate::armory::rarity_color(*r);
         let a = (1.0 - age / 2.2).clamp(0.0, 1.0);
         let h = 70.0 + 30.0 * r.index() as f32;
-        draw_rectangle(pos.x - 3.0, pos.y - h * a.sqrt(), 6.0, h * a.sqrt(), Color::new(c.r, c.g, c.b, 0.5 * a));
-        draw_circle(pos.x, pos.y, 10.0 + 6.0 * age, Color::new(c.r, c.g, c.b, 0.3 * a));
+        shape::rectangle(pos.x - 3.0, pos.y - h * a.sqrt(), 6.0, h * a.sqrt(), Color::new(c.r, c.g, c.b, 0.5 * a));
+        shape::circle(pos.x, pos.y, 10.0 + 6.0 * age, Color::new(c.r, c.g, c.b, 0.3 * a));
     }
 }
 /// A dark disc with a coloured rim behind a drop, so it reads over bright effects.
@@ -2673,9 +2712,9 @@ pub fn pickup_color(k: PickupKind) -> Color {
 fn draw_pickup(a: &Assets, c: Vec2, k: PickupKind, t: f32) {
     let col = pickup_color(k);
     let pulse = 0.5 + 0.5 * (t * 4.0 + c.x * 0.1).sin();
-    draw_rectangle(c.x - 6.0, c.y - 140.0, 12.0, 140.0, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
-    draw_rectangle(c.x - 2.0, c.y - 140.0, 4.0, 140.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
-    draw_ellipse(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, Color::new(col.r, col.g, col.b, 0.25));
+    shape::rectangle(c.x - 6.0, c.y - 140.0, 12.0, 140.0, Color::new(col.r, col.g, col.b, 0.10 + 0.06 * pulse));
+    shape::rectangle(c.x - 2.0, c.y - 140.0, 4.0, 140.0, Color::new(col.r, col.g, col.b, 0.18 + 0.1 * pulse));
+    shape::ellipse(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, Color::new(col.r, col.g, col.b, 0.25));
     draw_ellipse_lines(c.x, c.y + 4.0, 16.0 + 4.0 * pulse, 6.0 + 1.5 * pulse, 0.0, 1.5, Color::new(col.r, col.g, col.b, 0.8));
     let tier = crate::ui::tier_color(k.tier());
     draw_ellipse_lines(c.x, c.y + 4.0, 21.0 + 4.0 * pulse, 8.0 + 1.5 * pulse, 0.0, 1.0, Color::new(tier.r, tier.g, tier.b, 0.9));
@@ -2685,26 +2724,26 @@ fn draw_pickup(a: &Assets, c: Vec2, k: PickupKind, t: f32) {
     for i in 0..4 {
         let ph = (t * 0.8 + i as f32 * 0.25).fract();
         let x = c.x + ((i as f32 * 2.3 + t).sin()) * 9.0;
-        draw_rectangle(x, c.y - 6.0 - ph * 40.0, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - ph));
+        shape::rectangle(x, c.y - 6.0 - ph * 40.0, 2.0, 2.0, Color::new(1.0, 1.0, 1.0, 1.0 - ph));
     }
 }
 
 /// A Gravity Well: a dark vortex with spiralling arms that tightens as it nears collapse.
 fn draw_well(c: Vec2, r: f32, life: f32, t: f32) {
     let rr = r * (0.45 + 0.55 * life);
-    draw_circle(c.x, c.y, rr, Color::new(0.05, 0.08, 0.25, 0.45));
-    draw_circle(c.x, c.y, rr * 0.45, Color::new(0.0, 0.0, 0.05, 0.85));
+    shape::circle(c.x, c.y, rr, Color::new(0.05, 0.08, 0.25, 0.45));
+    shape::circle(c.x, c.y, rr * 0.45, Color::new(0.0, 0.0, 0.05, 0.85));
     for arm in 0..4 {
         let mut prev = c;
         for k in 1..14 {
             let u = k as f32 / 13.0;
             let a = t * 5.0 + arm as f32 * std::f32::consts::FRAC_PI_2 + u * 3.5;
             let pt = c + vec2(a.cos(), a.sin()) * rr * u;
-            draw_line(prev.x, prev.y, pt.x, pt.y, 2.0, Color::new(0.45, 0.65, 1.0, 0.75 * (1.0 - u * 0.5)));
+            shape::line(prev.x, prev.y, pt.x, pt.y, 2.0, Color::new(0.45, 0.65, 1.0, 0.75 * (1.0 - u * 0.5)));
             prev = pt;
         }
     }
-    draw_circle_lines(c.x, c.y, rr, 1.5, Color::new(0.75, 0.88, 1.0, 0.7));
+    shape::circle_lines(c.x, c.y, rr, 1.5, Color::new(0.75, 0.88, 1.0, 0.7));
 }
 
 /// Stillness: a faint rippling distortion around Kuon, brighter while the ward is ready.
@@ -2718,16 +2757,16 @@ fn draw_stillness(world: &World, t: f32) {
         let a1 = (k + 1) as f32 / segs as f32 * std::f32::consts::TAU;
         let w0 = r + (a0 * 5.0 + t * 3.0).sin() * 2.5;
         let w1 = r + (a1 * 5.0 + t * 3.0).sin() * 2.5;
-        draw_line(p.x + a0.cos() * w0, p.y - 6.0 + a0.sin() * w0, p.x + a1.cos() * w1, p.y - 6.0 + a1.sin() * w1, 1.5, Color::new(0.55, 0.8, 1.0, 0.22));
+        shape::line(p.x + a0.cos() * w0, p.y - 6.0 + a0.sin() * w0, p.x + a1.cos() * w1, p.y - 6.0 + a1.sin() * w1, 1.5, Color::new(0.55, 0.8, 1.0, 0.22));
     }
-    draw_circle(p.x, p.y - 6.0, r, Color::new(0.4, 0.7, 1.0, 0.04));
+    shape::circle(p.x, p.y - 6.0, r, Color::new(0.4, 0.7, 1.0, 0.04));
     if ready {
         // The ward: a slow hexagon of light.
         let rot = t * 0.8;
         for k in 0..6 {
             let a0 = rot + k as f32 * std::f32::consts::FRAC_PI_3;
             let a1 = a0 + std::f32::consts::FRAC_PI_3;
-            draw_line(p.x + a0.cos() * 20.0, p.y - 8.0 + a0.sin() * 20.0, p.x + a1.cos() * 20.0, p.y - 8.0 + a1.sin() * 20.0, 1.5, Color::new(0.8, 0.92, 1.0, 0.55));
+            shape::line(p.x + a0.cos() * 20.0, p.y - 8.0 + a0.sin() * 20.0, p.x + a1.cos() * 20.0, p.y - 8.0 + a1.sin() * 20.0, 1.5, Color::new(0.8, 0.92, 1.0, 0.55));
         }
     }
 }
@@ -2741,8 +2780,8 @@ fn draw_domain(world: &World, t: f32) {
     let open = ((sim::content::DOMAIN_DURATION - left) / 0.6).min(1.0);
     let r = world.domain_radius() * open;
     // Darken everything (a very large rect around the player).
-    draw_rectangle(p.x - 2000.0, p.y - 2000.0, 4000.0, 4000.0, Color::new(0.0, 0.0, 0.04, 0.45 * open));
-    draw_circle(c.x, c.y, r, Color::new(0.02, 0.03, 0.12, 0.65));
+    shape::rectangle(p.x - 2000.0, p.y - 2000.0, 4000.0, 4000.0, Color::new(0.0, 0.0, 0.04, 0.45 * open));
+    shape::circle(c.x, c.y, r, Color::new(0.02, 0.03, 0.12, 0.65));
     // Stars, deterministic per index.
     for k in 0..140 {
         let a = k as f32 * 2.399;
@@ -2751,29 +2790,29 @@ fn draw_domain(world: &World, t: f32) {
         let y = c.y + a.sin() * d;
         let tw = 0.5 + 0.5 * (t * 3.0 + k as f32).sin();
         let s = if k % 9 == 0 { 2.0 } else { 1.0 };
-        draw_rectangle(x, y, s, s, Color::new(0.85, 0.92, 1.0, 0.4 + 0.6 * tw));
+        shape::rectangle(x, y, s, s, Color::new(0.85, 0.92, 1.0, 0.4 + 0.6 * tw));
     }
     // Concentric rings and a rotating hexagram.
     for k in 1..=4 {
-        draw_circle_lines(c.x, c.y, r * k as f32 / 4.0, 1.0, Color::new(0.5, 0.75, 1.0, 0.25));
+        shape::circle_lines(c.x, c.y, r * k as f32 / 4.0, 1.0, Color::new(0.5, 0.75, 1.0, 0.25));
     }
     for tri in 0..2 {
         let rot = t * 0.3 * if tri == 0 { 1.0 } else { -1.0 } + tri as f32 * std::f32::consts::PI / 3.0;
         for k in 0..3 {
             let a0 = rot + k as f32 * std::f32::consts::TAU / 3.0;
             let a1 = a0 + std::f32::consts::TAU / 3.0;
-            draw_line(c.x + a0.cos() * r * 0.9, c.y + a0.sin() * r * 0.9, c.x + a1.cos() * r * 0.9, c.y + a1.sin() * r * 0.9, 1.5, Color::new(0.65, 0.85, 1.0, 0.35));
+            shape::line(c.x + a0.cos() * r * 0.9, c.y + a0.sin() * r * 0.9, c.x + a1.cos() * r * 0.9, c.y + a1.sin() * r * 0.9, 1.5, Color::new(0.65, 0.85, 1.0, 0.35));
         }
     }
-    draw_circle_lines(c.x, c.y, r, 3.0, Color::new(0.75, 0.9, 1.0, 0.8));
+    shape::circle_lines(c.x, c.y, r, 3.0, Color::new(0.75, 0.9, 1.0, 0.8));
     // Finale: the purple sphere gathering above Kuon.
     if left <= sim::content::DOMAIN_FINALE_CHARGE {
         let k = 1.0 - left / sim::content::DOMAIN_FINALE_CHARGE;
         let s = 8.0 + 34.0 * k;
-        draw_circle(p.x, p.y - 40.0, s * 1.6, Color::new(0.5, 0.2, 1.0, 0.25));
-        draw_circle(p.x, p.y - 40.0, s, Color::new(0.55, 0.25, 1.0, 0.95));
-        draw_circle(p.x, p.y - 40.0, s * 0.7, Color::new(0.05, 0.02, 0.12, 1.0));
-        draw_circle_lines(p.x, p.y - 40.0, s, 2.0, Color::new(0.9, 0.8, 1.0, 1.0));
+        shape::circle(p.x, p.y - 40.0, s * 1.6, Color::new(0.5, 0.2, 1.0, 0.25));
+        shape::circle(p.x, p.y - 40.0, s, Color::new(0.55, 0.25, 1.0, 0.95));
+        shape::circle(p.x, p.y - 40.0, s * 0.7, Color::new(0.05, 0.02, 0.12, 1.0));
+        shape::circle_lines(p.x, p.y - 40.0, s, 2.0, Color::new(0.9, 0.8, 1.0, 1.0));
     }
 }
 
@@ -2787,27 +2826,15 @@ fn draw_star_motes(p: sim::Vec2, t: f32, domain: bool) {
         let x = p.x + a.cos() * r;
         let y = p.y - 10.0 + a.sin() * r * 0.55;
         let tw = 0.5 + 0.5 * (t * 5.0 + kf).sin();
-        draw_rectangle(x, y, 2.0, 2.0, Color::new(0.8, 0.92, 1.0, 0.4 + 0.5 * tw));
+        shape::rectangle(x, y, 2.0, 2.0, Color::new(0.8, 0.92, 1.0, 0.4 + 0.5 * tw));
     }
 }
 
 /// A yin-yang orb: white and dark halves, each with a dot of the other.
-pub fn draw_yinyang(c: Vec2, r: f32, rot: f32) {
-    let dark = Color::new(0.1, 0.08, 0.14, 1.0);
-    draw_circle(c.x, c.y, r + 1.5, Color::new(0.85, 0.15, 0.2, 1.0));
-    draw_circle(c.x, c.y, r, WHITE);
-    // Dark half (a fan of triangles), then the two lobes.
-    let segs = 16;
-    for k in 0..segs {
-        let a0 = rot + std::f32::consts::FRAC_PI_2 + k as f32 / segs as f32 * std::f32::consts::PI;
-        let a1 = rot + std::f32::consts::FRAC_PI_2 + (k + 1) as f32 / segs as f32 * std::f32::consts::PI;
-        draw_triangle(c, c + vec2(a0.cos(), a0.sin()) * r, c + vec2(a1.cos(), a1.sin()) * r, dark);
-    }
-    let up = vec2((rot - std::f32::consts::FRAC_PI_2).cos(), (rot - std::f32::consts::FRAC_PI_2).sin()) * (r * 0.5);
-    draw_circle(c.x + up.x, c.y + up.y, r * 0.5, dark);
-    draw_circle(c.x - up.x, c.y - up.y, r * 0.5, WHITE);
-    draw_circle(c.x + up.x, c.y + up.y, r * 0.16, WHITE);
-    draw_circle(c.x - up.x, c.y - up.y, r * 0.16, dark);
+/// A moon orb (Ren's orbs and her Divine form's great orbs): the generated moon sprite turning
+/// in a soft halo. (Replaces the old yin-yang, which belongs to another shrine maiden.)
+pub fn draw_moon_orb(c: Vec2, r: f32, rot: f32) {
+    shape::moon_orb(c, r, rot);
 }
 
 /// Divine Purification: a turning magic circle, giant yin-yang orbs and floating ofuda.
@@ -2817,26 +2844,26 @@ fn draw_divine(world: &World, t: f32) {
     let open = ((sim::content::DIVINE_DURATION - left) / 0.5).min(1.0);
     let r = 90.0 * open;
     let c = vec2(p.x, p.y + 2.0);
-    draw_circle(c.x, c.y, r, Color::new(1.0, 0.85, 0.6, 0.08));
+    shape::circle(c.x, c.y, r, Color::new(1.0, 0.85, 0.6, 0.08));
     for k in 0..3 {
-        draw_circle_lines(c.x, c.y, r * (0.45 + 0.27 * k as f32), 1.5, Color::new(1.0, 0.8, 0.5, 0.6));
+        shape::circle_lines(c.x, c.y, r * (0.45 + 0.27 * k as f32), 1.5, Color::new(1.0, 0.8, 0.5, 0.6));
     }
     // Rotating rune ticks and a pentagram.
     for k in 0..24 {
         let a = t * 0.6 + k as f32 / 24.0 * std::f32::consts::TAU;
         let (r0, r1) = (r * 0.9, r * 0.98);
-        draw_line(c.x + a.cos() * r0, c.y + a.sin() * r0 * 0.5, c.x + a.cos() * r1, c.y + a.sin() * r1 * 0.5, 2.0, Color::new(1.0, 0.4, 0.45, 0.7));
+        shape::line(c.x + a.cos() * r0, c.y + a.sin() * r0 * 0.5, c.x + a.cos() * r1, c.y + a.sin() * r1 * 0.5, 2.0, Color::new(1.0, 0.4, 0.45, 0.7));
     }
     for k in 0..5 {
         let a0 = -t * 0.4 + k as f32 * std::f32::consts::TAU / 5.0;
         let a1 = a0 + 2.0 * std::f32::consts::TAU / 5.0;
-        draw_line(c.x + a0.cos() * r * 0.7, c.y + a0.sin() * r * 0.35, c.x + a1.cos() * r * 0.7, c.y + a1.sin() * r * 0.35, 1.5, Color::new(1.0, 0.9, 0.6, 0.7));
+        shape::line(c.x + a0.cos() * r * 0.7, c.y + a0.sin() * r * 0.35, c.x + a1.cos() * r * 0.7, c.y + a1.sin() * r * 0.35, 1.5, Color::new(1.0, 0.9, 0.6, 0.7));
     }
     // Giant orbiting yin-yang orbs.
     for k in 0..4 {
         let a = t * 1.4 + k as f32 * std::f32::consts::FRAC_PI_2;
         let o = vec2(p.x + a.cos() * 52.0, p.y - 10.0 + a.sin() * 30.0);
-        draw_yinyang(o, 11.0, t * 5.0 + k as f32);
+        draw_moon_orb(o, 11.0, t * 5.0 + k as f32);
     }
     // Floating ofuda.
     for k in 0..18 {
@@ -2844,15 +2871,15 @@ fn draw_divine(world: &World, t: f32) {
         let rr = 30.0 + (k % 3) as f32 * 9.0;
         let x = p.x + a.cos() * rr;
         let y = p.y - 12.0 + a.sin() * rr * 0.6 + (t * 3.0 + k as f32).sin() * 3.0;
-        draw_rectangle(x - 1.5, y - 3.0, 3.0, 6.0, Color::new(1.0, 0.97, 0.9, 0.9));
-        draw_rectangle(x - 1.5, y - 1.0, 3.0, 1.0, Color::new(0.9, 0.2, 0.25, 0.9));
+        shape::rectangle(x - 1.5, y - 3.0, 3.0, 6.0, Color::new(1.0, 0.97, 0.9, 0.9));
+        shape::rectangle(x - 1.5, y - 1.0, 3.0, 1.0, Color::new(0.9, 0.2, 0.25, 0.9));
     }
     // Final Purification charging: the circle swells and brightens.
     if left <= sim::content::DIVINE_FINALE_CHARGE {
         let k = 1.0 - left / sim::content::DIVINE_FINALE_CHARGE;
         let fr = world.reach_cap(sim::content::DIVINE_FINALE_RADIUS) * (0.2 + 0.8 * k);
-        draw_circle(c.x, c.y, fr, Color::new(1.0, 0.85, 0.6, 0.08 + 0.12 * k));
-        draw_circle_lines(c.x, c.y, fr, 3.0, Color::new(1.0, 0.45, 0.5, 0.5 + 0.5 * k));
+        shape::circle(c.x, c.y, fr, Color::new(1.0, 0.85, 0.6, 0.08 + 0.12 * k));
+        shape::circle_lines(c.x, c.y, fr, 3.0, Color::new(1.0, 0.45, 0.5, 0.5 + 0.5 * k));
     }
     let _ = world;
 }

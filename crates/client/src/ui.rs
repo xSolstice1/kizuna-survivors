@@ -216,7 +216,9 @@ fn dim_screen(a: f32) {
 fn portrait(assets: &Assets, world: &World, cx: f32, cy: f32, r: f32) {
     let form = world.form_kind().is_some();
     draw_circle(cx, cy, r, Color::new(0.10, 0.08, 0.18, 1.0));
-    if let Some(face) = assets.face(world.cfg.hero).filter(|_| !form) {
+    // The head crop of the hero, or of its transformed form while that's active.
+    let face = if form { assets.form_face(world.cfg.hero) } else { assets.face(world.cfg.hero) };
+    if let Some(face) = face {
         let d = r * 2.0 - 4.0;
         draw_texture_ex(face, cx - d / 2.0, cy - d / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(d, d)), ..Default::default() });
         return;

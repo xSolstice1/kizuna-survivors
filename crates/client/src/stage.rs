@@ -297,7 +297,7 @@ impl StageArt {
                     }
                     // Contact shadow under the solid footprint.
                     let (min, max) = prop.footprint();
-                    draw_rectangle(min.x - 1.0, max.y - 2.0, max.x - min.x + 2.0, 3.0, Color::new(0.0, 0.0, 0.0, 0.35));
+                    crate::vfx::shape::ellipse((min.x + max.x) / 2.0, max.y - 0.5, (max.x - min.x) / 2.0 + 2.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
                     let n = crate::sprites::nat(t);
                     draw_texture_ex(t, (px - n.x / 2.0).round(), (py - n.y).round() + 6.0, WHITE, DrawTextureParams { dest_size: Some(n), ..Default::default() });
                 }
@@ -335,7 +335,7 @@ impl StageArt {
             let speed = 0.9 + (seed >> 10) as f32 % 100.0 / 200.0;
             let y = ((t * speed + (seed >> 20) as f32 / 4096.0) % 1.0) * (h + len) - len;
             let x = (sx * (w + 80.0) - 40.0 + y * 0.18) % (w + 80.0);
-            draw_line(x, y, x - len * 0.18, y + len, 1.5, streak);
+            crate::vfx::shape::line(x, y, x - len * 0.18, y + len, 1.5, streak);
         }
         if flash > 0.0 {
             draw_rectangle(0.0, 0.0, w, h, Color::new(0.85, 0.9, 1.0, flash.min(1.0) * 0.55));

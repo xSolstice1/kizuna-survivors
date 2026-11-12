@@ -101,6 +101,18 @@ turns that into a lift, a squash and a rotation about the feet. Every enemy also
 squash and breathes when standing still. A new enemy kind defaults to Walk; add it to the
 `Hop` or `Float` list in `motion()` if it should move differently.
 
+## Effects (VFX sprites)
+
+Every effect in the world (projectiles, auras, rings, beams, sparks, shadows) is drawn with the
+32 sprites in `art/hd/vfx/`, made as two 4x4 sheets on pure black (`art/prompts/vfx_sheet.txt`,
+`vfx_sheet2.txt`; pro, ~$0.14 each, with an earlier sheet as the style reference) and cut into
+cells; black becomes transparent. `crates/client/src/vfx.rs` loads them (`NAMES`) and draws
+them additively (`vfx.additive(|| ...)`), so light adds up instead of covering the scene.
+`vfx::shape` has drop-ins for macroquad's `draw_circle`, `draw_line`, `draw_triangle` and the
+rest, which draw sprites instead of flat geometry; use them for quick effects, and draw named
+sprites (flame, foxtail, seal, ...) for signature ones. To add an effect, make a sheet the same
+way, add the names to `NAMES`, and draw them.
+
 ## Adding a hero (rigged, like Ren)
 
 Heroes are **cut-out rigs**: about 9 layered parts animated in code with springs (the hair and
