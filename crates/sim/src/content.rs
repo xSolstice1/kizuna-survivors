@@ -1684,6 +1684,20 @@ pub fn area_falloff(n: u32) -> f32 {
     }
 }
 
+/// Enemy armour: a flat cut to every hit, phased in from `ARMOR_FROM` to `ARMOR_FULL` pace-
+/// minutes up to `ARMOR_SHARE` x the enemy HP scale (so it keeps pace with the run). A hit always
+/// deals at least `ARMOR_FLOOR` of itself: big hits barely notice, rapid small ticks lose up to half.
+pub const ARMOR_SHARE: f32 = 0.15;
+pub const ARMOR_FROM: f32 = 5.0;
+pub const ARMOR_FULL: f32 = 10.0;
+pub const ARMOR_FLOOR: f32 = 0.5;
+
+/// Flat damage taken off each hit at pace time `t` (seconds).
+pub fn enemy_armor(t: f32) -> f32 {
+    let m = t / 60.0;
+    ARMOR_SHARE * hp_scale(t) * ((m - ARMOR_FROM) / (ARMOR_FULL - ARMOR_FROM)).clamp(0.0, 1.0)
+}
+
 /// Enemy move-speed multiplier over the run (non-bosses): +3.5% per pace-minute, capped at
 /// +50% by 15:00 so the fastest fodder (~58 base) still stays under the player's base 110.
 pub fn speed_scale(t: f32) -> f32 {

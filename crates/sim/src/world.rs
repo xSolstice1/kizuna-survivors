@@ -804,6 +804,8 @@ pub struct World {
     rng: Rng,
     grid: Grid,
     scratch: Vec<u32>,
+    /// `enemy_armor` for this tick.
+    armor_now: f32,
     /// HP the steady heals may still restore (refills at `HEAL_CAP` x max HP per second).
     heal_budget: f32,
     /// Kizuna Blessings taken this run (each +3% damage, added up).
@@ -955,6 +957,7 @@ impl World {
             rng,
             grid: Grid::new(cell, dim),
             scratch: Vec::new(),
+            armor_now: 0.0,
             heal_budget: max_hp * HEAL_CAP * HEAL_WINDOW,
             blessings: 0,
             area_hits: 0,
@@ -975,6 +978,7 @@ impl World {
         self.tick += 1;
         self.time += DT;
         self.move_player(input);
+        self.armor_now = enemy_armor(self.round_pace());
         self.director();
         self.update_mechanic();
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
@@ -3279,6 +3283,7 @@ impl World {
                 self.eclipses.push((self.enemies.pos[j], amount * 0.4 * ecl));
             }
         }
+        let amount = (amount - self.armor_now).max(amount * ARMOR_FLOOR);
         let e = &mut self.enemies;
         e.hp[j] -= amount;
         e.flash[j] = 5;
@@ -6771,6 +6776,18 @@ mod tests {
         let before = w.player.hp;
         w.heal_burst(30.0);
         assert!((w.player.hp - before - 30.0).abs() < 1e-3, "a burst heal ignores the cap");
+    }
+
+    #[test]
+    fn armour_trims_small_hits_more_than_big_ones() {
+        assert_eq!(enemy_armor(0.0), 0.0);
+        assert_eq!(enemy_armor(ARMOR_FROM * 60.0), 0.0);
+        let late = 12.0 * 60.0;
+        let a = enemy_armor(late);
+        assert!(a > 0.0);
+        let dealt = |hit: f32| (hit - a).max(hit * ARMOR_FLOOR) / hit;
+        assert!(dealt(a * 10.0) > 0.85, "a big hit keeps most of itself");
+        assert_eq!(dealt(a * 0.5), ARMOR_FLOOR, "a tiny tick is floored, never zeroed");
     }
 
     #[test]
