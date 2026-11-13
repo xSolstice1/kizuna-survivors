@@ -218,17 +218,37 @@ terrain textures below.)
 ## Terrain (campaign worlds)
 
 The campaign worlds have high and low ground (`crates/sim/src/terrain.rs`: the map, cliffs as
-walls, roads that climb them) drawn by a shader (`crates/client/src/terrain_bake.rs`) from seven
-textures per world in `art/hd/<world>/terrain/` (JPEG: opaque and much smaller):
-`ground_a`, `ground_b`, `low`, `high`, `trail` (512x512, 128 world units per repeat), `cliff`
-(512x256: a rock face 64 units wide and 32 tall, the lip at the top) and `stairs` (512x256: one
-flight climbing to the top edge, seamless left to right, no railings). The prompts are in
-`art/prompts/terrain/` (`<world>_low.txt`, `_high.txt`, `_trail.txt`, `_cliff.txt`,
-`_stairs_wide.txt`; nano is fine except the cliff); generate at full size, then
-`python3 tools/ai/terrain_hd.py <world>` flattens the lighting, makes them seamless, matches
-`low` (darker) and `high` (lighter) to the world's palette and writes the textures. The shader
-adds the rest (contours, faces, shadows, rims, stairs, level lighting), so the textures should
-be flat surfaces with no edges or lighting of their own.
+walls, roads that climb them) drawn by a shader (`crates/client/src/terrain_bake.rs`) from five
+textures per world in `art/hd/<world>/terrain/` (JPEG q88): `ground_a`, `low`, `high`, `trail`
+(1024x1024, 128 world units per repeat: 8 texels a unit, twice the sprites) and `cliff`
+(1024x512: a rock face 64 units wide and 32 tall, the lip at the top).
+
+1. Describe each surface in `art/prompts/terrain2/<world>.json` (`world` theme plus `ground`,
+   `low`, `high`, `trail`, `cliff`). Ask for FINE, evenly spread detail with no big single
+   features, no paths or lines, no light spots: big rocks or slabs show the repeat, and
+   anything with an edge (curbs, pools) looks pasted. Low ground darker, high ground lighter.
+2. `python3 -I tools/ai/terrain_gen.py <world> ground low high trail cliff` (pro at 2K, ~$0.14
+   each). The model usually paints a swatch that repeats every 1024 px; that is what we want.
+3. Look at the raws. Redo bad ones with a sharper prompt; pick which raw each kind uses and the
+   cliff's face rows (lip, foot) in `SOURCES` in `tools/ai/terrain_hd.py`.
+4. `python3 tools/ai/terrain_hd.py <world>` (a few minutes): divides out large-scale lighting,
+   cuts one period and joins its edges along a minimum-error cut (image quilting, never a
+   cross-fade: blends leave ghost copies of rocks), then sets each level's brightness and
+   contrast relative to the ground (`LEVEL`, `GAIN`, `CHROMA`). Check a 2x2 tiled preview.
+
+The shader hex-tiles every ground texture (three randomly offset reads per pixel, blended), so
+the repeat never lines up into a grid; regular grids of tiles or slabs must opt out (`Hex` in
+`terrain_bake.rs`). It adds contours, rock faces, foot shadows, rims, frayed road edges, ramps
+where roads cross faces, and level lighting, so the textures should be flat surfaces with no
+edges or lighting of their own. The map-select cards show a crop of `ground_a`.
+
+## Icons
+
+Icons (`art/hd/icons`, `gear`, `exotic`, `pickups`) are 256x256 palette PNGs, loaded with
+mipmaps and always drawn with an explicit size. `python3 tools/ai/icons_hd.py export` re-cuts
+them from the restyle raws; `fix` redraws the ones listed in `FIXES` from a written description
+(four per pro call, with a sheet of good icons as the style reference). Never use a character
+as the style reference for item icons: the model draws the character instead of the item.
 
 ## Tips
 

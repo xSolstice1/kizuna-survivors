@@ -19,6 +19,8 @@ pub struct StageArt {
     worlds: Vec<WorldSet>,
     /// Baked terrain chunks for the current campaign world (made on first use).
     baker: std::cell::RefCell<Option<crate::terrain_bake::Baker>>,
+    /// Each campaign world's main terrain texture, for the map-select cards.
+    cards: Vec<Texture2D>,
     vignette: Texture2D,
     /// Soft white radial falloff, tinted per light.
     glow: Texture2D,
@@ -164,7 +166,8 @@ impl StageArt {
         });
         let glow = radial(64, [255, 255, 255], |d| (1.0 - d).max(0.0).powi(2));
         let dark = radial(128, [2, 3, 8], |d| ((d - 0.22) / 0.4).clamp(0.0, 1.0) * 0.86);
-        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), vignette, glow, dark }
+        let cards = (1..=5).map(|w| crate::terrain_bake::ground_texture(&format!("w{w}/terrain/ground_a"), 1.0)).collect();
+        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, vignette, glow, dark }
     }
 
     fn get(&self, name: &str) -> &Texture2D {
@@ -212,6 +215,14 @@ impl StageArt {
 
     /// Draws a small patch of a stage's ground (map-select cards).
     pub fn draw_patch(&self, stage: StageId, x: f32, y: f32, w: f32, h: f32, scale: f32) {
+        if stage.index() > 0 {
+            // Campaign worlds: a crop of their terrain texture (within one repeat: textures can
+            // share an atlas, so a source rect past the edge would show a neighbour).
+            let t = &self.cards[stage.index() - 1];
+            let k = (16.0 / scale).min(t.width() / w).min(t.height() / h);
+            draw_texture_ex(t, x, y, WHITE, DrawTextureParams { dest_size: Some(vec2(w, h)), source: Some(Rect::new(0.0, 0.0, w * k, h * k)), ..Default::default() });
+            return;
+        }
         let s = TILE * scale;
         let (cols, rows) = ((w / s).ceil() as i32, (h / s).ceil() as i32);
         for ty in 0..rows {

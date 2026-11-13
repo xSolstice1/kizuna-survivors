@@ -6,7 +6,7 @@
     python3 tools/play/shot.py wait:3000 click:163,397 wait:1200 click:1123,602 wait:3000 shot:w1
 
 Steps: click:x,y  key:Name  type:text  down:Key  up:Key  hold:Key:ms  wait:ms  shot:name
-(writes /tmp/<name>.png at 2560x1440). Coordinates are CSS pixels of a 1280x720 page.
+(writes $SHOT_DIR/<name>.png, default /tmp, at 2560x1440). Coordinates are CSS pixels of a 1280x720 page.
 Useful spots: main menu Start (163,397), Armory (402,397); world select cards W1 (640,192),
 W2 (1046,192), W3 (230,435), W4 (640,435), W5 (1046,435); Begin (1123,602). Typing
 "kizunadev" on the menu opens the dev panel (unlock all: 488,231 then 794,231, close 640,548);
@@ -14,7 +14,7 @@ in a run, Esc then Dev (1074,473) gives max loadout / awaken / fill special. Her
 Armory: Riku 85, Shun 127, Toya 169, Kuon 211 at y 96; Select (364,154); Back (1176,675).
 Needs `pip install playwright && playwright install chromium`.
 """
-import asyncio, sys
+import asyncio, os, sys
 from playwright.async_api import async_playwright
 # steps: "click:x,y" "key:Name" "hold:Key:ms" "wait:ms" "shot:name"
 async def main(steps):
@@ -42,7 +42,7 @@ async def main(steps):
             elif k == "wait":
                 await pg.wait_for_timeout(int(v))
             elif k == "shot":
-                await pg.screenshot(path=f"/tmp/{v}.png")
+                await pg.screenshot(path=f"{os.environ.get('SHOT_DIR', '/tmp')}/{v}.png")
         print("\n".join(l for l in logs if "terrain" in l or "rror" in l)[-3000:])
         await b.close()
 asyncio.run(main(sys.argv[1:]))
