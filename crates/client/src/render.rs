@@ -1802,9 +1802,27 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     };
     // Centred on the player, feet 6 units below the position (24x32 sprites: -12, -26).
     let size = crate::sprites::nat(tex);
-    let (x, y) = ((p.x - size.x / 2.0).round(), (p.y + 6.0 - size.y).round());
-    let params = DrawTextureParams { dest_size: Some(size), flip_x: pl.facing.x < 0.0, ..Default::default() };
-    if fox || hannya || mukade || domain || divine {
+    let form = fox || hannya || mukade || domain || divine;
+    let (x, y, params) = if form {
+        // Transformed forms are one sprite: walk it in code, in step with the rig's gait
+        // (feet strike twice a stride: squash and settle; between them it rises), with a sway
+        // from side to side and a breath at rest. Not rounded, so it moves smoothly.
+        let (walk, ph, clock) = fx.hero_rig.gait();
+        let (sn, _) = ph.sin_cos();
+        let contact = sn * sn;
+        let land = contact.powi(4);
+        let breath = (clock * 2.4).sin() * (1.0 - walk);
+        let lift = walk * (1.0 - contact) * size.y * 0.08;
+        let sy = 1.0 - walk * 0.09 * land + 0.012 * breath;
+        let sx = 1.0 + walk * 0.06 * land - 0.006 * breath;
+        let rot = walk * (0.07 * sn + 0.04 * pl.facing.x);
+        let dest = vec2(size.x * sx, size.y * sy);
+        let feet = vec2(p.x + walk * 0.8 * sn, p.y + 6.0 - lift);
+        (feet.x - dest.x / 2.0, feet.y - dest.y, DrawTextureParams { dest_size: Some(dest), flip_x: pl.facing.x < 0.0, rotation: rot, pivot: Some(feet), ..Default::default() })
+    } else {
+        ((p.x - size.x / 2.0).round(), (p.y + 6.0 - size.y).round(), DrawTextureParams { dest_size: Some(size), flip_x: pl.facing.x < 0.0, ..Default::default() })
+    };
+    if form {
         // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread / star-blue), offset around.
         let flare = 0.45 + 0.25 * (t * 9.0).sin();
         let glow = if fox || divine {

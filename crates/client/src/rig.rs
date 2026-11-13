@@ -235,6 +235,13 @@ impl Default for RigState {
 }
 
 impl RigState {
+    /// The gait: how much the hero is walking (0 idle .. 1 walking, eased) and the stride
+    /// phase in radians (feet strike at a quarter and three quarters of TAU), plus the clock.
+    /// Lets the single-sprite transformed forms step in time with the rig.
+    pub fn gait(&self) -> (f32, f32, f32) {
+        (self.walk, self.phase, self.t)
+    }
+
     /// The hero took a hit: flinch back, squash, and flash.
     pub fn hurt(&mut self) {
         self.flinch.v += 140.0;

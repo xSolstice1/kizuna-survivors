@@ -2158,7 +2158,7 @@ impl World {
             e.pos[i] += (e.vel[i] * slow + e.push[i]) * DT;
             if e.kind[i].is_boss() {
                 // Bosses smash through props, but cliffs stop them too.
-                e.pos[i] = terrain.resolve(e.pos[i], e.radius[i]);
+                e.pos[i] = terrain.resolve_crowd(e.pos[i], e.radius[i]);
             } else {
                 let before = e.pos[i];
                 let after = stage::resolve_local_with(terrain, before, e.radius[i]);
