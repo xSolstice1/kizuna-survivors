@@ -1,0 +1,8 @@
+{
+ "world": "World: Rainward 13, a drowned city ward in heavy rain at night; wet dark asphalt and concrete; dark teal-grey colours with a faint dull red tint.",
+ "ground": "wet dark grey asphalt seen close up: fine even grain of small stones in tar, many tiny shallow rain ripples and small wet patches, a few hairline cracks; NO big puddles, NO light reflections, NO curbs, NO road markings, NO manholes.",
+ "low": "shallow dark teal water over sunken asphalt seen from above: many small evenly spread rain ripple rings on the water, faint grit visible below the surface; NO reflections of lights or sky, NO curbs, NO edges, NO objects; darker than the street around it.",
+ "high": "a raised concrete sidewalk seen close up: lighter grey concrete in small square paving slabs (each about a sixteenth of the image wide) with thin dark joints, a light wet sheen and small stains, evenly lit; NO red or coloured light, NO puddles.",
+ "trail": "a worn concrete road surface: medium grey concrete with fine grit, small chips, faint tyre scuffs and a light wet sheen, evenly lit; NO puddles, NO red, NO lines or markings.",
+ "cliff": "a concrete retaining wall: a concrete curb edge along the top; below it, stained grey concrete with rust streaks, small drain holes and thin trickles of water."
+}

@@ -177,7 +177,7 @@ pub fn resolve_local_with(terrain: &crate::terrain::Terrain, c: Vec2, r: f32) ->
             }
         }
     }
-    terrain.resolve(c, r)
+    terrain.resolve_crowd(c, r)
 }
 
 /// `resolve` (3x3 chunks, exact for the player) against props and terrain cliffs.

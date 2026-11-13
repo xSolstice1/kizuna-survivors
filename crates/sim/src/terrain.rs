@@ -149,10 +149,13 @@ fn level_raw(stage: StageId, cx: i32, cy: i32) -> u8 {
         return 1;
     }
     // Sampled at the cell's centre, so cells match the drawn contours.
-    let n = height_cells(stage, cx as f32 + 0.5, cy as f32 + 0.5);
-    if n > HIGH_ABOVE {
+    level_of(height_cells(stage, cx as f32 + 0.5, cy as f32 + 0.5))
+}
+
+fn level_of(h: f32) -> u8 {
+    if h > HIGH_ABOVE {
         2
-    } else if n < LOW_BELOW {
+    } else if h < LOW_BELOW {
         0
     } else {
         1
@@ -235,11 +238,17 @@ pub struct Terrain {
     props_origin: (i32, i32),
     props_n: i32,
     props: Vec<ChunkProps>,
+    /// The height field at every cached cell's centre (with a 2-cell border), so the smooth
+    /// walls (`wall_field`) need no noise reads.
+    heights: Vec<f32>,
 }
+
+/// Step (units) of the smooth walls' look-around samples.
+const FINE: f32 = 8.0;
 
 impl Terrain {
     pub fn new(stage: StageId) -> Self {
-        let mut t = Terrain { stage, on: enabled(stage), origin: (0, 0), cells: Vec::new(), flow_origin: (0, 0), flow: Vec::new(), sight: Vec::new(), sight_goal: Vec2::ZERO, sight_row: FLOW, props_origin: (0, 0), props_n: 0, props: Vec::new() };
+        let mut t = Terrain { stage, on: enabled(stage), origin: (0, 0), cells: Vec::new(), flow_origin: (0, 0), flow: Vec::new(), sight: Vec::new(), sight_goal: Vec2::ZERO, sight_row: FLOW, props_origin: (0, 0), props_n: 0, props: Vec::new(), heights: Vec::new() };
         t.ensure(Vec2::ZERO);
         t.update_flow(Vec2::ZERO);
         t.step_sight(FLOW);
@@ -261,10 +270,13 @@ impl Terrain {
         let n = (CACHE + 4) as usize;
         let mut lv = vec![0u8; n * n];
         let mut road = vec![false; n * n];
+        self.heights = vec![0.0; n * n];
         for j in 0..n {
             for i in 0..n {
                 let (x, y) = (self.origin.0 + i as i32 - 2, self.origin.1 + j as i32 - 2);
-                lv[j * n + i] = level_raw(self.stage, x, y);
+                let h = height_cells(self.stage, x as f32 + 0.5, y as f32 + 0.5);
+                self.heights[j * n + i] = h;
+                lv[j * n + i] = level_of(h);
                 road[j * n + i] = is_road(self.stage, x, y);
             }
         }
@@ -376,21 +388,84 @@ impl Terrain {
         self.wall(cx, cy)
     }
 
-    /// Pushes a circle out of every cliff cell it overlaps.
+    /// The height field at any point, interpolated between cell centres (cached), so its
+    /// contours are the smooth ones the client draws, not cell steps.
+    fn height_at(&self, p: Vec2) -> f32 {
+        let n = CACHE + 4;
+        let (u, v) = (p.x / CELL - 0.5 - (self.origin.0 - 2) as f32, p.y / CELL - 0.5 - (self.origin.1 - 2) as f32);
+        let (i, j) = (u.floor() as i32, v.floor() as i32);
+        if self.heights.is_empty() || i < 0 || j < 0 || i + 1 >= n || j + 1 >= n {
+            return height(self.stage, p);
+        }
+        let (fx, fy) = (u - i as f32, v - j as f32);
+        let h = |i: i32, j: i32| self.heights[(j * n + i) as usize];
+        let top = h(i, j) + (h(i + 1, j) - h(i, j)) * fx;
+        let bot = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * fx;
+        top + (bot - top) * fy
+    }
+
+    /// The smooth walls as a field: positive inside a cliff, negative in the open, zero on its
+    /// outline. The cell rules (`flags`) on the continuous height: for each level boundary,
+    /// the rock face below it (lower here, higher within FACE_CELLS cells north) and the rim
+    /// above it (higher here, lower within a cell to the west, east, north or diagonally
+    /// north). Roads and the start clearing are open.
+    fn wall_field(&self, p: Vec2) -> f32 {
+        let (cx, cy) = cell_of(p);
+        if self.cell(cx, cy) & ROAD != 0 || clear(cx, cy) {
+            return -1.0;
+        }
+        let h = self.height_at(p);
+        let face = (FACE_CELLS as f32 * CELL / FINE) as i32;
+        let north = (1..=face).map(|k| self.height_at(Vec2::new(p.x, p.y - k as f32 * FINE))).fold(f32::MIN, f32::max);
+        const D: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        let around = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (-D, -D), (D, -D)]
+            .iter()
+            .flat_map(|&(dx, dy)| (1..=(CELL / FINE) as i32).map(move |k| (dx * k as f32 * FINE, dy * k as f32 * FINE)))
+            .map(|(dx, dy)| self.height_at(Vec2::new(p.x + dx, p.y + dy)))
+            .fold(f32::MAX, f32::min);
+        [LOW_BELOW, HIGH_ABOVE].iter().map(|&t| (t - h).min(north - t).max((h - t).min(t - around))).fold(f32::MIN, f32::max)
+    }
+
+    /// Pushes a circle out of the cliffs. The walls are smooth (the drawn contours, see
+    /// `wall_field`), and the push is along the field's gradient, so a body walking into a
+    /// curved cliff slides along the curve (towards the ramp round it) instead of stopping dead
+    /// against the flat side of a cell.
     pub fn resolve(&self, c: Vec2, r: f32) -> Vec2 {
+        self.resolve_margin(c, r, CELL)
+    }
+
+    /// `resolve` for crowds: only bodies that overlap a cliff cell take the smooth push (the
+    /// smooth outline can sit up to half a cell outside the cells; a crowd brushing past it
+    /// is fine, and the player, who uses `resolve`, never can).
+    pub fn resolve_crowd(&self, c: Vec2, r: f32) -> Vec2 {
+        self.resolve_margin(c, r, 0.0)
+    }
+
+    fn resolve_margin(&self, c: Vec2, r: f32, margin: f32) -> Vec2 {
         if !self.on {
             return c;
         }
+        // Far from every cliff cell (the common case): nothing to do.
+        let (x0, y0) = cell_of(Vec2::new(c.x - r - margin, c.y - r - margin));
+        let (x1, y1) = cell_of(Vec2::new(c.x + r + margin, c.y + r + margin));
+        if !(y0..=y1).any(|cy| (x0..=x1).any(|cx| self.wall(cx, cy))) {
+            return c;
+        }
         let mut c = c;
-        let (x0, y0) = cell_of(Vec2::new(c.x - r, c.y - r));
-        let (x1, y1) = cell_of(Vec2::new(c.x + r, c.y + r));
-        for cy in y0..=y1 {
-            for cx in x0..=x1 {
-                if self.wall(cx, cy) {
-                    let min = Vec2::new(cx as f32 * CELL, cy as f32 * CELL);
-                    c += crate::stage::push_out_box(c, r, (min, min + Vec2::new(CELL, CELL)));
-                }
+        const E: f32 = 1.5;
+        for _ in 0..4 {
+            let f = self.wall_field(c);
+            let g = Vec2::new(self.wall_field(c + Vec2::new(E, 0.0)) - f, self.wall_field(c + Vec2::new(0.0, E)) - f) * (1.0 / E);
+            let gl = g.length();
+            if gl < 1e-7 {
+                break;
             }
+            // Distance to the outline (first order), positive in the open.
+            let dist = -f / gl;
+            if dist >= r - 0.05 {
+                break;
+            }
+            c = c - g * ((r - dist) / gl);
         }
         c
     }
@@ -624,6 +699,65 @@ mod tests {
         let inside = Vec2::new(x as f32 * CELL + 8.0, y as f32 * CELL + 8.0);
         let out = t.resolve(inside, 6.0);
         assert!((out - inside).length() > 1.0);
+        // Out means clear: no wall square within the radius.
+        let again = t.resolve(out, 6.0);
+        assert!((again - out).length() < 0.5, "{out:?} -> {again:?}");
+    }
+
+    /// Walking straight into cliffs slides along them: from many starts south of a wall, a
+    /// body heading north keeps moving (it may only stop dead against a face square-on).
+    #[test]
+    fn bodies_slide_along_cliffs() {
+        let t = Terrain::new(W1);
+        let boxes = |c: Vec2, r: f32| {
+            let mut c = c;
+            let (x0, y0) = cell_of(Vec2::new(c.x - r, c.y - r));
+            let (x1, y1) = cell_of(Vec2::new(c.x + r, c.y + r));
+            for cy in y0..=y1 {
+                for cx in x0..=x1 {
+                    if t.wall(cx, cy) {
+                        let min = Vec2::new(cx as f32 * CELL, cy as f32 * CELL);
+                        c += crate::stage::push_out_box(c, r, (min, min + Vec2::new(CELL, CELL)));
+                    }
+                }
+            }
+            c
+        };
+        let (mut stuck_new, mut stuck_old, mut n) = (0, 0, 0);
+        let mut tilts = std::collections::BTreeMap::new();
+        for y in -60..60 {
+            for x in -60..60 {
+                // A wall cell with open ground two cells south.
+                if !t.wall(x, y) || t.wall(x, y + 1) || t.wall(x, y + 2) || t.wall(x, y + 3) {
+                    continue;
+                }
+                n += 1;
+                let start = Vec2::new(x as f32 * CELL + 8.0, (y + 3) as f32 * CELL);
+                for (smooth, stuck) in [(true, &mut stuck_new), (false, &mut stuck_old)] {
+                    let mut p = start;
+                    let mut mid = p;
+                    for k in 0..120 {
+                        p = p + Vec2::new(0.0, -2.0);
+                        p = if smooth { t.resolve(p, 8.0) } else { boxes(p, 8.0) };
+                        if k == 60 {
+                            mid = p;
+                        }
+                    }
+                    if (p - mid).length() < 2.0 {
+                        *stuck += 1;
+                        if smooth {
+                            // How tilted is the wall where it stopped: the lowest wall square
+                            // 12 units either side.
+                            let foot = |dx: f32| (0..12).find(|&k| t.wall_field(Vec2::new(p.x + dx, p.y - k as f32 * 2.0)) > 0.0).unwrap_or(12) as i32;
+                            let tilt = (foot(-12.0) - foot(12.0)).abs();
+                            *tilts.entry(tilt).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("{n} starts: stuck {stuck_old} with cell boxes, {stuck_new} with smooth walls; stuck by tilt (2-unit steps over 24 units): {tilts:?}");
+        assert!(n > 50 && stuck_new * 2 < stuck_old, "{n} starts: stuck {stuck_old} -> {stuck_new}");
     }
 
     /// Writes each world's cell flags around the start, for debugging the layout:
