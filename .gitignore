@@ -2,6 +2,10 @@ target/
 dist/
 .vercel
 
+# Desktop save (written to the working directory) and local scratch such as screenshots
+kizuna_save.txt
+/tmp/
+
 # Design notes stay local
 PLAN.md
 

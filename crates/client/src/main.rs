@@ -224,6 +224,8 @@ async fn main() {
         let portrait = screen_height() > screen_width();
         if (touch.pause || portrait) && in_run {
             screen = Screen::Paused;
+            // Unseen, so it shows again on resume; a kept tip would draw over the results after Give up.
+            tip = None;
         }
         let now = get_time();
         // A cloud save to load (another device's progress), applied between runs.
