@@ -136,6 +136,7 @@ async fn main() {
     let mut overlay_focus = 0usize;
     let mut overlay_was_open = false;
     let mut cards_focus = 0usize;
+    let mut pick_left = ui::PICK_SECONDS;
 
     let mut collection = menu::CollectionState::default();
     let mut armory_state = armory::ArmoryState::default();
@@ -686,7 +687,10 @@ async fn main() {
             if fresh {
                 overlay_focus = 0;
             }
-            let choice = ui::shrine(&offer, &assets, &mut overlay_focus);
+            pick_left = if fresh { ui::PICK_SECONDS } else { pick_left - dt };
+            let choice = ui::shrine(&offer, &assets, &mut overlay_focus, pick_left);
+            // Timing out walks away: a blessing's price is never paid unasked.
+            let choice = choice.or_else(|| (pick_left <= 0.0).then_some(None));
             if let Some(choice) = choice.filter(|_| !fresh) {
                 audio.play(if choice.is_some() { synth::Sfx::Chime } else { synth::Sfx::Click });
                 world.choose_shrine(choice);
@@ -697,7 +701,10 @@ async fn main() {
             if fresh {
                 overlay_focus = 0;
             }
-            let choice = ui::replace_picker(&world, &assets, &mut overlay_focus, touch.active);
+            pick_left = if fresh { ui::PICK_SECONDS } else { pick_left - dt };
+            let choice = ui::replace_picker(&world, &assets, &mut overlay_focus, touch.active, pick_left);
+            // Timing out cancels: an owned skill is never overwritten unasked.
+            let choice = choice.or_else(|| (pick_left <= 0.0).then_some(None));
             if let Some(choice) = choice.filter(|_| !fresh) {
                 audio.play(synth::Sfx::Click);
                 if choice.is_none() {
@@ -711,9 +718,17 @@ async fn main() {
             if fresh {
                 overlay_focus = std::mem::take(&mut cards_focus);
             }
-            let picked = ui::level_up(&world, &offer, &assets, &mut overlay_focus, touch.active);
+            pick_left = if fresh { ui::PICK_SECONDS } else { pick_left - dt };
+            let picked = ui::level_up(&world, &offer, &assets, &mut overlay_focus, touch.active, pick_left);
             if let Some(i) = picked.filter(|_| !fresh) {
                 audio.play(synth::Sfx::Click);
+                world.choose(i);
+                overlay_picked = true;
+            } else if pick_left <= 0.0 {
+                audio.play(synth::Sfx::Click);
+                // A focused Replace card would open the replace picker, which times out to Cancel: take a plain card instead.
+                let plain = |i: usize| offer.get(i).is_some_and(|&u| !world.is_replacement(u));
+                let i = if plain(overlay_focus) { overlay_focus } else { (0..offer.len()).find(|&i| plain(i)).unwrap_or(overlay_focus) };
                 world.choose(i);
                 overlay_picked = true;
             }

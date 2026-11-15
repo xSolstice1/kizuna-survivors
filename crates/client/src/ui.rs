@@ -553,8 +553,19 @@ fn title_case(s: &str) -> String {
 
 // ───────────────────────── Level-up ─────────────────────────
 
-/// Draws the level-up cards; returns the card taken by click, digit, or focus plus Enter/Space.
-pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut usize, touch: bool) -> Option<usize> {
+/// Seconds the level-up, replace and shrine screens wait before choosing for the player.
+pub const PICK_SECONDS: f32 = 10.0;
+
+/// Bar centred on `cx` that shrinks from `w` wide as `left` runs out, with the seconds beside it.
+fn countdown(cx: f32, y: f32, w: f32, left: f32) {
+    let frac = (left / PICK_SECONDS).clamp(0.0, 1.0);
+    let c = if left <= 3.0 { VERMILION } else { GOLD };
+    kit::rounded(cx - w / 2.0 * frac, y, w * frac, 6.0, 3.0, c);
+    kit::text(&format!("{}s", left.max(0.0).ceil()), cx + w / 2.0 + 8.0, y + 7.0, 14.0, c);
+}
+
+/// Draws the level-up cards and the `left`-seconds countdown; returns the card taken by click, digit, or focus plus Enter/Space.
+pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut usize, touch: bool, left: f32) -> Option<usize> {
     dim_screen(0.62);
     let (w, h) = (screen_width(), screen_height());
     let t = get_time() as f32;
@@ -563,6 +574,7 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
     centered("LEVEL UP!", h * 0.13 + 44.0, 40.0, GOLD);
     let hint = if touch { "choose one" } else { "Arrows choose  ·  Enter take" };
     centered(&format!("Level {}  ·  {hint}", world.player.level), h * 0.13 + 66.0, 15.0, DIM);
+    countdown(w / 2.0, h * 0.13 + 82.0, 440.0, left);
 
     let (ch, gap) = (250.0, 26.0);
     // Phone labels are bigger, so the cards widen to keep the matchup line on one row.
@@ -643,7 +655,7 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
 }
 
 /// Replace-skill picker. Returns Some(Some(j)) to overwrite `replace_targets()[j]`, Some(None) to cancel, None while undecided.
-pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: bool) -> Option<Option<usize>> {
+pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: bool, left: f32) -> Option<Option<usize>> {
     let Some(new) = world.replacing else { return Some(None) };
     let targets = world.replace_targets();
     let n = targets.len();
@@ -655,6 +667,7 @@ pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: 
     let (px, py) = ((w - pw) / 2.0, ((h - ph) / 2.0).max(kit::MARGIN));
     kit::panel_ex(px, py, pw, ph, Color::new(0.14, 0.07, 0.1, 0.96), tier_color(new.tier()));
     centered("Replace which skill?", py + 38.0, 30.0, GOLD);
+    countdown(w / 2.0, py + 76.0, pw - 80.0, left);
 
     let row = |i: usize| Rect::new(px + 16.0, py + head_h + i as f32 * (row_h + gap), pw - 32.0, row_h);
     let mouse: Vec2 = mouse_position().into();
@@ -725,13 +738,14 @@ pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: 
 // ───────────────────────── Shrine ─────────────────────────
 
 /// Shrine choice. Returns Some(Some(i)) for a pick, Some(None) to walk away, None while undecided.
-pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize) -> Option<Option<usize>> {
+pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize, left: f32) -> Option<Option<usize>> {
     let (w, h) = (screen_width(), screen_height());
     dim_screen(0.72);
     kit::panel_ex(w / 2.0 - 250.0, h * 0.12, 500.0, 84.0, Color::new(0.18, 0.10, 0.04, 0.95), GOLD);
     draw_texture_ex(&assets.shrine, w / 2.0 - 232.0, h * 0.12 + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(48.0, 54.0)), ..Default::default() });
     centered("A ROADSIDE SHRINE", h * 0.12 + 46.0, 36.0, GOLD);
     centered("Every blessing has a price.", h * 0.12 + 70.0, 15.0, DIM);
+    countdown(w / 2.0, h * 0.12 + 92.0, 500.0, left);
     let (cw, ch, gap) = (340.0, 210.0, 30.0);
     let x0 = (w - (offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap)) / 2.0;
     let y0 = h * 0.32;
