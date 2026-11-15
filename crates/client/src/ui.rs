@@ -242,12 +242,12 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let p = &world.player;
     let hero = hero_def(world.cfg.hero);
     let t = get_time() as f32;
-    // Everything sits at least MARGIN from the edges; the XP bar is the outermost piece.
-    let (ox, oy) = (kit::MARGIN - 8.0, kit::MARGIN - 6.0);
+    let (ox, oy) = hud_origin();
 
     // XP bar across the top with a level badge.
     let frac = world.player.xp as f32 / world.xp_to_next() as f32;
-    kit::bar(kit::MARGIN, kit::MARGIN, w - 2.0 * kit::MARGIN, 10.0, frac, SKY, Color::new(0.05, 0.04, 0.10, 0.9));
+    let xp = hud_rect(HudPart::Xp, world, touch);
+    kit::bar(xp.x, xp.y, xp.w, xp.h, frac, SKY, Color::new(0.05, 0.04, 0.10, 0.9));
 
     // Hero card, top-left: portrait, HP, special meter.
     kit::panel(12.0 + ox, 24.0 + oy, 300.0, 78.0);
@@ -257,7 +257,8 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let lv = format!("{}", p.level);
     let d = kit::measure(&lv, 15);
     kit::text(&lv, 72.0 + ox - d.width / 2.0, 93.0 + oy, 15.0, INK);
-    kit::bar(92.0 + ox, 38.0 + oy, 206.0, 16.0, p.hp / p.max_hp, Color::new(0.95, 0.30, 0.42, 1.0), Color::new(0.18, 0.06, 0.10, 0.95));
+    let hp = hud_rect(HudPart::Health, world, touch);
+    kit::bar(hp.x, hp.y, hp.w, hp.h, p.hp / p.max_hp, Color::new(0.95, 0.30, 0.42, 1.0), Color::new(0.18, 0.06, 0.10, 0.95));
     kit::text(&format!("{:.0} / {:.0}", p.hp, p.max_hp), 100.0 + ox, 51.0 + oy, 13.0, INK);
     match world.form_kind() {
         Some(kind) => {
@@ -343,8 +344,9 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     }
 
     // Timer card, top-centre.
-    let (tw, tx) = (220.0, (w - 220.0) / 2.0);
-    kit::panel(tx, 22.0 + oy, tw, 62.0);
+    let timer = hud_rect(HudPart::Timer, world, touch);
+    let tw = timer.w;
+    kit::panel(timer.x, timer.y, timer.w, timer.h);
     let st = world.stage();
     let night = world.time >= st.final_at;
     centered(&fmt_time(world.time), 60.0 + oy, 36.0, if night { Color::new(1.0, 0.55, 0.45, 1.0) } else { INK });
@@ -394,6 +396,54 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let x = w - kit::MARGIN - cw;
     kit::chip(x, 60.0 + oy, "SEN", &sen, GOLD);
     draw_texture_ex(&assets.coin, x - 22.0, 66.0 + oy, WHITE, DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() });
+}
+
+/// Everything sits at least MARGIN from the edges; the XP bar is the outermost piece.
+fn hud_origin() -> (f32, f32) {
+    (kit::MARGIN - 8.0, kit::MARGIN - 6.0)
+}
+
+#[derive(Clone, Copy)]
+pub enum HudPart {
+    Xp,
+    Health,
+    Loadout,
+    Special,
+    Timer,
+    Minimap,
+    Stats,
+    Boss,
+}
+
+/// Where `hud` (and the small `minimap`) draws `part`, in UI pixels; the tutorial spotlights these.
+pub fn hud_rect(part: HudPart, world: &World, touch: bool) -> Rect {
+    let w = screen_width();
+    let (ox, oy) = hud_origin();
+    match part {
+        HudPart::Xp => Rect::new(kit::MARGIN, kit::MARGIN, w - 2.0 * kit::MARGIN, 10.0),
+        HudPart::Health => Rect::new(92.0 + ox, 38.0 + oy, 206.0, 16.0),
+        // The meter bar with its name and SPACE keycap; on touch, the SPECIAL button.
+        HudPart::Special if touch => crate::touch::special_rect(),
+        HudPart::Special => Rect::new(92.0 + ox, 62.0 + oy, 210.0, 34.0),
+        HudPart::Loadout => {
+            let hero = hero_def(world.cfg.hero);
+            let weapons = hero.weapon_slots as f32 * 40.0 + 8.0 + 34.0;
+            let passives = hero.passive_slots as f32 * 31.0;
+            Rect::new(14.0 + ox, 110.0 + oy, weapons.max(passives), 72.0)
+        }
+        HudPart::Timer => Rect::new((w - 220.0) / 2.0, 22.0 + oy, 220.0, 62.0),
+        HudPart::Minimap => Rect::new(w - kit::MARGIN - 150.0, 116.0, 150.0, 150.0),
+        HudPart::Stats => {
+            let chip = |label: &str, value: String| kit::measure(&value, 20).width + kit::measure(label, 14).width + 28.0;
+            let widest = chip("SEN", world.sen.to_string()).max(chip("KILLS", world.kills.to_string()));
+            // The coin sits 22 px left of the Sen chip.
+            Rect::new(w - kit::MARGIN - widest - 22.0, 24.0 + oy, widest + 22.0, 66.0)
+        }
+        HudPart::Boss => {
+            let by = 14.0 + oy;
+            Rect::new((w - 460.0) / 2.0 - 10.0, 90.0 + by, 480.0, BOSS_PANEL_BOTTOM - 90.0 - by)
+        }
+    }
 }
 
 /// Element pip at a weapon slot's top-right corner; the full tag shows in the pause menu.
@@ -1102,7 +1152,8 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
         let size = (h - 140.0).min(w - 80.0).min(620.0);
         (size, (w - size) / 2.0, 90.0, 900.0)
     } else {
-        (150.0, w - kit::MARGIN - 150.0, 116.0, 650.0)
+        let r = hud_rect(HudPart::Minimap, world, false);
+        (r.w, r.x, r.y, 650.0)
     };
     if big {
         dim_screen(0.6);

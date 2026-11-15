@@ -26,7 +26,7 @@ pub struct TouchControls {
     seen: Vec<u64>,
 }
 
-fn special_rect() -> Rect {
+pub fn special_rect() -> Rect {
     let (w, h) = (screen_width(), screen_height());
     Rect::new(w - 170.0, h - 170.0, 130.0, 130.0)
 }
