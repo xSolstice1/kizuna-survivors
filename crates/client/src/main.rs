@@ -103,6 +103,7 @@ fn new_world(stress: Option<Stress>, profile: &Profile) -> World {
         ascension,
         gear: profile.loadout(profile.selected),
         auto_special: profile.auto_special(),
+        adaptive: stress.is_none(),
         ..Default::default()
     })
     }

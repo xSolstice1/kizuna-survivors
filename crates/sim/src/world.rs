@@ -37,6 +37,36 @@ pub struct Stress {
     pub projectiles: usize,
 }
 
+/// The adaptive director's read of the player. `level` is the heat (see `HEAT_MIN`..`HEAT_MAX`).
+#[derive(Clone, Copy, Debug)]
+pub struct Heat {
+    pub level: f32,
+    /// Smoothed HP fraction (~10 s).
+    hp: f32,
+    /// Smoothed damage taken per second (~20 s).
+    dmg: f32,
+    /// Smoothed enemies within `CROWD_RADIUS` (~5 s).
+    crowd: f32,
+    /// Damage taken since the last once-a-second sample.
+    taken: f32,
+    /// Lowest HP fraction since the last tick, so a hit that triggers a Revival still counts.
+    low: f32,
+    /// Seconds left without refills after a close call.
+    pause: f32,
+    close_cd: f32,
+    /// A close call can fire again only after HP has climbed back above `CLOSE_CALL_HP`.
+    armed: bool,
+    /// Lowest HP fraction during this round's peak.
+    peak_low: f32,
+    phase: WavePhase,
+}
+
+impl Default for Heat {
+    fn default() -> Self {
+        Heat { level: 0.0, hp: 1.0, dmg: 0.0, crowd: 0.0, taken: 0.0, low: 1.0, pause: 0.0, close_cd: 0.0, armed: true, peak_low: 1.0, phase: WavePhase::Build }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WorldConfig {
     pub seed: u64,
@@ -54,11 +84,13 @@ pub struct WorldConfig {
     pub gear: Loadout,
     /// Fire the special by itself when crowded or low on health (Shrine Shop unlock).
     pub auto_special: bool,
+    /// The director adapts pressure to how the player is doing (see `Heat`).
+    pub adaptive: bool,
 }
 
 impl Default for WorldConfig {
     fn default() -> Self {
-        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default(), stage: StageId::Shotengai, difficulty: Difficulty::Normal, ascension: 0, gear: Loadout::default(), auto_special: false }
+        WorldConfig { seed: 1, hero: HeroId::Ren, stress: None, spawn_radius: 420.0, recycle_radius: 900.0, meta: Bonus::default(), stage: StageId::Shotengai, difficulty: Difficulty::Normal, ascension: 0, gear: Loadout::default(), auto_special: false, adaptive: false }
     }
 }
 
@@ -762,6 +794,7 @@ pub struct World {
     /// True if the run ended because dawn arrived with the Night Lord alive.
     pub dawn_out: bool,
     night_lord_spawned: bool,
+    pub heat: Heat,
     /// Highest round whose start has been handled.
     pub(crate) round_seen: u8,
     /// Bosses defeated this run: bit 0 mini-boss, bit 1 boss, bit 2 final boss.
@@ -934,6 +967,7 @@ impl World {
             specials_used: 0,
             dawn_out: false,
             night_lord_spawned: false,
+            heat: Heat::default(),
             round_seen: 0,
             bosses_down: 0,
             hazards: Vec::new(),
@@ -1214,6 +1248,8 @@ impl World {
         };
         let dmg = (raw - self.armor()).max(1.0);
         self.player.hp = (self.player.hp - dmg).max(0.0);
+        self.heat.taken += dmg;
+        self.heat.low = self.heat.low.min(self.player.hp / self.player.max_hp);
         self.player.iframes = IFRAMES;
         self.events.push(Event::PlayerHurt);
         let wind = self.cfg.gear.unique(Unique::SecondWind);
@@ -1353,6 +1389,12 @@ impl World {
     }
 
     fn spawn_enemy(&mut self, kind: EnemyKind, pos: Vec2) {
+        self.spawn_enemy_scaled(kind, pos, 1.0);
+    }
+
+    /// `heat` scales HP and contact damage; only the director's refill and elite timer pass one,
+    /// so set pieces, crews, minions and splits keep their authored stats.
+    fn spawn_enemy_scaled(&mut self, kind: EnemyKind, pos: Vec2, heat: f32) {
         if self.enemies.len() >= MAX_ENEMIES {
             return;
         }
@@ -1369,9 +1411,9 @@ impl World {
             d.hp * BOSS_HP * final_share * self.stage().tier * self.cfg.difficulty.hp() * self.ascension_hp() * self.mods.enemy_hp
         } else {
             let hardened = if self.asc_trait(1) && (kind.rank() >= Rank::Elite || kind.is_leader()) { ASC_ELITE_HP } else { 1.0 };
-            d.hp * self.enemy_hp_scale() * self.mods.enemy_hp * hardened
+            d.hp * self.enemy_hp_scale() * self.mods.enemy_hp * hardened * heat
         };
-        let damage = d.damage * self.enemy_damage_scale();
+        let damage = d.damage * self.enemy_damage_scale() * heat;
         let timer = match d.ai {
             Ai::Ranged { every, .. } => every * 0.4 + self.rng.range(0.0, every * 0.5),
             Ai::Blink => 2.5 + self.rng.range(0.0, 2.0),
@@ -1506,9 +1548,86 @@ impl World {
         }
     }
 
+    fn adapting(&self) -> bool {
+        self.cfg.adaptive && self.cfg.stress.is_none()
+    }
+
+    /// Multiplier the director puts on fodder HP, contact damage, spawn count and Champions;
+    /// exactly 1.0 when not adapting, so fixed runs replay unchanged.
+    pub fn heat_mult(&self) -> f32 {
+        if self.adapting() { 1.0 + self.heat.level } else { 1.0 }
+    }
+
+    /// Where this round is in its build-up / peak / relief wave, and the spawn-density multiplier.
+    /// Waves wait for the warm-up and stop while a boss is alive.
+    pub fn wave_mult(&self) -> (WavePhase, f32) {
+        if !self.adapting() || self.time < HEAT_WARMUP || self.boss().is_some() {
+            return (WavePhase::Build, 1.0);
+        }
+        let st = self.stage();
+        wave_at((self.time - st.round_start(self.round())) / st.round_len())
+    }
+
+    /// Reads the player every tick (close calls, wave payoffs) and moves the heat once a second.
+    fn update_heat(&mut self) {
+        if !self.adapting() || self.time < HEAT_WARMUP {
+            self.heat.low = 1.0;
+            self.heat.taken = 0.0;
+            return;
+        }
+        let frac = (self.player.hp / self.player.max_hp).min(self.heat.low);
+        self.heat.low = 1.0;
+        let h = &mut self.heat;
+        h.pause = (h.pause - DT).max(0.0);
+        h.close_cd = (h.close_cd - DT).max(0.0);
+        if frac >= CLOSE_CALL_HP {
+            h.armed = true;
+        } else if h.armed && h.close_cd <= 0.0 {
+            h.armed = false;
+            h.level = (h.level - CLOSE_CALL_STEP).max(HEAT_MIN);
+            h.pause = CLOSE_CALL_PAUSE;
+            h.close_cd = CLOSE_CALL_GAP;
+        }
+
+        let (phase, _) = self.wave_mult();
+        if phase == WavePhase::Peak {
+            self.heat.peak_low = self.heat.peak_low.min(frac);
+        }
+        if phase == WavePhase::Relief && self.heat.phase == WavePhase::Peak {
+            if self.heat.peak_low < PEAK_LOW_HP && self.player.hp > 0.0 && self.pickups.len() < MAX_PICKUPS {
+                let kind = if self.player.hp / self.player.max_hp < PEAK_LOW_HP { PickupKind::Feast } else { PickupKind::ShrineBell };
+                let pos = stage::resolve_with(&self.terrain, self.player.pos + Vec2::new(0.0, -60.0), 12.0);
+                self.pickups.push((pos, kind));
+                self.events.push(Event::PickupSpawned { pos, kind });
+            }
+            self.heat.peak_low = 1.0;
+        }
+        self.heat.phase = phase;
+
+        if self.tick % 60 != 0 {
+            return;
+        }
+        let boss = self.boss().is_some();
+        let crowd = self.crowd_near_player();
+        let h = &mut self.heat;
+        h.hp = h.hp * 0.9 + frac * 0.1;
+        h.dmg = h.dmg * 0.95 + h.taken * 0.05;
+        h.crowd = h.crowd * 0.8 + crowd as f32 * 0.2;
+        h.taken = 0.0;
+        let s = HeatSignals { hp: h.hp, dmg_rate: h.dmg * 20.0 / self.player.max_hp, crowd: h.crowd };
+        h.level = heat_step(h.level, s, boss);
+    }
+
+    /// Enemies within `CROWD_RADIUS` of the player.
+    fn crowd_near_player(&self) -> usize {
+        let (p, r2) = (self.player.pos, CROWD_RADIUS * CROWD_RADIUS);
+        self.enemies.pos.iter().filter(|&&q| (q - p).length_sq() < r2).count()
+    }
+
     fn director(&mut self) {
         let st = self.stage();
         let pace = self.round_pace();
+        let (heat, (phase, wave)) = (self.heat_mult(), self.wave_mult());
         let rung = ladder_rung(pace);
         let basic = if rung > 0 { st.fodder_b } else { st.fodder };
         let crowd = if self.asc_trait(5) { ASC_CROWD } else { 1.0 };
@@ -1516,11 +1635,19 @@ impl World {
         let target = match self.cfg.stress {
             Some(s) => s.enemies,
             None if self.night_lord_spawned => 0,
-            None => (min_alive(pace) as f32 * self.mods.curse * density) as usize,
+            None => (min_alive(pace) as f32 * self.mods.curse * density * heat * wave) as usize,
         };
+        self.update_heat();
         // Refill is rate-limited (ramping over the run) so strong area weapons can't turn
         // the director into an endless XP fountain. Stress mode fills fast.
-        let per_tick = if self.cfg.stress.is_some() { 30 } else { (refill_per_tick(pace) as f32 * density).ceil() as usize };
+        let per_tick = match self.cfg.stress {
+            Some(_) => 30,
+            None if self.heat.pause > 0.0 => 0,
+            None => {
+                let relief = if phase == WavePhase::Relief { 0.5 } else { 1.0 };
+                (refill_per_tick(pace) as f32 * density * heat * wave * relief).ceil() as usize
+            }
+        };
         let deficit = target.saturating_sub(self.enemies.len()).min(per_tick);
         for _ in 0..deficit {
             let r = self.rng.f32();
@@ -1540,8 +1667,8 @@ impl World {
             let r = self.cfg.spawn_radius + self.rng.range(0.0, 80.0);
             let p = self.ring_point(r);
             let before = self.enemies.len();
-            self.spawn_enemy(kind, p);
-            let share = champion_share(pace) * if self.cfg.difficulty == Difficulty::Nightmare { CHAMPION_NIGHTMARE } else { 1.0 };
+            self.spawn_enemy_scaled(kind, p, heat);
+            let share = champion_share(pace) * if self.cfg.difficulty == Difficulty::Nightmare { CHAMPION_NIGHTMARE } else { 1.0 } * heat;
             // Only roll once Champions can appear, so early runs keep their random sequence.
             if share > 0.0 && self.enemies.len() > before && self.rng.f32() < share {
                 self.make_champion(before);
@@ -1574,9 +1701,9 @@ impl World {
                 self.start_round(self.round_seen, basic, rung);
             }
             if self.time >= self.next_elite {
-                self.next_elite += elite_interval(pace) * self.cfg.difficulty.elite_gap();
+                self.next_elite += elite_interval(pace) * self.cfg.difficulty.elite_gap() / heat;
                 let p = self.ring_point(self.cfg.spawn_radius);
-                self.spawn_enemy(st.elite, p);
+                self.spawn_enemy_scaled(st.elite, p, heat);
             }
         }
 
@@ -7891,8 +8018,11 @@ mod tests {
             } else {
                 Bonus::default()
             };
-            let mut w = World::new(WorldConfig { seed, hero, stage, difficulty, ascension, gear, meta, ..Default::default() });
+            // BALANCE_ADAPTIVE=1: the director adapts to the bot (heat column in the trace).
+            let adaptive = std::env::var("BALANCE_ADAPTIVE").is_ok_and(|v| v == "1");
+            let mut w = World::new(WorldConfig { seed, hero, stage, difficulty, ascension, gear, meta, adaptive, ..Default::default() });
             let (mut hp_low, mut taken, mut last_hp, mut next_trace) = (1.0f32, 0.0f32, 0.0f32, 60.0f32);
+            let (mut heat_sum, mut heat_n, mut minutes, mut low_minutes) = (0.0f64, 0u32, 0u32, 0u32);
             let mut dealt = 0.0f64;
             let mut boss_at: Vec<(EnemyKind, f32)> = Vec::new();
             last_hp = last_hp.max(w.player.hp);
@@ -7919,6 +8049,8 @@ mod tests {
                 }
                 let input = if afk || w.time >= afk_after { Input::default() } else { w.bot_input() };
                 w.step(input);
+                heat_sum += w.heat.level as f64;
+                heat_n += 1;
                 gear_drops += w.events.iter().filter(|e| matches!(e, Event::GearDrop { .. })).count() as u32;
                 dealt += w.events.iter().map(|e| if let Event::Hit { amount, .. } = e { *amount as f64 } else { 0.0 }).sum::<f64>();
                 for e in &w.events {
@@ -7940,15 +8072,24 @@ mod tests {
                 }
                 last_hp = w.player.hp;
                 hp_low = hp_low.min(w.player.hp / w.player.max_hp);
-                if trace && w.time >= next_trace {
+                if w.time >= next_trace {
+                    minutes += 1;
+                    low_minutes += (hp_low < 0.5) as u32;
+                }
+                if w.time >= next_trace && trace {
                     // dps_ratio: damage dealt this minute / enemy HP scale = how many "base enemies" of
                     // HP the player chews through per second. Flat = enemies keep pace with the build.
                     let dps = dealt / 60.0;
-                    println!("  {:>4.0}s  hp_low {:>3.0}%  taken {:>6.0}  alive {:>4}  kills {:>6}  level {:>3}  enemy_hp x{:>6.1}  dmg x{:.1}  dps {:>9.0}  dps/hp {:>7.0}", w.time, hp_low * 100.0, taken, w.enemies.len(), w.kills, w.player.level, w.enemy_hp_scale(), w.enemy_damage_scale(), dps, dps / w.enemy_hp_scale() as f64);
+                    println!("  {:>4.0}s  hp_low {:>3.0}%  taken {:>6.0}  alive {:>4}  kills {:>6}  level {:>3}  enemy_hp x{:>6.1}  dmg x{:.1}  dps {:>9.0}  dps/hp {:>7.0}  heat {:+.2}", w.time, hp_low * 100.0, taken, w.enemies.len(), w.kills, w.player.level, w.enemy_hp_scale(), w.enemy_damage_scale(), dps, dps / w.enemy_hp_scale() as f64, w.heat.level);
+                }
+                if w.time >= next_trace {
                     dealt = 0.0;
                     next_trace += 60.0;
                     hp_low = 1.0;
                 }
+            }
+            if adaptive {
+                println!("  heat mean {:+.3} final {:+.2}  minutes below 50% hp {low_minutes}/{minutes}", heat_sum / heat_n.max(1) as f64, w.heat.level);
             }
             let awakened: Vec<_> = w.weapons.iter().filter(|x| x.awakened).map(|x| awakened_name(x.kind)).collect();
             let nl = w.boss().map(|b| format!("{} {:.0}%", b.2.short_name(), b.1 * 100.0)).unwrap_or("-".into());
@@ -8302,6 +8443,216 @@ mod tests {
         place(&mut w, Vec2::new(60.0, 0.0));
         fire_seal(&mut w, 5);
         assert!((0..w.projectiles.len()).all(|i| w.projectiles.kind[i] != ProjKind::SealOrb));
+    }
+
+    /// Adaptive world past the warm-up, no weapons, no enemies.
+    fn adaptive_world() -> World {
+        let mut w = World::new(WorldConfig { seed: 4, adaptive: true, ..Default::default() });
+        w.weapons.clear();
+        w.enemies = Enemies::default();
+        w.time = 120.0;
+        w
+    }
+
+    /// Runs the director's heat update for `secs` seconds of ticks.
+    fn heat_ticks(w: &mut World, secs: u32) {
+        for _ in 0..secs * 60 {
+            w.tick += 1;
+            w.update_heat();
+        }
+    }
+
+    /// Puts the clock at `frac` of the way through round 3.
+    fn at_round_frac(w: &mut World, frac: f32) {
+        let st = w.stage();
+        w.time = st.round_start(3) + frac * st.round_len();
+    }
+
+    #[test]
+    fn close_call_drops_heat_and_pauses_refill_once() {
+        let mut w = adaptive_world();
+        w.heat.level = 0.2;
+        w.player.hp = w.player.max_hp * 0.2;
+        w.tick += 1;
+        w.update_heat();
+        assert!((w.heat.level - (0.2 - CLOSE_CALL_STEP)).abs() < 1e-6, "{}", w.heat.level);
+        assert!(w.heat.pause > 0.0, "refill paused");
+        w.player.hp = w.player.max_hp;
+        w.tick += 1;
+        w.update_heat();
+        w.player.hp = w.player.max_hp * 0.2;
+        w.tick += 1;
+        w.update_heat();
+        assert!((w.heat.level - (0.2 - CLOSE_CALL_STEP)).abs() < 1e-6, "second close call inside 20 s is ignored");
+    }
+
+    #[test]
+    fn director_spawns_nothing_while_refill_is_paused() {
+        let mut w = adaptive_world();
+        w.heat.pause = CLOSE_CALL_PAUSE;
+        w.director();
+        assert_eq!(w.enemies.len(), 0);
+        w.heat.pause = 0.0;
+        w.director();
+        assert!(w.enemies.len() > 0);
+    }
+
+    #[test]
+    fn revival_counts_as_a_close_call() {
+        let mut w = adaptive_world();
+        w.revivals_left = 1;
+        w.heat.level = 0.2;
+        w.hurt_player(w.player.max_hp * 5.0, None);
+        assert!(w.player.hp > w.player.max_hp * 0.4, "revived");
+        w.tick += 1;
+        w.update_heat();
+        assert!(w.heat.level < 0.2 - CLOSE_CALL_STEP + 1e-6, "{}", w.heat.level);
+    }
+
+    #[test]
+    fn heat_rises_when_cruising_but_not_with_a_boss_alive() {
+        let mut w = adaptive_world();
+        w.heat.level = 0.1;
+        heat_ticks(&mut w, 30);
+        assert!(w.heat.level > 0.1, "cruising raises heat: {}", w.heat.level);
+
+        let mut w = adaptive_world();
+        w.heat.level = 0.1;
+        let mini = w.stage().mini;
+        w.spawn_boss(mini);
+        assert!(w.boss().is_some());
+        heat_ticks(&mut w, 30);
+        assert_eq!(w.heat.level, 0.1);
+    }
+
+    #[test]
+    fn relief_pays_only_after_a_low_peak() {
+        // Low peak, still low at relief: a Feast.
+        let mut w = adaptive_world();
+        at_round_frac(&mut w, 0.70);
+        w.player.hp = w.player.max_hp * 0.3;
+        w.heat.close_cd = CLOSE_CALL_GAP;
+        heat_ticks(&mut w, 1);
+        at_round_frac(&mut w, 0.86);
+        heat_ticks(&mut w, 1);
+        assert_eq!(w.pickups.iter().filter(|p| p.1 == PickupKind::Feast).count(), 1);
+
+        // Low peak, healed by relief: an XP burst.
+        let mut w = adaptive_world();
+        at_round_frac(&mut w, 0.70);
+        w.player.hp = w.player.max_hp * 0.3;
+        w.heat.close_cd = CLOSE_CALL_GAP;
+        heat_ticks(&mut w, 1);
+        w.player.hp = w.player.max_hp;
+        at_round_frac(&mut w, 0.86);
+        heat_ticks(&mut w, 1);
+        assert_eq!(w.pickups.iter().map(|p| p.1).collect::<Vec<_>>(), vec![PickupKind::ShrineBell]);
+
+        // Comfortable peak: nothing.
+        let mut w = adaptive_world();
+        at_round_frac(&mut w, 0.70);
+        heat_ticks(&mut w, 1);
+        at_round_frac(&mut w, 0.86);
+        heat_ticks(&mut w, 1);
+        assert!(w.pickups.is_empty());
+
+        // Pickups full: skipped.
+        let mut w = adaptive_world();
+        w.pickups = vec![(Vec2::new(5000.0, 0.0), PickupKind::SenPurse); MAX_PICKUPS];
+        at_round_frac(&mut w, 0.70);
+        w.player.hp = w.player.max_hp * 0.3;
+        heat_ticks(&mut w, 1);
+        at_round_frac(&mut w, 0.86);
+        heat_ticks(&mut w, 1);
+        assert_eq!(w.pickups.len(), MAX_PICKUPS);
+    }
+
+    #[test]
+    fn adaptive_run_is_deterministic() {
+        let run = || {
+            let mut w = World::new(WorldConfig { seed: 11, adaptive: true, ..Default::default() });
+            for _ in 0..60 * 180 {
+                if w.offer.is_some() {
+                    w.bot_pick();
+                }
+                w.close_chest();
+                w.choose_shrine(None);
+                let input = w.bot_input();
+                w.step(input);
+            }
+            (w.time, w.kills, w.player.hp, w.enemies.len(), w.heat.level)
+        };
+        let (a, b) = (run(), run());
+        assert_eq!(a, b);
+        assert!(a.4 != 0.0, "heat moved during the run");
+    }
+
+    #[test]
+    fn heat_scales_director_fodder_but_not_set_pieces() {
+        let spawned = |level: f32, ring: bool| {
+            let mut w = adaptive_world();
+            w.heat.level = level;
+            w.tick = 1; // off the once-a-second sample, so heat stays where it was set
+            if ring {
+                let fodder = w.stage().fodder;
+                w.spawn_ring(&[fodder], 4, 270.0);
+            } else {
+                w.director();
+            }
+            (w.enemies.max_hp[0], w.enemies.damage[0], w.enemies.kind[0])
+        };
+        let (cold, hot) = (spawned(0.0, false), spawned(0.3, false));
+        assert_eq!(cold.2, hot.2);
+        assert!((hot.0 / cold.0 - 1.3).abs() < 1e-4, "refill fodder HP x1.3: {} vs {}", hot.0, cold.0);
+        assert!((hot.1 / cold.1 - 1.3).abs() < 1e-4, "refill fodder damage x1.3");
+        assert_eq!(spawned(0.0, true).0, spawned(0.3, true).0, "round rings keep authored HP");
+        assert_eq!(spawned(0.0, true).1, spawned(0.3, true).1, "round rings keep authored damage");
+    }
+
+    #[test]
+    fn warmup_damage_does_not_leak_into_the_first_sample() {
+        let mut w = adaptive_world();
+        w.time = HEAT_WARMUP * 0.5;
+        w.hurt_player(w.player.max_hp * 0.8, None);
+        w.player.hp = w.player.max_hp;
+        w.tick += 1;
+        w.update_heat();
+        w.time = HEAT_WARMUP + 1.0;
+        heat_ticks(&mut w, 2);
+        assert_eq!(w.heat.level, HEAT_UP * 2.0, "no close call, no damage spike: cruising");
+        assert_eq!(w.heat.pause, 0.0);
+    }
+
+    #[test]
+    fn relief_payoff_is_announced_and_lands_on_open_ground() {
+        let mut w = adaptive_world();
+        at_round_frac(&mut w, 0.70);
+        w.player.hp = w.player.max_hp * 0.3;
+        heat_ticks(&mut w, 1);
+        at_round_frac(&mut w, 0.86);
+        w.events.clear();
+        heat_ticks(&mut w, 1);
+        let (pos, kind) = w.pickups[0];
+        assert!(w.events.iter().any(|e| matches!(e, Event::PickupSpawned { kind: PickupKind::Feast, .. })));
+        assert_eq!(pos, stage::resolve_with(&w.terrain, w.player.pos + Vec2::new(0.0, -60.0), 12.0));
+        assert_eq!(kind, PickupKind::Feast);
+    }
+
+    #[test]
+    fn no_waves_during_warmup() {
+        let mut w = World::new(WorldConfig { adaptive: true, ..Default::default() });
+        w.time = HEAT_WARMUP * 0.5;
+        assert_eq!(w.wave_mult(), (WavePhase::Build, 1.0));
+        at_round_frac(&mut w, 0.7);
+        assert_eq!(w.wave_mult(), (WavePhase::Peak, 1.15));
+    }
+
+    #[test]
+    fn non_adaptive_multipliers_are_exactly_one() {
+        let mut w = World::new(WorldConfig::default());
+        w.heat.level = 0.3;
+        assert_eq!(w.heat_mult(), 1.0);
+        assert_eq!(w.wave_mult().1, 1.0);
     }
 
     fn live_world() -> World {
