@@ -1538,7 +1538,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let mut l = l.borrow_mut();
         l.begin(world.cfg.stage);
         // The hero carries a little light of their own, so they're never lost in the dark.
-        let h = crate::light::sources::HERO;
+        let h = crate::light::sources::hero(world.cfg.stage);
         l.add_fill(vec2(world.player.pos.x, world.player.pos.y - h.lift), h.radius, h.color);
     });
     let p = world.player.pos;
@@ -1745,7 +1745,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         casts.push(tex, vec2(pos.x, y + n.y), n.x, n.y, flip, if e.kind[i] == EnemyKind::Wisp { 0.4 } else { 1.0 });
         sprites.push(tex, x, y, tint, DrawTextureParams { dest_size: Some(n), flip_x: flip, ..Default::default() });
     }
-    casts.flush();
+    casts.flush(cam);
     shadows.flush();
     outlines.flush();
     sprites.flush();
@@ -1754,7 +1754,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     }
     // Mist over the ground and the crowd, lit by the light map like them.
     if world.terrain.on {
-        crate::ambient::draw_mist(world.cfg.stage, view, time);
+        crate::ambient::draw_ground_fx(world.cfg.stage, view, time, &a.vfx);
     }
     // Night light: everything drawn so far (ground, props, enemies) is lit by the light map;
     // the hero, attacks and effects drawn after it keep their full colour and read clearly.
@@ -1933,7 +1933,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         None => {
             let mut cast = crate::light::Shadows::new();
             cast.push(tex, feet, size.x, size.y, pl.facing.x < 0.0, 1.0);
-            cast.flush();
+            cast.flush(cam);
         }
     }
     let shun = world.cfg.hero == HeroId::Shun;

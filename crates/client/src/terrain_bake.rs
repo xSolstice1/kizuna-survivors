@@ -212,12 +212,17 @@ void main() {
         float ch = float(i);
         float f0 = mix(m.r, m.b, ch) - 0.5;
         if (f0 >= 0.0) { continue; }
-        for (int k = 1; k <= 8; k++) {
-            vec4 q = M(MOON * 6.0 * float(k));
-            if (mix(q.r, q.b, ch) - 0.5 >= 0.0) { shade = max(shade, 1.0 - float(k - 1) / 8.0); break; }
+        // March towards the moon; where the higher ground starts, find the crossing between
+        // samples (the mask is smooth), so the shadow's depth is continuous, never stepped.
+        float prev = f0;
+        for (int k = 1; k <= 10; k++) {
+            vec4 q = M(MOON * 4.8 * float(k));
+            float f = mix(q.r, q.b, ch) - 0.5;
+            if (f >= 0.0) { shade = max(shade, 1.0 - 4.8 * (float(k - 1) + prev / (prev - f)) / 48.0); break; }
+            prev = f;
         }
     }
-    c *= 1.0 - 0.34 * sm(shade) * (1.0 - 0.5 * faced);
+    c *= 1.0 - 0.30 * sm(shade) * sm(shade) * (1.0 - 0.5 * faced);
     gl_FragColor = vec4(c * Exposure * color.rgb, 1.0);
 }
 "#;

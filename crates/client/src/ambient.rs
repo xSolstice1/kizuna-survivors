@@ -1,5 +1,5 @@
-//! Life in the air: each world's drifting motes (fireflies, embers, snow, neon dust, void
-//! sparks), and the screen vignette's strength.
+//! Life in the air and on the ground: each world's drifting motes (fireflies, embers, snow,
+//! void sparks), rain ripples, and low mist.
 //!
 //! Stateless: every mote is a pure function of its cell, its index and the clock, so the same
 //! motes can be asked for twice a frame (their lights, before the light map; their sprites,
@@ -15,7 +15,7 @@ const CELL: f32 = 180.0;
 /// How a world's motes move and look.
 #[derive(Clone, Copy)]
 struct Kind {
-    /// Motes per cell.
+    /// Motes per cell (0 = none: the world's air is clear).
     per_cell: u32,
     /// Drift (world units/s) and how far each wanders side to side.
     drift: Vec2,
@@ -28,23 +28,28 @@ struct Kind {
     /// Blink rate (fireflies), 0 = steady.
     blink: f32,
     sprite: &'static str,
+    /// Whether it has a hot white core (things that burn: fireflies, embers).
+    core: bool,
+    /// Additive (glowing) or plain (snow: it's lit, it doesn't shine).
+    glows: bool,
 }
 
 fn kind(stage: StageId) -> Kind {
     let c = |r, g, b| Color::new(r, g, b, 1.0);
+    let none = c(0.0, 0.0, 0.0);
     match stage {
-        // Fireflies over the shrine valley: slow, wandering, blinking, each a tiny lamp.
-        StageId::ShrineValley => Kind { per_cell: 3, drift: vec2(4.0, -2.0), wander: 26.0, size: 7.0, color: c(0.85, 1.0, 0.45), light: c(0.10, 0.13, 0.03), reach: 46.0, blink: 0.7, sprite: "glow" },
-        // Embers rising from the burning wood.
-        StageId::EmberLeaf => Kind { per_cell: 4, drift: vec2(6.0, -22.0), wander: 14.0, size: 5.0, color: c(1.0, 0.55, 0.2), light: c(0.10, 0.04, 0.01), reach: 30.0, blink: 0.0, sprite: "ember" },
-        // Snow drifting down over the citadel.
-        StageId::PaleCitadel => Kind { per_cell: 7, drift: vec2(-8.0, 24.0), wander: 12.0, size: 4.0, color: c(0.92, 0.96, 1.0), light: c(0.0, 0.0, 0.0), reach: 0.0, blink: 0.0, sprite: "glow" },
-        // Neon dust hanging in the shopping street's air.
-        StageId::Shotengai => Kind { per_cell: 3, drift: vec2(3.0, -4.0), wander: 18.0, size: 5.0, color: c(1.0, 0.45, 0.85), light: c(0.05, 0.02, 0.05), reach: 30.0, blink: 0.35, sprite: "glow" },
-        // Wisps of mist light in the rain.
-        StageId::Rainward => Kind { per_cell: 2, drift: vec2(-5.0, 2.0), wander: 30.0, size: 9.0, color: c(0.55, 0.8, 1.0), light: c(0.02, 0.05, 0.08), reach: 50.0, blink: 0.25, sprite: "glow" },
-        // Void sparks drifting up through the shattered sky.
-        StageId::Shatterline => Kind { per_cell: 4, drift: vec2(0.0, -12.0), wander: 20.0, size: 5.0, color: c(0.75, 0.45, 1.0), light: c(0.06, 0.02, 0.10), reach: 34.0, blink: 0.5, sprite: "glow" },
+        // Fireflies over the shrine valley: few, slow, wandering, blinking, each a tiny lamp.
+        StageId::ShrineValley => Kind { per_cell: 2, drift: vec2(3.0, -1.5), wander: 30.0, size: 3.6, color: c(0.80, 1.0, 0.45), light: c(0.08, 0.10, 0.02), reach: 40.0, blink: 0.6, sprite: "glow", core: true, glows: true },
+        // Embers rising from the burning wood, small and hot.
+        StageId::EmberLeaf => Kind { per_cell: 3, drift: vec2(6.0, -24.0), wander: 12.0, size: 2.6, color: c(1.0, 0.55, 0.2), light: c(0.06, 0.025, 0.005), reach: 24.0, blink: 0.0, sprite: "ember", core: true, glows: true },
+        // Fine snow drifting down over the citadel.
+        StageId::PaleCitadel => Kind { per_cell: 14, drift: vec2(-7.0, 20.0), wander: 10.0, size: 1.8, color: c(0.95, 0.97, 1.0), light: none, reach: 0.0, blink: 0.0, sprite: "glow", core: false, glows: false },
+        // The shopping street's air is clear: its neon is the light.
+        StageId::Shotengai => Kind { per_cell: 0, drift: Vec2::ZERO, wander: 0.0, size: 0.0, color: none, light: none, reach: 0.0, blink: 0.0, sprite: "glow", core: false, glows: true },
+        // Rain falls (screen streaks) and ripples the ground (`ripples`): no motes.
+        StageId::Rainward => Kind { per_cell: 0, drift: Vec2::ZERO, wander: 0.0, size: 0.0, color: none, light: none, reach: 0.0, blink: 0.0, sprite: "glow", core: false, glows: true },
+        // Fine void sparks drifting up through the shattered sky.
+        StageId::Shatterline => Kind { per_cell: 3, drift: vec2(0.0, -16.0), wander: 16.0, size: 2.2, color: c(0.80, 0.55, 1.0), light: c(0.025, 0.01, 0.04), reach: 26.0, blink: 0.5, sprite: "glow", core: false, glows: true },
     }
 }
 
@@ -59,6 +64,9 @@ fn unit(h: u32) -> f32 {
 /// Every visible mote: (position, size, brightness 0..1).
 fn motes(stage: StageId, view: Rect, time: f64, mut f: impl FnMut(Vec2, f32, f32)) {
     let k = kind(stage);
+    if k.per_cell == 0 {
+        return;
+    }
     let t = time as f32;
     let (cx0, cy0) = (((view.x - CELL) / CELL).floor() as i32, ((view.y - CELL) / CELL).floor() as i32);
     let (cx1, cy1) = (((view.x + view.w + CELL) / CELL).floor() as i32, ((view.y + view.h + CELL) / CELL).floor() as i32);
@@ -95,32 +103,69 @@ pub fn lights(stage: StageId, view: Rect, time: f64, l: &mut crate::light::Light
     });
 }
 
-/// The motes themselves (after the light map: they glow at full colour).
+/// The motes themselves (after the light map: glowing ones keep their full colour).
 pub fn draw(stage: StageId, view: Rect, time: f64, vfx: &Vfx) {
     let k = kind(stage);
+    let each = |p: Vec2, size: f32, g: f32| {
+        let c = Color::new(k.color.r, k.color.g, k.color.b, if k.glows { 0.1 + 0.9 * g } else { 0.75 });
+        vfx.draw(k.sprite, p, size * if k.glows { 1.6 + g } else { 2.0 }, 0.0, c);
+        if k.core {
+            vfx.draw("glow", p, size * 0.5, 0.0, Color::new(1.0, 1.0, 0.9, 0.7 * g));
+        }
+    };
+    if k.glows {
+        vfx.additive(|| motes(stage, view, time, each));
+    } else {
+        motes(stage, view, time, each);
+    }
+}
+
+/// Rain on the ground: small rings opening where drops land, each a short life in its own
+/// cell and slot (stateless). Drawn before the light map, so lamps light them.
+fn ripples(view: Rect, time: f64, vfx: &Vfx) {
+    const CELL: f32 = 48.0;
+    const LIFE: f32 = 0.55;
+    let t = time as f32;
+    let (cx0, cy0) = ((view.x / CELL).floor() as i32, (view.y / CELL).floor() as i32);
+    let (cx1, cy1) = (((view.x + view.w) / CELL).ceil() as i32, ((view.y + view.h) / CELL).ceil() as i32);
     vfx.additive(|| {
-        motes(stage, view, time, |p, size, g| {
-            let c = Color::new(k.color.r, k.color.g, k.color.b, 0.15 + 0.85 * g);
-            vfx.draw(k.sprite, p, size * (1.6 + g), 0.0, c);
-            vfx.draw("glow", p, size * 0.6, 0.0, Color::new(1.0, 1.0, 1.0, 0.6 * g));
-        });
+        for cy in cy0..=cy1 {
+            for cx in cx0..=cx1 {
+                for i in 0..2u32 {
+                    let h = hash(cx, cy, 0x7A1 + i);
+                    let period = 0.9 + unit(h) * 0.9;
+                    let ph = t / period + unit(h >> 7);
+                    let age = ph.fract() * period;
+                    if age > LIFE {
+                        continue;
+                    }
+                    // Each landing elsewhere in the cell.
+                    let n = ph.floor() as i32;
+                    let hp = hash(cx * 31 + n, cy * 17 - n, 0x55 + i);
+                    let p = vec2((cx as f32 + unit(hp)) * CELL, (cy as f32 + unit(hp >> 9)) * CELL);
+                    let k = age / LIFE;
+                    let r = 1.5 + k * 6.0;
+                    vfx.draw_wh("ring", p, vec2(r * 2.0, r * 1.1), 0.0, Color::new(0.55, 0.65, 0.8, 0.22 * (1.0 - k) * (1.0 - k)));
+                }
+            }
+        }
     });
 }
 
 /// Each world's ground mist: colour (alpha = density) and drift (world units/s).
 fn mist(stage: StageId) -> (Color, Vec2) {
     match stage {
-        StageId::ShrineValley => (Color::new(0.72, 0.80, 0.92, 0.16), vec2(5.0, 1.5)),
-        StageId::EmberLeaf => (Color::new(0.55, 0.45, 0.42, 0.14), vec2(3.0, -4.0)),
-        StageId::PaleCitadel => (Color::new(0.85, 0.90, 1.0, 0.18), vec2(-6.0, 2.0)),
-        StageId::Shotengai => (Color::new(0.55, 0.42, 0.70, 0.08), vec2(2.0, 1.0)),
-        StageId::Rainward => (Color::new(0.62, 0.74, 0.88, 0.22), vec2(-7.0, 3.0)),
-        StageId::Shatterline => (Color::new(0.55, 0.42, 0.85, 0.12), vec2(0.0, -3.0)),
+        StageId::ShrineValley => (Color::new(0.62, 0.70, 0.85, 0.10), vec2(5.0, 1.5)),
+        StageId::EmberLeaf => (Color::new(0.45, 0.38, 0.36, 0.09), vec2(3.0, -4.0)),
+        StageId::PaleCitadel => (Color::new(0.70, 0.78, 0.92, 0.07), vec2(-6.0, 2.0)),
+        StageId::Shotengai => (Color::new(0.45, 0.36, 0.60, 0.05), vec2(2.0, 1.0)),
+        StageId::Rainward => (Color::new(0.50, 0.60, 0.75, 0.12), vec2(-7.0, 3.0)),
+        StageId::Shatterline => (Color::new(0.45, 0.35, 0.70, 0.07), vec2(0.0, -3.0)),
     }
 }
 
 /// World units one mist tile covers.
-const MIST_TILE: f32 = 640.0;
+const MIST_TILE: f32 = 900.0;
 
 thread_local! {
     static MIST: std::cell::OnceCell<Texture2D> = const { std::cell::OnceCell::new() };
@@ -148,7 +193,7 @@ fn mist_texture() -> Texture2D {
                     let (u, v) = (x as f32 / N as f32, y as f32 / N as f32);
                     let f = noise(1, 3, u, v) * 0.5 + noise(2, 6, u, v) * 0.3 + noise(3, 12, u, v) * 0.2;
                     // Banks of mist with clear gaps between.
-                    let k = ((f - 0.38) / 0.4).clamp(0.0, 1.0);
+                    let k = ((f - 0.25) / 0.6).clamp(0.0, 1.0);
                     px.extend_from_slice(&[255, 255, 255, (k * k * (3.0 - 2.0 * k) * 255.0) as u8]);
                 }
             }
@@ -160,9 +205,12 @@ fn mist_texture() -> Texture2D {
     })
 }
 
-/// Low mist drifting over the ground in two layers at different speeds (parallax), drawn
-/// before the light map so lamps light it and it glows around them.
-pub fn draw_mist(stage: StageId, view: Rect, time: f64) {
+/// The ground's weather, drawn before the light map so lamps light it: rain ripples
+/// (Rainward), then low mist drifting in two layers at different speeds (parallax).
+pub fn draw_ground_fx(stage: StageId, view: Rect, time: f64, vfx: &Vfx) {
+    if stage == StageId::Rainward {
+        ripples(view, time, vfx);
+    }
     let (c, drift) = mist(stage);
     let tex = mist_texture();
     let t = time as f32;

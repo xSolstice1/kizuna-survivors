@@ -29,7 +29,7 @@ const TIP: f32 = 0.3;
 const MOON: f32 = 0.8;
 
 /// Most shadows one caster throws: the moon's and those of the strongest lamps near it.
-pub const MAX_CAST: usize = 4;
+pub const MAX_CAST: usize = 3;
 
 /// Cast shadows for one draw pass, flushed (one mesh per texture) before the sprites. Every
 /// caster gets the same treatment (`Lights::casts_at`): the moon's shadow, plus one away from
@@ -66,28 +66,47 @@ impl<'a> Shadows<'a> {
         self.quads.push((tex, [top - half, top + half, feet + half, feet - half], flip, alpha));
     }
 
-    pub fn flush(&mut self) {
-        self.quads.sort_by_key(|q| q.0 as *const Texture2D as usize);
-        let mut i = 0;
-        while i < self.quads.len() {
-            let tex = self.quads[i].0;
-            let mut vertices = Vec::new();
-            let mut indices = Vec::new();
-            while i < self.quads.len() && std::ptr::eq(self.quads[i].0, tex) && vertices.len() < 60000 {
-                let (_, c, flip, a) = self.quads[i];
-                let (u0, u1) = if flip { (1.0, 0.0) } else { (0.0, 1.0) };
-                let b = vertices.len() as u16;
-                for (p, (u, v)) in c.iter().zip([(u0, 0.0), (u1, 0.0), (u1, 1.0), (u0, 1.0)]) {
-                    let col = Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA * a * (TIP + (1.0 - TIP) * v));
-                    vertices.push(Vertex::new(p.x, p.y, 0.0, u, v, col));
-                }
-                indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
-                i += 1;
-            }
-            draw_mesh(&Mesh { vertices, indices, texture: Some(tex.clone()) });
+    /// Draws the batch into the shadow layer (`Lights::shadow_layer`), so where shadows
+    /// overlap they merge into one instead of stacking darker. `cam` is the camera drawn with.
+    pub fn flush(&mut self, cam: &Camera2D) {
+        if self.quads.is_empty() {
+            return;
         }
-        self.quads.clear();
+        self.quads.sort_by_key(|q| q.0 as *const Texture2D as usize);
+        let quads = std::mem::take(&mut self.quads);
+        let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+        for p in quads.iter().flat_map(|q| q.1) {
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        let bounds = Rect::new(lo.x, lo.y, hi.x - lo.x, hi.y - lo.y);
+        LIGHTS.with(|l| {
+            l.borrow_mut().shadow_layer(cam, bounds, &|| {
+                let mut i = 0;
+                while i < quads.len() {
+                    let tex = quads[i].0;
+                    let mut vertices = Vec::new();
+                    let mut indices = Vec::new();
+                    while i < quads.len() && std::ptr::eq(quads[i].0, tex) && vertices.len() < 60000 {
+                        let (_, c, flip, a) = quads[i];
+                        let (u0, u1) = if flip { (1.0, 0.0) } else { (0.0, 1.0) };
+                        let b = vertices.len() as u16;
+                        for (p, (u, v)) in c.iter().zip([(u0, 0.0), (u1, 0.0), (u1, 1.0), (u0, 1.0)]) {
+                            vertices.push(Vertex::new(p.x, p.y, 0.0, u, v, strength(a * (TIP + (1.0 - TIP) * v))));
+                        }
+                        indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+                        i += 1;
+                    }
+                    draw_mesh(&Mesh { vertices, indices, texture: Some(tex.clone()) });
+                }
+            })
+        });
     }
+}
+
+/// A shadow strength (0..1) as a vertex colour for the shadow layer (it's added up in red).
+fn strength(s: f32) -> Color {
+    Color::new(s.clamp(0.0, 1.0), 0.0, 0.0, 1.0)
 }
 
 /// The night's base light per world (light-map units: 0.5 = the art as painted).
@@ -100,6 +119,25 @@ pub fn ambient(stage: StageId) -> Color {
         StageId::Rainward => Color::new(0.31, 0.35, 0.44, 1.0),
         StageId::Shatterline => Color::new(0.33, 0.31, 0.45, 1.0),
     }
+}
+
+/// The light map's brightest per world (light-map units: 0.7 = 1.4x the art). Bright
+/// worlds (snow) take less before they wash out.
+fn cap(stage: StageId) -> f32 {
+    match stage {
+        StageId::PaleCitadel => 0.58,
+        _ => 0.68,
+    }
+}
+
+/// What `cam` sees, as a world rect, and whether a render target drawn over it must be
+/// flipped (`flip_y`): a target's texture comes out upside down when drawn by a screen camera,
+/// the right way up by a render target's camera.
+fn view_of(cam: &Camera2D) -> (Rect, bool) {
+    let inv = cam.matrix().inverse();
+    let a = inv.project_point3(vec3(-1.0, -1.0, 0.0));
+    let b = inv.project_point3(vec3(1.0, 1.0, 0.0));
+    (Rect::new(a.x.min(b.x), a.y.min(b.y), (a.x - b.x).abs(), (a.y - b.y).abs()), a.y > b.y)
 }
 
 /// A light: where, how far it reaches (world units) and its colour added at the centre.
@@ -148,7 +186,7 @@ fn casts_into(lamps: &[Lamp], feet: Vec2, own: f32, out: &mut [(Vec2, f32); MAX_
             continue;
         }
         total += a;
-        let len = (dist / LAMP_HEIGHT).clamp(0.25, 1.25);
+        let len = (dist / LAMP_HEIGHT).clamp(0.3, 1.0);
         // Fade in as the caster leaves the lamp's base (directly under it there's no shadow).
         let a = a * ((dist - own.max(4.0)) / 10.0).min(1.0);
         let skew = d / dist * len;
@@ -173,12 +211,19 @@ pub struct Lights {
     /// The hero's light tint, eased over time (attacks flashing by don't make it flicker).
     hero_tint: Option<Color>,
     multiply: Option<Material>,
+    /// The shadow layer: a half-resolution target where a batch's shadows add up, and the
+    /// materials that add them and lay the (capped, softened) result on the world.
+    shadow_rt: Option<(RenderTarget, u32, u32)>,
+    shadow_add: Option<Material>,
+    shadow_lay: Option<Material>,
+    /// The light map's brightest (per world: snow can't take as much as a dark street).
+    cap: f32,
     pub list: Vec<Light>,
     ambient: Color,
 }
 
 thread_local! {
-    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, lamps: Vec::new(), hero_tint: None, multiply: None, list: Vec::new(), ambient: WHITE });
+    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, lamps: Vec::new(), hero_tint: None, multiply: None, shadow_rt: None, shadow_add: None, shadow_lay: None, cap: 0.7, list: Vec::new(), ambient: WHITE });
 }
 
 const MUL_VERTEX: &str = r#"#version 100
@@ -200,9 +245,45 @@ precision lowp float;
 varying lowp vec4 color;
 varying lowp vec2 uv;
 uniform sampler2D Texture;
+uniform lowp float Cap;
 void main() {
-    // At most 1.4x brighter: pools glow, crowds of lights never wash the scene out.
-    gl_FragColor = vec4(min(texture2D(Texture, uv).rgb, vec3(0.7)), 1.0);
+    // At most 2 x Cap brighter: pools glow, crowds of lights never wash the scene out. The
+    // approach to the cap is rolled off, so a pool's bright centre fades into it, not clips.
+    vec3 c = texture2D(Texture, uv).rgb;
+    vec3 knee = vec3(Cap - 0.12);
+    vec3 over = max(c - knee, 0.0);
+    c = min(c, knee) + 0.12 * over / (over + 0.12);
+    gl_FragColor = vec4(c, 1.0);
+}
+"#;
+
+/// Adds each shadow's strength (vertex red) where its sprite is solid.
+const SHADOW_ADD: &str = r#"#version 100
+precision mediump float;
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+void main() {
+    gl_FragColor = vec4(texture2D(Texture, uv).a * color.r, 0.0, 0.0, 1.0);
+}
+"#;
+
+/// Lays the shadow layer on the world: overlaps merge (capped at one full shadow), and a
+/// small blur gives every edge a soft penumbra.
+const SHADOW_LAY: &str = r#"#version 100
+precision mediump float;
+varying lowp vec4 color;
+varying lowp vec2 uv;
+uniform sampler2D Texture;
+uniform vec2 Texel;
+uniform float Alpha;
+void main() {
+    // Four bilinear taps half a texel off each diagonal: a 4x4 texel blur for four reads.
+    vec2 o = Texel * 0.75;
+    float s = 0.25 * (texture2D(Texture, uv + o).r + texture2D(Texture, uv - o).r
+        + texture2D(Texture, uv + vec2(o.x, -o.y)).r + texture2D(Texture, uv + vec2(-o.x, o.y)).r);
+    s = 1.0 - exp(-2.2 * s);
+    gl_FragColor = vec4(0.0, 0.0, 0.0, min(s, 0.92) * Alpha);
 }
 "#;
 
@@ -215,6 +296,7 @@ fn falloff(d: f32, r: f32) -> f32 {
 impl Lights {
     /// Starts a frame's lights over the stage's ambient.
     pub fn begin(&mut self, stage: StageId) {
+        self.cap = cap(stage);
         self.lamps.clear();
         for l in self.list.iter().filter(|l| l.casts) {
             self.lamps.push(Lamp { ground: l.ground, radius: l.radius, strength: (l.color.r + l.color.g + l.color.b) * LAMP_SHADOW });
@@ -304,13 +386,79 @@ impl Lights {
                 let height = ABOVE - v * BOX;
                 // Fade towards the tip (the box's top, v = 0, lies furthest from the feet).
                 let tip = (height / ABOVE).clamp(0.0, 1.0);
-                let col = Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA * alpha * a * (1.0 - (1.0 - TIP) * tip));
                 let q = feet + vec2((u - 0.5) * BOX, 0.0) + skew * height;
-                vertices.push(Vertex::new(q.x, q.y, 0.0, u, 1.0 - v, col));
+                vertices.push(Vertex::new(q.x, q.y, 0.0, u, 1.0 - v, strength(alpha * a * (1.0 - (1.0 - TIP) * tip))));
             }
             indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
         }
-        draw_mesh(&Mesh { vertices, indices, texture: Some(rt.texture.clone()) });
+        let tex = rt.texture.clone();
+        let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+        for v in &vertices {
+            lo = lo.min(v.position.truncate());
+            hi = hi.max(v.position.truncate());
+        }
+        self.shadow_layer(cam, Rect::new(lo.x, lo.y, hi.x - lo.x, hi.y - lo.y), &|| draw_mesh(&Mesh { vertices: vertices.clone(), indices: indices.clone(), texture: Some(tex.clone()) }));
+    }
+
+    /// Draws one batch of shadows (`draw`, in world units, with vertex red = strength) into
+    /// the shadow layer, then lays it on what `cam` draws to: overlapping shadows merge into
+    /// one, and edges soften. One call per batch (props, the crowd, the hero).
+    ///
+    /// `bounds` (world units) holds everything `draw` draws: only that much of the layer is
+    /// laid on the world (a prop's or the hero's shadows cover a sliver of the screen).
+    pub fn shadow_layer(&mut self, cam: &Camera2D, bounds: Rect, draw: &dyn Fn()) {
+        // Half the world target's resolution (CSS pixels, like it): soft, and cheap.
+        let (w, h) = ((screen_width() / 2.0).max(16.0) as u32, (screen_height() / 2.0).max(16.0) as u32);
+        if self.shadow_rt.as_ref().is_none_or(|(_, rw, rh)| *rw != w || *rh != h) {
+            let rt = render_target(w, h);
+            rt.texture.set_filter(FilterMode::Linear);
+            self.shadow_rt = Some((rt, w, h));
+        }
+        if self.shadow_add.is_none() {
+            let blend = |src, dst| PipelineParams {
+                color_blend: Some(BlendState::new(Equation::Add, src, dst)),
+                alpha_blend: Some(BlendState::new(Equation::Add, BlendFactor::Zero, BlendFactor::One)),
+                ..Default::default()
+            };
+            self.shadow_add = load_material(
+                ShaderSource::Glsl { vertex: MUL_VERTEX, fragment: SHADOW_ADD },
+                MaterialParams { pipeline_params: blend(BlendFactor::One, BlendFactor::One), ..Default::default() },
+            )
+            .map_err(|e| { warn!("shadow add material: {e:?}"); })
+            .ok();
+            self.shadow_lay = load_material(
+                ShaderSource::Glsl { vertex: MUL_VERTEX, fragment: SHADOW_LAY },
+                MaterialParams {
+                    pipeline_params: blend(BlendFactor::Value(BlendValue::SourceAlpha), BlendFactor::OneMinusValue(BlendValue::SourceAlpha)),
+                    uniforms: vec![UniformDesc::new("Texel", UniformType::Float2), UniformDesc::new("Alpha", UniformType::Float1)],
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| { warn!("shadow lay material: {e:?}"); })
+            .ok();
+        }
+        let (Some((rt, _, _)), Some(add), Some(lay)) = (self.shadow_rt.as_ref(), self.shadow_add.as_ref(), self.shadow_lay.as_ref()) else { return };
+        let rt = rt.clone();
+        let sc = Camera2D { target: cam.target, zoom: cam.zoom, offset: cam.offset, rotation: cam.rotation, render_target: Some(rt.clone()), viewport: None };
+        set_camera(&sc);
+        clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
+        gl_use_material(add);
+        draw();
+        gl_use_default_material();
+        set_camera(cam);
+        let (r, flip) = view_of(cam);
+        // The part of the view the shadows cover (a little more, for the blur), in texels;
+        // rows count from the texture's top, which is the view's bottom when it's flipped.
+        let pad = r.w / w as f32 * 3.0;
+        let Some(b) = Rect::new(bounds.x - pad, bounds.y - pad, bounds.w + pad * 2.0, bounds.h + pad * 2.0).intersect(r) else { return };
+        let (sx, sy) = (w as f32 / r.w, h as f32 / r.h);
+        let row = if flip { r.y + r.h - (b.y + b.h) } else { b.y - r.y };
+        let src = Rect::new((b.x - r.x) * sx, row * sy, b.w * sx, b.h * sy);
+        lay.set_uniform("Texel", vec2(1.0 / w as f32, 1.0 / h as f32));
+        lay.set_uniform("Alpha", SHADOW_ALPHA);
+        gl_use_material(lay);
+        draw_texture_ex(&rt.texture, b.x, b.y, WHITE, DrawTextureParams { dest_size: Some(vec2(b.w, b.h)), source: Some(src), flip_y: flip, ..Default::default() });
+        gl_use_default_material();
     }
 
     /// Renders the light map over `view` (world units) with `cam`, then multiplies it onto
@@ -326,6 +474,7 @@ impl Lights {
             self.multiply = load_material(
                 ShaderSource::Glsl { vertex: MUL_VERTEX, fragment: MUL_FRAGMENT },
                 MaterialParams {
+                    uniforms: vec![UniformDesc::new("Cap", UniformType::Float1)],
                     pipeline_params: PipelineParams {
                         // dst * src + src * dst: the world times twice the light.
                         color_blend: Some(BlendState::new(Equation::Add, BlendFactor::Value(BlendValue::DestinationColor), BlendFactor::Value(BlendValue::SourceColor))),
@@ -356,16 +505,14 @@ impl Lights {
             }
         });
         set_camera(cam);
-        // Exactly what the camera sees (its clip-space corners in the world), so the map
-        // covers the screen edge to edge whatever the zoom, shake or target size.
-        let inv = cam.matrix().inverse();
-        let a = inv.project_point3(vec3(-1.0, -1.0, 0.0));
-        let b = inv.project_point3(vec3(1.0, 1.0, 0.0));
-        let (x0, x1, y0, y1) = (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
-        let flip = a.y > b.y;
+        // Exactly what the camera sees, so the map covers the screen edge to edge whatever
+        // the zoom, shake or target size.
+        let (r, flip) = view_of(cam);
+        let (x0, x1, y0, y1) = (r.x, r.x + r.w, r.y, r.y + r.h);
         let _ = view;
+        mul.set_uniform("Cap", self.cap);
         gl_use_material(mul);
-        draw_texture_ex(&rt.texture, x0, y0, WHITE, DrawTextureParams { dest_size: Some(vec2(x1 - x0, y1 - y0)), flip_y: !flip, ..Default::default() });
+        draw_texture_ex(&rt.texture, x0, y0, WHITE, DrawTextureParams { dest_size: Some(vec2(x1 - x0, y1 - y0)), flip_y: flip, ..Default::default() });
         gl_use_default_material();
         // Bloom: bright lights bleed a soft halo over whatever stands in front of them, as
         // they would through a lens, layered tight and wide.

@@ -23,8 +23,14 @@ const fn glow(radius: f32, r: f32, g: f32, b: f32, lift: f32) -> Glow {
     Glow { radius, color: Color { r, g, b, a: 1.0 }, lift }
 }
 
-/// The hero's own small light, so they're never lost in the dark (casts no shadow).
-pub const HERO: Glow = glow(170.0, 0.16, 0.15, 0.13, 10.0);
+/// The hero's own soft fill light, so they're never lost in the dark (casts no shadow, no
+/// bloom). Gentler on bright ground (snow), which it would wash out.
+pub fn hero(stage: sim::campaign::StageId) -> Glow {
+    match stage {
+        sim::campaign::StageId::PaleCitadel => glow(150.0, 0.05, 0.05, 0.05, 10.0),
+        _ => glow(160.0, 0.11, 0.10, 0.09, 10.0),
+    }
+}
 
 /// A player attack's light (its trail through the dark), or none.
 pub fn projectile(k: ProjKind) -> Option<Glow> {

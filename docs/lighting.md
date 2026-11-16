@@ -12,8 +12,12 @@ Every world is a moonlit night. Code: `crates/client/src/light/` (`mod.rs` the e
    (`casts_into`): its own texture tinted black and laid on the ground from its feet, once
    along `light::SKEW` (away from the moon, upper left; fainter under a strong lamp, which
    outshines it) and once away from each steady lamp near it, longer the further it stands
-   from the lamp and fading smoothly at the lamp's reach (no popping). A lamp doesn't shadow
-   the prop it sits on. Shadows are darkest at the feet and fade towards the tip. Props and
+   from the lamp and fading smoothly at the lamp's reach (no popping); the two strongest lamps
+   at most. A lamp doesn't shadow the prop it sits on. Shadows are darkest at the feet and
+   fade towards the tip. Each batch (all props, the whole crowd, the hero) is drawn into the
+   **shadow layer** (`Lights::shadow_layer`, half resolution) and laid on the world in one go:
+   overlapping shadows merge into one instead of stacking into dark blocks, and a small blur
+   softens every edge. Props and
    the terrain add their lights as they draw. Mist drifts over the ground (`ambient::draw_mist`).
 3. `sources::gather` adds everything else that glows near the view, then `Lights::apply`
    renders the **light map** (quarter resolution: ambient plus soft additive glows) and
@@ -24,6 +28,10 @@ Every world is a moonlit night. Code: `crates/client/src/light/` (`mod.rs` the e
    as everything else (`Lights::casts_at`) from the live, posed rig.
 5. The terrain shader shades for the same moon: higher ground casts a soft shadow onto lower
    ground away from it, and edges facing it catch light (`MOON` in `terrain_bake.rs`).
+
+Render targets (the light map, the shadow layer) are laid on the world with `view_of(cam)`:
+the exact view, and whether to flip. Check orientation with an asymmetric light (one placed
+above the hero must light above them); a row of lamps across the middle hides a flip.
 
 ## Adding something
 

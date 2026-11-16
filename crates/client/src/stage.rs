@@ -281,6 +281,8 @@ impl StageArt {
         let margin = 40.0;
         let (cx0, cy0) = (((x0 - margin) / CHUNK).floor() as i32, ((y0 - margin) / CHUNK).floor() as i32);
         let (cx1, cy1) = (((x0 + sw + margin) / CHUNK).floor() as i32, ((y0 + sh + margin) / CHUNK).floor() as i32);
+        let mut cast = crate::light::Shadows::new();
+        let mut drawn = Vec::new();
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
                 let (props, n) = terrain.chunk_props(cx, cy);
@@ -315,15 +317,17 @@ impl StageArt {
                         crate::light::LIGHTS.with(|l| crate::light::sources::emit(&mut l.borrow_mut(), vec2(px, py), crate::light::sources::Glow { lift: lift * 0.5, ..crate::light::sources::prop(g, flicker) }));
                     }
                     let n = crate::sprites::nat(t);
-                    // The moon's shadow, then a contact shadow under the solid footprint.
-                    let mut cast = crate::light::Shadows::new();
                     cast.push(t, vec2(px, py + 6.0), n.x, n.y, false, 1.0);
-                    cast.flush();
-                    let (min, max) = prop.footprint();
-                    crate::vfx::shape::ellipse((min.x + max.x) / 2.0, max.y - 0.5, (max.x - min.x) / 2.0 + 2.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
-                    draw_texture_ex(t, (px - n.x / 2.0).round(), (py - n.y).round() + 6.0, WHITE, DrawTextureParams { dest_size: Some(n), ..Default::default() });
+                    drawn.push((t, px, py, n, prop.footprint()));
                 }
             }
+        }
+        // All their shadows at once (they merge where they meet), then a contact shadow under
+        // each solid footprint and the props themselves.
+        cast.flush(cam);
+        for (t, px, py, n, (min, max)) in drawn {
+            crate::vfx::shape::ellipse((min.x + max.x) / 2.0, max.y - 0.5, (max.x - min.x) / 2.0 + 2.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
+            draw_texture_ex(t, (px - n.x / 2.0).round(), (py - n.y).round() + 6.0, WHITE, DrawTextureParams { dest_size: Some(n), ..Default::default() });
         }
     }
 
@@ -347,7 +351,7 @@ impl StageArt {
         let d = DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() };
         draw_texture_ex(&self.vignette, 0.0, 0.0, WHITE, d.clone());
         // A second, fainter pass: deeper corners, the eye drawn to the middle.
-        draw_texture_ex(&self.vignette, 0.0, 0.0, Color::new(1.0, 1.0, 1.0, 0.45), d);
+        draw_texture_ex(&self.vignette, 0.0, 0.0, Color::new(1.0, 1.0, 1.0, 0.25), d);
     }
 
     /// The world's foreground branches (screen space), `cam` the camera's world position.
