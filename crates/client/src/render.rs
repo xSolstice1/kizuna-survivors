@@ -1539,12 +1539,11 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         l.begin(world.cfg.stage);
         // The hero carries a little light of their own, so they're never lost in the dark.
         let h = crate::light::sources::HERO;
-        l.add_own(vec2(world.player.pos.x, world.player.pos.y - h.lift), h.radius, h.color);
+        l.add_fill(vec2(world.player.pos.x, world.player.pos.y - h.lift), h.radius, h.color);
     });
-    stage.draw_ground(world.cfg.stage, &world.terrain, cam, time);
     let p = world.player.pos;
     let view = view_rect(cam);
-    stage.draw_grass(world.cfg.stage, &world.terrain, view, vec2(p.x, p.y + 6.0), time);
+    stage.draw_ground(world.cfg.stage, &world.terrain, cam, vec2(p.x, p.y + 6.0), time);
 
     // The rigged hero, drawn at the end of this fn (after the world target), at full resolution.
     let mut hires_player: Option<(std::rc::Rc<crate::rig::RigDef>, Vec2, bool, Color)> = None;
@@ -1753,6 +1752,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     for (x, top, rarity, alpha) in cues {
         draw_rarity_cue(x, top, rarity, alpha);
     }
+    // Mist over the ground and the crowd, lit by the light map like them.
+    if world.terrain.on {
+        crate::ambient::draw_mist(world.cfg.stage, view, time);
+    }
     // Night light: everything drawn so far (ground, props, enemies) is lit by the light map;
     // the hero, attacks and effects drawn after it keep their full colour and read clearly.
     crate::light::LIGHTS.with(|l| {
@@ -1922,20 +1925,17 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             draw_texture_ex(tex, x + dx, y + dy, glow, params.clone());
         }
     }
-    // The hero's shadow: the posed rig (or the form's sprite), cast away from the lights nearby.
-    crate::light::LIGHTS.with(|l| {
-        let mut l = l.borrow_mut();
-        let feet = vec2(p.x, p.y + 6.0);
-        let skew = l.eased_skew(feet, get_frame_time().min(0.1));
-        match &rig {
-            Some(r) => l.rig_shadow(r, &fx.hero_rig, feet, pl.facing.x < 0.0, skew, 1.0, cam),
-            None => {
-                let mut cast = crate::light::Shadows::new();
-                cast.push_skew(tex, feet, size.x, size.y, pl.facing.x < 0.0, 1.0, skew);
-                cast.flush();
-            }
+    // The hero's shadows: the posed rig (or the form's sprite), the moon's and one away from
+    // each lamp nearby, like everything else's.
+    let feet = vec2(p.x, p.y + 6.0);
+    match &rig {
+        Some(r) => crate::light::LIGHTS.with(|l| l.borrow_mut().rig_shadow(r, &fx.hero_rig, feet, pl.facing.x < 0.0, 1.0, cam)),
+        None => {
+            let mut cast = crate::light::Shadows::new();
+            cast.push(tex, feet, size.x, size.y, pl.facing.x < 0.0, 1.0);
+            cast.flush();
         }
-    });
+    }
     let shun = world.cfg.hero == HeroId::Shun;
     let flip = pl.facing.x < 0.0;
     // Shun's blade sits behind him at rest; mid-swing it's drawn in front.

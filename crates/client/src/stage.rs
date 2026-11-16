@@ -239,7 +239,7 @@ impl StageArt {
     }
 
     /// Ground tiles, props and their glows (everything under the characters).
-    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, time: f64) {
+    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, hero: Vec2, time: f64) {
         let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
         let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
         if terrain.on {
@@ -273,6 +273,9 @@ impl StageArt {
                 draw_texture_ex(&self.glow, d.x - r, d.y - r, Color::new(g.r, g.g, g.b, (g.a * 3.0 * pulse).min(1.0)), DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
             }
         }
+
+        // Grass under the props, so their shadows fall across it.
+        self.draw_grass(stage, terrain, Rect::new(x0, y0, sw, sh), hero, time);
 
         // Props: up to two per chunk, never on the path (layout from the sim).
         let margin = 40.0;
@@ -309,7 +312,7 @@ impl StageArt {
                         let lift = if prop.kind == PropKind::A { crate::sprites::nat(t).y - 8.0 } else { 6.0 };
                         draw_texture_ex(&self.glow, px - r, py - r - lift, g, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
                         // And a real light: a warm pool on the ground and on whoever passes.
-                        crate::light::LIGHTS.with(|l| crate::light::sources::emit(&mut l.borrow_mut(), vec2(px, py - lift * 0.5), crate::light::sources::prop(g, flicker)));
+                        crate::light::LIGHTS.with(|l| crate::light::sources::emit(&mut l.borrow_mut(), vec2(px, py), crate::light::sources::Glow { lift: lift * 0.5, ..crate::light::sources::prop(g, flicker) }));
                     }
                     let n = crate::sprites::nat(t);
                     // The moon's shadow, then a contact shadow under the solid footprint.

@@ -1,5 +1,5 @@
-//! Light and shadow for the world: one moon (high in the upper left) casts every shadow the
-//! same way, and a light map darkens the night while lanterns, fire, spells and pickups throw
+//! Light and shadow for the world: the moon (high in the upper left) casts every shadow the
+//! same way, each steady lamp casts its own away from it, and a light map darkens the night while lanterns, fire, spells and pickups throw
 //! warm pools of light.
 //!
 //! - `Shadows`: each sprite's own texture, tinted black and slanted away from the moon onto the
@@ -19,27 +19,42 @@ use sim::campaign::StageId;
 
 /// Where the top of a sprite's shadow falls, per unit of sprite height, from its feet: down and
 /// to the right, away from a moon in the upper left, flattened onto the ground.
-pub const SKEW: Vec2 = Vec2::new(0.42, 0.21);
-/// How dark a full shadow is.
-pub const SHADOW_ALPHA: f32 = 0.30;
+pub const SKEW: Vec2 = Vec2::new(0.36, 0.30);
+/// How dark a full shadow is, at the feet.
+pub const SHADOW_ALPHA: f32 = 0.5;
+/// How much of that is left at a shadow's far tip: shadows harden at contact and soften and
+/// fade with distance, as real ones do.
+const TIP: f32 = 0.3;
+/// The moon's share: moonlight is soft and dim, so its shadow is lighter than a lamp's.
+const MOON: f32 = 0.8;
 
-/// Cast shadows for one draw pass, flushed (one mesh per texture) before the sprites.
+/// Most shadows one caster throws: the moon's and those of the strongest lamps near it.
+pub const MAX_CAST: usize = 4;
+
+/// Cast shadows for one draw pass, flushed (one mesh per texture) before the sprites. Every
+/// caster gets the same treatment (`Lights::casts_at`): the moon's shadow, plus one away from
+/// each steady light near it.
 pub struct Shadows<'a> {
     quads: Vec<(&'a Texture2D, [Vec2; 4], bool, f32)>,
+    lamps: Vec<Lamp>,
 }
 
 impl<'a> Shadows<'a> {
     pub fn new() -> Self {
-        Shadows { quads: Vec::new() }
+        Shadows { quads: Vec::new(), lamps: LIGHTS.with(|l| l.borrow().lamps.clone()) }
     }
 
     /// A `w` x `h` sprite standing at `feet` (the ground point under it), mirrored if `flip`.
     /// `alpha` scales the darkness (a sprite floating off the ground casts a fainter one).
     pub fn push(&mut self, tex: &'a Texture2D, feet: Vec2, w: f32, h: f32, flip: bool, alpha: f32) {
-        self.push_skew(tex, feet, w, h, flip, alpha, SKEW);
+        let mut casts = [(SKEW, 0.0); MAX_CAST];
+        let n = casts_into(&self.lamps, feet, w * 0.5, &mut casts);
+        for &(skew, a) in &casts[..n] {
+            self.push_skew(tex, feet, w, h, flip, alpha * a, skew);
+        }
     }
 
-    /// Like `push`, cast along `skew` (see `Lights::skew_at`) instead of the moon's.
+    /// One shadow of the sprite, cast along `skew` (per unit of height, like `SKEW`).
     #[allow(clippy::too_many_arguments)]
     pub fn push_skew(&mut self, tex: &'a Texture2D, feet: Vec2, w: f32, h: f32, flip: bool, alpha: f32, skew: Vec2) {
         if alpha <= 0.01 {
@@ -61,9 +76,9 @@ impl<'a> Shadows<'a> {
             while i < self.quads.len() && std::ptr::eq(self.quads[i].0, tex) && vertices.len() < 60000 {
                 let (_, c, flip, a) = self.quads[i];
                 let (u0, u1) = if flip { (1.0, 0.0) } else { (0.0, 1.0) };
-                let col = Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA * a);
                 let b = vertices.len() as u16;
                 for (p, (u, v)) in c.iter().zip([(u0, 0.0), (u1, 0.0), (u1, 1.0), (u0, 1.0)]) {
+                    let col = Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA * a * (TIP + (1.0 - TIP) * v));
                     vertices.push(Vertex::new(p.x, p.y, 0.0, u, v, col));
                 }
                 indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
@@ -78,12 +93,12 @@ impl<'a> Shadows<'a> {
 /// The night's base light per world (light-map units: 0.5 = the art as painted).
 pub fn ambient(stage: StageId) -> Color {
     match stage {
-        StageId::ShrineValley => Color::new(0.36, 0.38, 0.47, 1.0),
-        StageId::Shotengai => Color::new(0.38, 0.36, 0.45, 1.0),
-        StageId::EmberLeaf => Color::new(0.40, 0.35, 0.36, 1.0),
-        StageId::PaleCitadel => Color::new(0.40, 0.41, 0.48, 1.0),
-        StageId::Rainward => Color::new(0.35, 0.38, 0.45, 1.0),
-        StageId::Shatterline => Color::new(0.37, 0.35, 0.47, 1.0),
+        StageId::ShrineValley => Color::new(0.32, 0.34, 0.45, 1.0),
+        StageId::Shotengai => Color::new(0.35, 0.33, 0.44, 1.0),
+        StageId::EmberLeaf => Color::new(0.37, 0.32, 0.34, 1.0),
+        StageId::PaleCitadel => Color::new(0.37, 0.38, 0.47, 1.0),
+        StageId::Rainward => Color::new(0.31, 0.35, 0.44, 1.0),
+        StageId::Shatterline => Color::new(0.33, 0.31, 0.45, 1.0),
     }
 }
 
@@ -91,19 +106,71 @@ pub fn ambient(stage: StageId) -> Color {
 #[derive(Clone, Copy)]
 pub struct Light {
     pub pos: Vec2,
+    /// The ground point under it (where its shadows fall away from).
+    pub ground: Vec2,
     pub radius: f32,
     pub color: Color,
-    /// Whether it casts the hero's shadow (not the hero's own light).
+    /// Whether it casts shadows (steady lights; not the hero's own, nor passing ones).
     pub casts: bool,
+    /// Whether it blooms (a visible source; not a soft fill like the hero's own light).
+    pub halo: bool,
+}
+
+/// A steady light as a shadow caster: its ground point, reach and strength.
+#[derive(Clone, Copy)]
+pub struct Lamp {
+    ground: Vec2,
+    radius: f32,
+    strength: f32,
+}
+
+/// How strong a lamp's shadow is at full falloff (its light's r + g + b times this).
+const LAMP_SHADOW: f32 = 3.2;
+/// How high a lamp shines from, for its shadows' length (world units).
+const LAMP_HEIGHT: f32 = 64.0;
+
+/// The shadows cast by something at `feet` (`own` = its half-width: a lamp that close is its
+/// own light and casts none on it) into `out`: the moon's first, then each lamp's, away from it
+/// and longer the further off it stands. Returns how many. Strength fades smoothly to nothing
+/// at a lamp's edge, so walking past one never makes a shadow pop. Under a strong lamp the
+/// moon's shadow fades (the lamp outshines it).
+fn casts_into(lamps: &[Lamp], feet: Vec2, own: f32, out: &mut [(Vec2, f32); MAX_CAST]) -> usize {
+    let mut n = 1;
+    let mut total = 0.0;
+    for l in lamps {
+        let d = feet - l.ground;
+        let dist = d.length();
+        if dist <= own.max(4.0) || dist >= l.radius {
+            continue;
+        }
+        let a = (falloff(dist, l.radius) * l.strength - 0.04).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            continue;
+        }
+        total += a;
+        let len = (dist / LAMP_HEIGHT).clamp(0.25, 1.25);
+        // Fade in as the caster leaves the lamp's base (directly under it there's no shadow).
+        let a = a * ((dist - own.max(4.0)) / 10.0).min(1.0);
+        let skew = d / dist * len;
+        if n < MAX_CAST {
+            out[n] = (skew, a);
+            n += 1;
+        } else if let Some(w) = out[1..].iter_mut().min_by(|x, y| x.1.total_cmp(&y.1)).filter(|w| w.1 < a) {
+            *w = (skew, a);
+        }
+    }
+    out[0] = (SKEW, MOON * (1.0 - 0.6 * total.min(1.0)));
+    n
 }
 
 /// The light map and its materials (one per thread: the game draws on one).
 pub struct Lights {
     rt: Option<(RenderTarget, u32, u32)>,
     silhouette: Option<RenderTarget>,
-    /// The hero's shadow direction, eased towards `skew_at` so it turns, never snaps.
-    hero_skew: Option<Vec2>,
-    /// The hero's light tint, eased like `hero_skew` (attacks flashing by don't make it flicker).
+    /// Last frame's steady lights, as shadow casters (shadows are drawn before this frame's
+    /// lights are all known; a frame late is never seen).
+    lamps: Vec<Lamp>,
+    /// The hero's light tint, eased over time (attacks flashing by don't make it flicker).
     hero_tint: Option<Color>,
     multiply: Option<Material>,
     pub list: Vec<Light>,
@@ -111,7 +178,7 @@ pub struct Lights {
 }
 
 thread_local! {
-    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, hero_skew: None, hero_tint: None, multiply: None, list: Vec::new(), ambient: WHITE });
+    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, lamps: Vec::new(), hero_tint: None, multiply: None, list: Vec::new(), ambient: WHITE });
 }
 
 const MUL_VERTEX: &str = r#"#version 100
@@ -148,13 +215,26 @@ fn falloff(d: f32, r: f32) -> f32 {
 impl Lights {
     /// Starts a frame's lights over the stage's ambient.
     pub fn begin(&mut self, stage: StageId) {
+        self.lamps.clear();
+        for l in self.list.iter().filter(|l| l.casts) {
+            self.lamps.push(Lamp { ground: l.ground, radius: l.radius, strength: (l.color.r + l.color.g + l.color.b) * LAMP_SHADOW });
+        }
         self.list.clear();
         self.ambient = ambient(stage);
     }
 
-    pub fn add(&mut self, pos: Vec2, radius: f32, color: Color) {
+    /// A steady light shining from `lift` above `ground`: it casts shadows.
+    pub fn add(&mut self, ground: Vec2, lift: f32, radius: f32, color: Color) {
         if self.list.len() < 600 {
-            self.list.push(Light { pos, radius, color, casts: true });
+            self.list.push(Light { pos: ground - vec2(0.0, lift), ground, radius, color, casts: true, halo: true });
+        }
+    }
+
+    /// A soft fill light with no visible source: lights things, casts and blooms nothing (the
+    /// hero's own light).
+    pub fn add_fill(&mut self, pos: Vec2, radius: f32, color: Color) {
+        if self.list.len() < 600 {
+            self.list.push(Light { pos, ground: pos, radius, color, casts: false, halo: false });
         }
     }
 
@@ -162,23 +242,8 @@ impl Lights {
     /// and goes (attacks, pickups, gems), which would make shadows swing about.
     pub fn add_own(&mut self, pos: Vec2, radius: f32, color: Color) {
         if self.list.len() < 600 {
-            self.list.push(Light { pos, radius, color, casts: false });
+            self.list.push(Light { pos, ground: pos, radius, color, casts: false, halo: true });
         }
-    }
-
-    /// Which way a shadow falls at `p` (per unit of height, like `SKEW`): away from the
-    /// strongest lights near it, blending back to the moon's direction away from them.
-    pub fn skew_at(&self, p: Vec2) -> Vec2 {
-        let mut v = SKEW.normalize() * 0.6;
-        for l in self.list.iter().filter(|l| l.casts) {
-            let d = p - l.pos;
-            let k = falloff(d.length(), l.radius) * (l.color.r + l.color.g + l.color.b) * 6.0;
-            if k > 0.0 {
-                v += d.normalize_or_zero() * k;
-            }
-        }
-        let dir = v.normalize_or(SKEW.normalize());
-        dir * SKEW.length()
     }
 
     /// The light at `p` as a tint for a sprite drawn after the map (its doubled light, at
@@ -206,21 +271,17 @@ impl Lights {
         c
     }
 
-    /// `skew_at(p)` eased over time (`dt` seconds), for a shadow that follows one character.
-    pub fn eased_skew(&mut self, p: Vec2, dt: f32) -> Vec2 {
-        let target = self.skew_at(p);
-        let s = match self.hero_skew {
-            Some(prev) => prev + (target - prev) * (1.0 - (-dt * 4.0).exp()),
-            None => target,
-        };
-        self.hero_skew = Some(s);
-        s
+    /// The shadows cast at `feet` (see `casts_into`): the moon's, then each nearby lamp's.
+    pub fn casts_at(&self, feet: Vec2, own: f32) -> Vec<(Vec2, f32)> {
+        let mut out = [(SKEW, 0.0); MAX_CAST];
+        let n = casts_into(&self.lamps, feet, own, &mut out);
+        out[..n].to_vec()
     }
 
-    /// The rig's shadow: the posed rig drawn black into a small soft target, then laid on the
-    /// ground along `skew` from its feet, so it walks and sways with the hero.
+    /// The rig's shadows: the posed rig drawn black into a small soft target once, then laid
+    /// on the ground from its feet along each of `casts_at`, so they walk and sway with the hero.
     #[allow(clippy::too_many_arguments)]
-    pub fn rig_shadow(&mut self, def: &crate::rig::RigDef, st: &crate::rig::RigState, feet: Vec2, left: bool, skew: Vec2, alpha: f32, cam: &Camera2D) {
+    pub fn rig_shadow(&mut self, def: &crate::rig::RigDef, st: &crate::rig::RigState, feet: Vec2, left: bool, alpha: f32, cam: &Camera2D) {
         const BOX: f32 = 48.0;
         const ABOVE: f32 = 44.0; // the box reaches this far above the feet, BOX - ABOVE below
         if self.silhouette.is_none() {
@@ -235,16 +296,21 @@ impl Lights {
         clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
         crate::rig::draw(def, st, feet, left, BLACK);
         set_camera(cam);
-        let col = Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA * alpha);
-        let vertices = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
-            .iter()
-            .map(|&(u, v): &(f32, f32)| {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for (skew, a) in self.casts_at(feet, 6.0) {
+            let b = vertices.len() as u16;
+            for &(u, v) in &[(0.0f32, 0.0f32), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
                 let height = ABOVE - v * BOX;
+                // Fade towards the tip (the box's top, v = 0, lies furthest from the feet).
+                let tip = (height / ABOVE).clamp(0.0, 1.0);
+                let col = Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA * alpha * a * (1.0 - (1.0 - TIP) * tip));
                 let q = feet + vec2((u - 0.5) * BOX, 0.0) + skew * height;
-                Vertex::new(q.x, q.y, 0.0, u, 1.0 - v, col)
-            })
-            .collect();
-        draw_mesh(&Mesh { vertices, indices: vec![0, 1, 2, 0, 2, 3], texture: Some(rt.texture.clone()) });
+                vertices.push(Vertex::new(q.x, q.y, 0.0, u, 1.0 - v, col));
+            }
+            indices.extend_from_slice(&[b, b + 1, b + 2, b, b + 2, b + 3]);
+        }
+        draw_mesh(&Mesh { vertices, indices, texture: Some(rt.texture.clone()) });
     }
 
     /// Renders the light map over `view` (world units) with `cam`, then multiplies it onto
@@ -301,5 +367,21 @@ impl Lights {
         gl_use_material(mul);
         draw_texture_ex(&rt.texture, x0, y0, WHITE, DrawTextureParams { dest_size: Some(vec2(x1 - x0, y1 - y0)), flip_y: !flip, ..Default::default() });
         gl_use_default_material();
+        // Bloom: bright lights bleed a soft halo over whatever stands in front of them, as
+        // they would through a lens, layered tight and wide.
+        additive(&|| {
+            for l in lights.iter() {
+                let lum = l.color.r + l.color.g + l.color.b;
+                if !l.halo || lum < 0.2 || l.pos.x < x0 - l.radius || l.pos.x > x1 + l.radius || l.pos.y < y0 - l.radius || l.pos.y > y1 + l.radius {
+                    continue;
+                }
+                let k = ((lum - 0.2) / 0.5).min(1.0);
+                for (reach, gain) in [(0.12, 0.9), (0.32, 0.35)] {
+                    let r = l.radius * reach;
+                    let c = Color::new(l.color.r * gain * k, l.color.g * gain * k, l.color.b * gain * k, 1.0);
+                    draw_texture_ex(glow, l.pos.x - r, l.pos.y - r, c, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
+                }
+            }
+        });
     }
 }

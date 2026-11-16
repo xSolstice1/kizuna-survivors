@@ -76,7 +76,7 @@ pub fn prop(c: Color, flicker: f32) -> Glow {
 
 /// Adds `g` shining from `p` (its ground point): a steady light that shadows fall away from.
 pub fn emit(l: &mut Lights, p: Vec2, g: Glow) {
-    l.add(p - vec2(0.0, g.lift), g.radius, g.color);
+    l.add(p, g.lift, g.radius, g.color);
 }
 
 /// Adds a passing light (moving, or there for a moment): it lights things but steers no
