@@ -140,20 +140,30 @@ def hero_src(hero):
     return ROOT / cut["sources"]["full"]
 
 
+def edit_items(group, idx, t):
+    """[(slot, piece name, description, reference icon)] that an edit puts on."""
+    if group == "x":
+        return [(s, f"{s}_{k}", d, HD / "exotic" / f"{k}.png") for s, (k, d) in G.EXOTIC_WORN.items()]
+    out = []
+    for slot in G.GROUPS[group]:
+        if idx < len(G.BASES[slot]):
+            name, _, desc = G.BASES[slot][idx]
+            k = G.key(name)
+            out.append((slot, f"{slot}_{k}_{t}", f"{desc}, {G.TIERS[t]}", HD / "gear" / slot / f"{k}_{t}.png"))
+    return out
+
+
 def edit_prompt(group, idx, t):
     lines = []
-    for slot in G.GROUPS[group]:
-        bases = G.BASES[slot]
-        if idx >= len(bases):
-            continue
-        name, _, desc = bases[idx]
+    for slot, _, desc, _ in edit_items(group, idx, t):
         where = {"hat": "on the head", "top": "top: replace the upper-body clothes and their sleeves with",
                  "gloves": "hands:", "bottom": "bottom: replace the skirt, shorts or trousers with",
                  "shoes": "feet: replace the shoes and socks with"}[slot]
-        lines.append(f"- {where} {desc}, {G.TIERS[t]}")
-    keep = "the hat, top and gloves" if group == "b" else "the skirt, shorts or trousers, the socks and the shoes"
+        lines.append(f"- {where} {desc} (exactly the {slot} item in reference image {len(lines) + 2})")
+    keep = {"a": "the skirt, shorts or trousers, the socks and the shoes", "b": "the hat, top and gloves", "x": "the hands, the socks and the shoes"}[group]
     return (
-        "Edit this image. It is a game character sprite that will be cut into animation layers, so the pose must not change at all: "
+        "Edit the first image. The other images show the exact items to put on: copy each item's shape, colours, materials, patterns and decoration "
+        "exactly as drawn there, fitted to the character's body. The first image is a game character sprite that will be cut into animation layers, so the pose must not change at all: "
         "the head, both arms, both hands, both legs and both feet stay exactly where they are, at exactly the same angle and size, "
         "with the two legs still clearly separate. Same face exactly, including any blindfold, eye patch or mask worn on the face; same hairstyle and hair colour, same body, same art style, same flat pure green background. "
         "Change ONLY these clothes:\n" + "\n".join(lines) + "\n"
@@ -162,23 +172,36 @@ def edit_prompt(group, idx, t):
     )
 
 
+def icon_on_grey(path):
+    """An icon flattened on neutral grey (a transparent PNG reads as black to the model)."""
+    out = WEAR_RAW / "refs" / (path.parent.name + "_" + path.name)
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        im = Image.open(path).convert("RGBA")
+        bg = Image.new("RGBA", im.size, (128, 128, 128, 255))
+        bg.alpha_composite(im)
+        bg.convert("RGB").save(out)
+    return out
+
+
 def edits(hero, tiers, only):
     WEAR_RAW.mkdir(parents=True, exist_ok=True)
     src = hero_src(hero)
     jobs = []
-    for t in tiers:
-        for g, slots in G.GROUPS.items():
-            for idx in range(max(len(G.BASES[s]) for s in slots)):
-                tag = f"{g}{idx}_{t}"
-                out = WEAR_RAW / f"{hero}_{tag}.png"
-                if (only and tag not in only and f"{g}{idx}" not in only) or out.exists():
-                    continue
-                jobs.append((tag, edit_prompt(g, idx, t), out))
+    tags = [(g, idx, t) for t in tiers for g, slots in G.GROUPS.items() for idx in range(max(len(G.BASES[s]) for s in slots))]
+    tags.append(("x", 0, 2))
+    for g, idx, t in tags:
+        tag = f"{g}{idx}_{t}"
+        out = WEAR_RAW / f"{hero}_{tag}.png"
+        if (only and tag not in only and f"{g}{idx}" not in only) or out.exists():
+            continue
+        refs = [r for *_, r in edit_items(g, idx, t)]
+        jobs.append((tag, edit_prompt(g, idx, t), out, refs))
     print(f"{hero}: {len(jobs)} edits (~${0.039 * len(jobs):.2f})")
 
     def run(job):
-        tag, text, out = job
-        data, msg = call(NANO, text, [src], f"wear_{hero}_{tag}")
+        tag, text, out, refs = job
+        data, msg = call(NANO, text, [src, *[icon_on_grey(r) for r in refs]], f"wear_{hero}_{tag}")
         if data:
             out.write_bytes(data)
         return msg
@@ -334,10 +357,7 @@ def slice_hero(hero):
         removed = ndimage.binary_opening((base_a > 0.5) & (a < 0.1), iterations=1)
         grown = ndimage.binary_fill_holes(ndimage.binary_closing(changed | removed | (soft & ndimage.binary_dilation(changed, iterations=6)), iterations=5))
         grown = ndimage.binary_dilation(grown, iterations=2)
-        for slot in G.GROUPS[g]:
-            if idx >= len(G.BASES[slot]):
-                continue
-            name = f"{slot}_{G.key(G.BASES[slot][idx][0])}_{t}"
+        for slot, name, _, _ in edit_items(g, idx, t):
             pieces = {}
             for part, region in reg[slot].items():
                 pi = PARTS.index(part)

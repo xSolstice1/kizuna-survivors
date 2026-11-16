@@ -412,7 +412,11 @@ impl Assets {
         let mut sig = Vec::new();
         for it in items {
             if WORN.contains(&it.slot) {
-                pieces.push(format!("{}_{}_{}", it.slot.key(), it.base_key(), it.tier()));
+                // An Exotic has its own look (named after it); everything else its base and tier.
+                pieces.push(match it.exotic {
+                    Some(e) => format!("{}_{}", it.slot.key(), e.key()),
+                    None => format!("{}_{}_{}", it.slot.key(), it.base_key(), it.tier()),
+                });
             } else if matches!(it.slot, sim::gear::Slot::Necklace | sim::gear::Slot::Ring | sim::gear::Slot::Earring | sim::gear::Slot::Charm | sim::gear::Slot::Omamori) {
                 extras.push((it.slot, self.item_icon(it)));
                 sig.push(format!("{}#{}", it.slot.key(), it.id));
@@ -2942,6 +2946,10 @@ mod tests {
                 }
             }
             assert!(v["anchors"]["neck"].is_array(), "{name} has no gear anchors");
+            for e in sim::gear::ALL_EXOTICS.into_iter().filter(|e| WORN.contains(&e.slot())) {
+                let piece = format!("{}_{}", e.slot().key(), e.key());
+                assert!(v["pieces"].get(&piece).is_some(), "{name} has no worn look for {piece}");
+            }
         }
     }
 

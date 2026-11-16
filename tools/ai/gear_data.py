@@ -107,3 +107,11 @@ ANCHORS = {
     "toya": {"neck": [582, 537], "ear": [365, 424], "hip": [632, 777], "hand": [365, 757]},
     "kuon": {"neck": [555, 527], "ear": [372, 404], "hip": [505, 704], "hand": [359, 757]},
 }
+
+# Exotics in worn slots: their own look on the body (one edit per hero, tag "x0_2"), named
+# `<slot>_<exotic key>` instead of a base and tier.
+EXOTIC_WORN = {
+    "hat": ("yata_mirror", "a small round mirror with a polished gold rim and studs, worn at the front of the head on a thin gold headband"),
+    "top": ("white_haori", "a white haori half-coat worn open over a black inner kimono, white diamond marks along the hem, no writing"),
+    "bottom": ("hunger_organ", "dark crimson hakama trousers cut at the shins, the two legs separate, a faceted glowing red crystal heart fixed at the front of the waist with short fleshy red tendrils curling from it"),
+}
