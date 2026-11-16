@@ -14,7 +14,7 @@ from process import bleed
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FEET_Y = 990          # source y of the soles (matches rig_preview.py)
-TEXELS_PER_UNIT = 8   # 2x the game's 4, so the rig stays crisp when zoomed on retina
+TEXELS_PER_UNIT = 16  # 4x the game's 4: crisp on retina in play and in the larger menu previews
 
 
 def main():

@@ -197,8 +197,18 @@ writes `art/hd/rig/<hero>/*.png` and `art/rig/<hero>/game.json`. Then:
 
 - `python3 tools/ai/hero_art.py <hero> <design.png>` makes `art/hd/<hero>_front.png` (menus,
   288x384) and `art/hd/<hero>_face.png` (HUD portrait, 256x256 around the head).
-- In `crates/client/src/render.rs`, add the hero to `rig_name()` and `rig_json()`, and to the
-  front-view match in `Assets::load` if it isn't covered.
+- No code to add: the build finds every `art/rig/<key>/game.json` (the folder named by the
+  hero's `HeroId` key) and the game uses the rig, its front view and its face for that hero.
+
+### 5b. Gear (nano, ~$1.20)
+
+    python3 tools/ai/gear_art.py hero <hero>
+
+makes the 28 outfit edits (every base at every tier, plus the worn Exotics), slices them into
+worn pieces and writes `art/rig/<hero>/wear.json` with the accessory anchors, derived from the
+rig (override one in `gear_data.ANCHORS` only if it looks off). The client test
+`every_gear_base_has_an_icon_and_its_worn_pieces_exist` fails for any rigged hero that can't
+wear every piece, so a hero can't ship without it. Check a mixed outfit at game size.
 
 ### 6. Forms (pro, ~$0.14)
 
@@ -249,6 +259,31 @@ mipmaps and always drawn with an explicit size. `python3 tools/ai/icons_hd.py ex
 them from the restyle raws; `fix` redraws the ones listed in `FIXES` from a written description
 (four per pro call, with a sheet of good icons as the style reference). Never use a character
 as the style reference for item icons: the model draws the character instead of the item.
+
+## Gear (icons and worn pieces)
+
+Every gear base has three looks: tier 0 (Common/Uncommon, plain), 1 (Rare/Epic, silver trim)
+and 2 (Legendary and up, gilded). `tools/ai/gear_data.py` describes each base once; the same
+text drives its icon and how it looks on the body.
+
+    python3 -I tools/ai/gear_art.py icons          # 126 icons, 4 per pro call (~$4.50)
+    python3 -I tools/ai/gear_art.py wear <hero>    # 27 outfit edits on nano (~$1.05 a hero)
+    python3 -I tools/ai/gear_art.py slice <hero>   # cut them into worn pieces (free)
+
+- Icons: `art/hd/gear/<slot>/<base>_<tier>.png`.
+- Worn: hat, top, bottom, gloves and shoes are drawn as part of the hero. An outfit edit is
+  the hero's design image re-dressed by the model ("the pose must not change"), one edit per
+  base index and tier for each group of slots (hat + top + gloves, bottom + shoes). Slicing
+  keeps only what the edit changed, splits it by body region (head; torso above and below the
+  waist; arms with the hands as gloves; legs with the feet as shoes) and writes patches over
+  the rig's parts to `art/hd/wear/<hero>/`, with their rects in `art/rig/<hero>/wear.json`.
+  The game applies them when the outfit changes (`RigDef::dressed`).
+- Necklace, earring, ring, charm, omamori and the Arsenal (on the back) hang on the rig as
+  their icons, at anchors derived from the rig (`gear_art.anchors`).
+- Every outfit edit gets the item's icon as a reference image; without it the worn colours
+  and details drift from the icon.
+- Check a slice with a mixed outfit at game size before moving on; redo a bad edit by deleting
+  `art/ai/wear/<hero>_<tag>.png` and running `wear` again.
 
 ## Tips
 

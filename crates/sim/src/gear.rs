@@ -83,6 +83,10 @@ impl Slot {
             Slot::Arsenal => return None,
         })
     }
+    /// How many bases (base names, each with its own art) the slot has.
+    pub fn base_count(self) -> usize {
+        self.bases().len()
+    }
     fn bases(self) -> &'static [&'static str] {
         match self {
             Slot::Hat => &["Straw Kasa", "Silk Eboshi", "Fox-Ear Hood", "Moon Circlet", "Tengu Cap"],
@@ -782,6 +786,28 @@ impl Item {
             1.0
         }
     }
+    /// The base's art name (`gear/<slot>/<key>_<tier>` icons, worn rig pieces): its name
+    /// lowercased, runs of other characters as `_` ("Archer's Glove" = "archer_s_glove").
+    pub fn base_key(&self) -> String {
+        let name = self.slot.bases()[self.base as usize % self.slot.bases().len()];
+        let mut k = String::new();
+        for c in name.chars() {
+            if c.is_ascii_alphabetic() {
+                k.push(c.to_ascii_lowercase());
+            } else if !k.is_empty() && !k.ends_with('_') {
+                k.push('_');
+            }
+        }
+        k.trim_end_matches('_').to_string()
+    }
+    /// Which of a base's three looks it has: 0 Common/Uncommon, 1 Rare/Epic, 2 above.
+    pub fn tier(&self) -> u8 {
+        match self.rarity {
+            Rarity::Common | Rarity::Uncommon => 0,
+            Rarity::Rare | Rarity::Epic => 1,
+            _ => 2,
+        }
+    }
     pub fn name(&self) -> String {
         if let Some(e) = self.exotic {
             return if self.plus > 0 { format!("{} +{}", e.name(), self.plus) } else { e.name().to_string() };
@@ -1121,6 +1147,17 @@ impl Loadout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_keys_match_the_art_names() {
+        let mut it = roll_item(&mut Rng::new(1), Some(Slot::Gloves), Rarity::Epic, 10);
+        it.base = 1;
+        assert_eq!(it.base_key(), "archer_s_glove");
+        assert_eq!(it.tier(), 1);
+        it.slot = Slot::Charm;
+        it.base = 3;
+        assert_eq!(it.base_key(), "paper_lantern_charm");
+    }
 
     #[test]
     fn set_collection_takes_about_forty_runs() {

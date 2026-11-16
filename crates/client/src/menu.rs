@@ -327,13 +327,10 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     if menu_card(card(1), "ARMORY", &format!("{} items", profile.items.len()), None, kit::SKY, |r, _| {
         gradient(r.x, r.y, r.w, r.h, Color::new(0.12, 0.18, 0.32, 1.0), Color::new(0.04, 0.03, 0.08, 1.0));
         draw_circle(r.x + r.w / 2.0, r.y + r.h * 0.48, r.w * 0.36, Color::new(0.35, 0.6, 1.0, 0.12));
-        tex_in(&assets.hero(profile.selected)[0], r.x + r.w / 2.0, r.y + r.h * 0.8, r.h * 0.5, WHITE);
-        let slots = [sim::gear::Slot::Hat, sim::gear::Slot::Ring, sim::gear::Slot::Charm, sim::gear::Slot::Shoes, sim::gear::Slot::Arsenal, sim::gear::Slot::Omamori];
-        for (k, sl) in slots.iter().enumerate() {
-            let a = t * 0.4 + k as f32 / 6.0 * std::f32::consts::TAU;
-            let (ix, iy) = (r.x + r.w / 2.0 + a.cos() * r.w * 0.38 - 14.0, r.y + r.h * 0.45 + a.sin() * r.h * 0.3 - 14.0);
-            kit::rounded(ix - 3.0, iy - 3.0, 34.0, 34.0, 7.0, Color::new(0.05, 0.05, 0.12, 0.85));
-            draw_texture_ex(assets.gear_icon(*sl), ix, iy, WHITE, DrawTextureParams { dest_size: Some(vec2(28.0, 28.0)), ..Default::default() });
+        // The hero in the gear they wear (heroes without a rig keep their sprite).
+        match assets.rig(profile.selected) {
+            Some(rig) => crate::rig::preview(&rig, vec2(r.x + r.w / 2.0, r.y + r.h * 0.8), r.h * 0.55, WHITE),
+            None => tex_in(&assets.hero(profile.selected)[0], r.x + r.w / 2.0, r.y + r.h * 0.8, r.h * 0.5, WHITE),
         }
     }) {
         action = Some(MenuAction::Armory);
