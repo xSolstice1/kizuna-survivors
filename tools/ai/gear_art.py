@@ -287,6 +287,13 @@ def owner_map(parts, m, changed, neck_y):
     # Below it: only close to the body (a fuller sleeve or hem), not hair beside it.
     low = extra & (yy >= neck_y) & (dist < 30)
     own[low] = nearest[low]
+    # A sleeve wider than the arm it was cut from: what changed just around an arm, over the
+    # torso, belongs to the arm, so it swings with it instead of staying painted on the chest.
+    arms = [PARTS.index(n) for n in (*ARMS_UP, *ARMS_FORE)]
+    arm = np.isin(top, arms)
+    adist, aidx = ndimage.distance_transform_edt(~arm, return_indices=True)
+    sleeve = changed & (own == PARTS.index("torso")) & (adist < 12) & (yy >= neck_y)
+    own[sleeve] = top[aidx[0], aidx[1]][sleeve]
     return own
 
 
@@ -396,6 +403,11 @@ def slice_hero(hero):
                     inside = region & grown & m[part]
                 if not inside.any():
                     continue
+                # Clothes: the part's hidden pixels (behind an arm, the body) get the new outfit
+                # too, so a limb moving aside never shows the old clothes underneath.
+                clothes = slot != "hat"
+                if clothes:
+                    inside |= region & m[part] & (own != pi)
                 inside = ndimage.binary_dilation(inside, iterations=1) & region
                 ys, xs = np.where(inside)
                 x0, y0, x1, y1 = xs.min(), ys.min(), xs.max() + 1, ys.max() + 1
@@ -406,7 +418,18 @@ def slice_hero(hero):
                 pc = parts[part][0][y0:y1, x0:x1]
                 hidden = m[part][y0:y1, x0:x1] & (own[y0:y1, x0:x1] != pi)
                 pa = a[y0:y1, x0:x1].copy()
-                patch[..., :3] = np.where(hidden[..., None], pc[..., :3], patch[..., :3])
+                if clothes:
+                    # Hidden pixels take the colour of the nearest pixel of this part in the
+                    # edit, with the part's own shape.
+                    src = (own[y0:y1, x0:x1] == pi) & (a[y0:y1, x0:x1] > 0.6) & inside[y0:y1, x0:x1]
+                    if src.any():
+                        _, (iy, ix) = ndimage.distance_transform_edt(~src, return_indices=True)
+                        fill = patch[iy, ix, :3]
+                        patch[..., :3] = np.where(hidden[..., None], fill, patch[..., :3])
+                    else:
+                        patch[..., :3] = np.where(hidden[..., None], pc[..., :3], patch[..., :3])
+                else:
+                    patch[..., :3] = np.where(hidden[..., None], pc[..., :3], patch[..., :3])
                 pa = np.where(hidden, pc[..., 3], pa)
                 if slot == "hat" and part == "hair_back":
                     # Back hair hidden behind the head: where the hat edit took hair away or

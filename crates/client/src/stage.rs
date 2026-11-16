@@ -26,6 +26,9 @@ pub struct StageArt {
     glow: Texture2D,
     /// Black with a clear centre: the downpour's limited sight.
     dark: Texture2D,
+    /// The current world's grass (loaded on first use) and the foreground branches.
+    grass: std::cell::RefCell<Option<(StageId, Option<crate::foliage::Grass>)>>,
+    branches: crate::foliage::Branches,
 }
 
 fn rgb(hex: u32, a: f32) -> Color {
@@ -167,7 +170,7 @@ impl StageArt {
         let glow = radial(64, [255, 255, 255], |d| (1.0 - d).max(0.0).powi(2));
         let dark = radial(128, [2, 3, 8], |d| ((d - 0.22) / 0.4).clamp(0.0, 1.0) * 0.86);
         let cards = (1..=5).map(|w| crate::terrain_bake::ground_texture(&format!("w{w}/terrain/ground_a"), 1.0)).collect();
-        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, vignette, glow, dark }
+        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, vignette, glow, dark, grass: std::cell::RefCell::new(None), branches: crate::foliage::Branches::load() }
     }
 
     fn get(&self, name: &str) -> &Texture2D {
@@ -236,7 +239,7 @@ impl StageArt {
     }
 
     /// Ground tiles, props and their glows (everything under the characters).
-    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, time: f64) {
+    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, hero: Vec2, time: f64) {
         let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
         let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
         if terrain.on {
@@ -271,10 +274,15 @@ impl StageArt {
             }
         }
 
+        // Grass under the props, so their shadows fall across it.
+        self.draw_grass(stage, terrain, Rect::new(x0, y0, sw, sh), hero, time);
+
         // Props: up to two per chunk, never on the path (layout from the sim).
         let margin = 40.0;
         let (cx0, cy0) = (((x0 - margin) / CHUNK).floor() as i32, ((y0 - margin) / CHUNK).floor() as i32);
         let (cx1, cy1) = (((x0 + sw + margin) / CHUNK).floor() as i32, ((y0 + sh + margin) / CHUNK).floor() as i32);
+        let mut cast = crate::light::Shadows::new();
+        let mut drawn = Vec::new();
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
                 let (props, n) = terrain.chunk_props(cx, cy);
@@ -305,26 +313,50 @@ impl StageArt {
                         let r = 64.0;
                         let lift = if prop.kind == PropKind::A { crate::sprites::nat(t).y - 8.0 } else { 6.0 };
                         draw_texture_ex(&self.glow, px - r, py - r - lift, g, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
+                        // And a real light: a warm pool on the ground and on whoever passes.
+                        crate::light::LIGHTS.with(|l| crate::light::sources::emit(&mut l.borrow_mut(), vec2(px, py), crate::light::sources::Glow { lift: lift * 0.5, ..crate::light::sources::prop(g, flicker) }));
                     }
-                    // Contact shadow under the solid footprint.
-                    let (min, max) = prop.footprint();
-                    crate::vfx::shape::ellipse((min.x + max.x) / 2.0, max.y - 0.5, (max.x - min.x) / 2.0 + 2.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
                     let n = crate::sprites::nat(t);
-                    draw_texture_ex(t, (px - n.x / 2.0).round(), (py - n.y).round() + 6.0, WHITE, DrawTextureParams { dest_size: Some(n), ..Default::default() });
+                    cast.push(t, vec2(px, py + 6.0), n.x, n.y, false, 1.0);
+                    drawn.push((t, px, py, n, prop.footprint()));
                 }
             }
         }
+        // All their shadows at once (they merge where they meet), then a contact shadow under
+        // each solid footprint and the props themselves.
+        cast.flush(cam);
+        for (t, px, py, n, (min, max)) in drawn {
+            crate::vfx::shape::ellipse((min.x + max.x) / 2.0, max.y - 0.5, (max.x - min.x) / 2.0 + 2.0, 3.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
+            draw_texture_ex(t, (px - n.x / 2.0).round(), (py - n.y).round() + 6.0, WHITE, DrawTextureParams { dest_size: Some(n), ..Default::default() });
+        }
     }
 
-    /// Screen-space vignette, drawn after the world and before the UI.
+    /// The world's swaying grass (campaign worlds that have it), parted by the hero.
+    pub fn draw_grass(&self, stage: StageId, terrain: &sim::terrain::Terrain, view: Rect, hero: Vec2, time: f64) {
+        if !terrain.on {
+            return;
+        }
+        let mut g = self.grass.borrow_mut();
+        if g.as_ref().is_none_or(|(s, _)| *s != stage) {
+            *g = Some((stage, crate::foliage::Grass::load(stage)));
+        }
+        if let Some((_, Some(grass))) = g.as_ref() {
+            grass.draw(stage, view, hero, time);
+        }
+    }
+
+    /// Screen-space vignette, drawn after the world and before the UI, with the world's
+    /// foreground branches just inside it.
     pub fn draw_vignette(&self) {
-        draw_texture_ex(
-            &self.vignette,
-            0.0,
-            0.0,
-            WHITE,
-            DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() },
-        );
+        let d = DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() };
+        draw_texture_ex(&self.vignette, 0.0, 0.0, WHITE, d.clone());
+        // A second, fainter pass: deeper corners, the eye drawn to the middle.
+        draw_texture_ex(&self.vignette, 0.0, 0.0, Color::new(1.0, 1.0, 1.0, 0.25), d);
+    }
+
+    /// The world's foreground branches (screen space), `cam` the camera's world position.
+    pub fn draw_branches(&self, stage: StageId, cam: Vec2, time: f64) {
+        self.branches.draw(stage, cam, time);
     }
 
     /// Rainward 13's downpour: sight shrinks to a pool around the player, rain streaks

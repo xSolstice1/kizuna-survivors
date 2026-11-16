@@ -4,12 +4,15 @@ use sim::world::DT;
 use sim::meta::{Profile, RunReport};
 use sim::{Input, RunState, Stress, World, WorldConfig};
 
+mod ambient;
 mod armory;
 mod audio;
 mod chest_ui;
 mod cloud;
 mod devmenu;
+mod foliage;
 mod kit;
+mod light;
 mod menu;
 mod platform;
 mod render;
@@ -176,7 +179,24 @@ async fn main() {
     let mut perf_parts = [0.0f64; 5];
     if let Some(st) = perf {
         profile.stage = st;
-        if perf_real() {
+        if std::env::var("KZ_PERF_CALM").is_ok() {
+            // An ordinary early night, a minute in (for looking at the art, not timing).
+            world = new_world(None, &profile);
+            world.player.max_hp = 1e9;
+            world.player.hp = 1e9;
+            for _ in 0..3600 {
+                world.step(Default::default());
+                if world.offer.is_some() {
+                    world.bot_pick();
+                }
+                if world.chest_result.is_some() {
+                    world.close_chest();
+                }
+                if world.shrine_offer.is_some() {
+                    world.choose_shrine(None);
+                }
+            }
+        } else if perf_real() {
             // A realistic late night: full awakened loadout at 22:00, the player can't die.
             world = new_world(None, &profile);
             world.debug_max_loadout();
@@ -505,6 +525,11 @@ async fn main() {
             acc += dt;
             let mut input = read_input();
             input.move_dir = input.move_dir + touch.dir();
+            if perf.is_some() && std::env::var("KZ_PERF_WALK").is_ok() {
+                // Dev: walk in a slow circle, to see animation and shadows in motion.
+                let a = world.time * 0.8;
+                input.move_dir = sim::Vec2::new(a.cos(), a.sin());
+            }
             special_queued |= is_key_pressed(KeyCode::Space) || touch.special;
             input.special = special_queued;
             let scale = render::world_scale();
@@ -607,6 +632,9 @@ async fn main() {
             stage_art.draw_downpour(pp, now, fx.flash);
         }
         stage_art.draw_vignette();
+        if !matches!(world.state, RunState::Dead | RunState::Won) {
+            stage_art.draw_branches(world.cfg.stage, cam.target, now);
+        }
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {
             let t_h = get_time();
@@ -808,6 +836,20 @@ async fn main() {
             }
         }
         ui::rotate_prompt();
+        // Dev: `KZ_SHOT=<file.png>` with KZ_PERF saves the frame after `KZ_SHOT_FRAME` (120) frames
+        // and exits (for checking art and lighting natively, quicker than the web build).
+        if perf.is_some() {
+            if let Ok(path) = std::env::var("KZ_SHOT") {
+                // KZ_SHOT_FRAME=120, or a list (KZ_SHOT_FRAME=30,32,34 with a {} in KZ_SHOT for the frame).
+                let frames: Vec<u32> = std::env::var("KZ_SHOT_FRAME").unwrap_or_else(|_| "120".into()).split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                if frames.contains(&perf_frames) {
+                    get_screen_data().export_png(&path.replace("{}", &perf_frames.to_string()));
+                    if frames.last() == Some(&perf_frames) {
+                        return;
+                    }
+                }
+            }
+        }
         next_frame().await
     }
 }

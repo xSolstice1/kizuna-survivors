@@ -1126,6 +1126,7 @@ fn draw_world_enemy<'a>(
     outlines: &mut Sprites<'a>,
     cues: &mut Vec<(f32, f32, EnemyRarity, f32)>,
     shadow: &'a Texture2D,
+    casts: &mut crate::light::Shadows<'a>,
 ) {
     use sim::content::{enemy_def, Ai, Rank};
     let e = &world.enemies;
@@ -1177,6 +1178,8 @@ fn draw_world_enemy<'a>(
     let rise = (lift / h).clamp(0.0, 0.5);
     let (sw, sh) = (w * 0.7 * (1.0 - rise), (w * 0.2).max(5.0) * (1.0 - rise));
     shadows.push(shadow, pos.x - sw / 2.0, pos.y + h * 0.25 - 1.0 - sh / 2.0, Color::new(0.0, 0.0, 0.0, 0.4 * (1.0 - rise)), DrawTextureParams { dest_size: Some(vec2(sw, sh)), ..Default::default() });
+    // The moon's shadow, on the ground under the feet; fainter the higher the sprite floats.
+    casts.push(t, vec2(pos.x, pos.y + h * 0.25 - 1.0), w * sx, h * sy, flip, 1.0 - rise * 1.6);
     if !world.in_reach(pos, e.radius[i]) {
         tint = dimmed(tint);
     }
@@ -1531,9 +1534,16 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if target.is_some() {
         clear_background(Color::from_rgba(28, 24, 40, 255));
     }
-    stage.draw_ground(world.cfg.stage, &world.terrain, cam, time);
+    crate::light::LIGHTS.with(|l| {
+        let mut l = l.borrow_mut();
+        l.begin(world.cfg.stage);
+        // The hero carries a little light of their own, so they're never lost in the dark.
+        let h = crate::light::sources::hero(world.cfg.stage);
+        l.add_fill(vec2(world.player.pos.x, world.player.pos.y - h.lift), h.radius, h.color);
+    });
     let p = world.player.pos;
     let view = view_rect(cam);
+    stage.draw_ground(world.cfg.stage, &world.terrain, cam, vec2(p.x, p.y + 6.0), time);
 
     // The rigged hero, drawn at the end of this fn (after the world target), at full resolution.
     let mut hires_player: Option<(std::rc::Rc<crate::rig::RigDef>, Vec2, bool, Color)> = None;
@@ -1618,6 +1628,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let mut sprites = Sprites::new();
     let mut shadows = Sprites::new();
     let mut outlines = Sprites::new();
+    let mut casts = crate::light::Shadows::new();
     let mut cues = Vec::new();
     let flash = Color::new(1.0, 0.45, 0.55, 1.0);
     for i in 0..e.len() {
@@ -1670,6 +1681,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             };
             let tint = if out_of_reach { dimmed(tint) } else { tint };
             shape::ellipse(pos.x, pos.y + 6.0, 24.0, 7.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.35));
+            casts.push(&a.oni, vec2(pos.x, pos.y + 12.0), 64.0, 64.0, flip, 1.0);
             draw_outline_now(&a.oni_outline, (pos.x - 32.0).round(), (pos.y - 52.0).round(), vec2(64.0, 64.0), flip, e.kind[i].rarity());
             cues.push((pos.x, (pos.y - 52.0).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
@@ -1688,6 +1700,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let tint = if out_of_reach { dimmed(tint) } else { tint };
             shape::circle(pos.x, pos.y - 24.0, 60.0, Color::new(1.0, 0.55, 0.2, glow));
             shape::ellipse(pos.x, pos.y + 8.0, 34.0, 9.0, 0.0, Color::new(0.0, 0.0, 0.0, 0.4));
+            casts.push(&a.night_lord, vec2(pos.x, pos.y + 12.0), 96.0, 96.0, false, 0.5);
             draw_outline_now(&a.night_lord_outline, (pos.x - 48.0).round(), (pos.y - 84.0 + bob).round(), vec2(96.0, 96.0), false, e.kind[i].rarity());
             cues.push((pos.x, (pos.y - 84.0 + bob).round(), e.kind[i].rarity(), tint.a));
             draw_texture_ex(
@@ -1701,7 +1714,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
         let kind = e.kind[i];
         if let Some(t) = &a.world_enemies[kind.index()] {
-            draw_world_enemy(world, i, t, a.enemy_outlines[kind.index()].as_ref(), tint, flip, fx.accent, time, &mut sprites, &mut shadows, &mut outlines, &mut cues, &a.shadow);
+            draw_world_enemy(world, i, t, a.enemy_outlines[kind.index()].as_ref(), tint, flip, fx.accent, time, &mut sprites, &mut shadows, &mut outlines, &mut cues, &a.shadow, &mut casts);
             continue;
         }
         let (tex, half, bottom) = match e.kind[i] {
@@ -1728,14 +1741,30 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             }
             cues.push((pos.x, y, rarity, tint.a));
         }
-        sprites.push(tex, x, y, tint, DrawTextureParams { dest_size: Some(crate::sprites::nat(tex)), flip_x: flip, ..Default::default() });
+        let n = crate::sprites::nat(tex);
+        casts.push(tex, vec2(pos.x, y + n.y), n.x, n.y, flip, if e.kind[i] == EnemyKind::Wisp { 0.4 } else { 1.0 });
+        sprites.push(tex, x, y, tint, DrawTextureParams { dest_size: Some(n), flip_x: flip, ..Default::default() });
     }
+    casts.flush(cam);
     shadows.flush();
     outlines.flush();
     sprites.flush();
     for (x, top, rarity, alpha) in cues {
         draw_rarity_cue(x, top, rarity, alpha);
     }
+    // Mist over the ground and the crowd, lit by the light map like them.
+    if world.terrain.on {
+        crate::ambient::draw_ground_fx(world.cfg.stage, view, time, &a.vfx);
+    }
+    // Night light: everything drawn so far (ground, props, enemies) is lit by the light map;
+    // the hero, attacks and effects drawn after it keep their full colour and read clearly.
+    crate::light::LIGHTS.with(|l| {
+        let mut l = l.borrow_mut();
+        crate::light::sources::gather(world, &mut l, view, time);
+        crate::ambient::lights(world.cfg.stage, view, time, &mut l);
+        l.apply(cam, view, a.vfx.tex("glow"), &|f| a.vfx.additive(f));
+    });
+    crate::ambient::draw(world.cfg.stage, view, time, &a.vfx);
     for i in 0..e.len() {
         if let Some(k) = e.carry[i] {
             let pos = e.pos[i];
@@ -1754,7 +1783,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let fox = form == Some(SpecialKind::NineTails);
     let hannya = form == Some(SpecialKind::Hannya);
     let blink = form.is_none() && pl.iframes > 0.0 && ((time * 20.0) as i32) % 2 == 0;
-    let tint = if blink { Color::new(1.0, 1.0, 1.0, 0.35) } else { WHITE };
+    let lit = crate::light::LIGHTS.with(|l| l.borrow_mut().eased_light(vec2(p.x, p.y), get_frame_time().min(0.1)));
+    let tint = if blink { Color::new(lit.r, lit.g, lit.b, 0.35) } else { lit };
     let t = time as f32;
     if fox {
         draw_fox_aura_and_tails(world, t);
@@ -1893,6 +1923,17 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         };
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
             draw_texture_ex(tex, x + dx, y + dy, glow, params.clone());
+        }
+    }
+    // The hero's shadows: the posed rig (or the form's sprite), the moon's and one away from
+    // each lamp nearby, like everything else's.
+    let feet = vec2(p.x, p.y + 6.0);
+    match &rig {
+        Some(r) => crate::light::LIGHTS.with(|l| l.borrow_mut().rig_shadow(r, &fx.hero_rig, feet, pl.facing.x < 0.0, 1.0, cam)),
+        None => {
+            let mut cast = crate::light::Shadows::new();
+            cast.push(tex, feet, size.x, size.y, pl.facing.x < 0.0, 1.0);
+            cast.flush(cam);
         }
     }
     let shun = world.cfg.hero == HeroId::Shun;
