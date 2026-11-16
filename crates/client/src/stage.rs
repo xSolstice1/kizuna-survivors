@@ -306,8 +306,7 @@ impl StageArt {
                         let lift = if prop.kind == PropKind::A { crate::sprites::nat(t).y - 8.0 } else { 6.0 };
                         draw_texture_ex(&self.glow, px - r, py - r - lift, g, DrawTextureParams { dest_size: Some(vec2(r * 2.0, r * 2.0)), ..Default::default() });
                         // And a real light: a warm pool on the ground and on whoever passes.
-                        let k = 0.3 * flicker;
-                        crate::light::LIGHTS.with(|l| l.borrow_mut().add(vec2(px, py - lift * 0.5), 160.0, Color::new(g.r * k, g.g * k, g.b * k, 1.0)));
+                        crate::light::LIGHTS.with(|l| crate::light::sources::emit(&mut l.borrow_mut(), vec2(px, py - lift * 0.5), crate::light::sources::prop(g, flicker)));
                     }
                     let n = crate::sprites::nat(t);
                     // The moon's shadow, then a contact shadow under the solid footprint.

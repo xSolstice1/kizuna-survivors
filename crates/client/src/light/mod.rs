@@ -8,6 +8,8 @@
 //!   lights are added on top; it then multiplies the world drawn so far, doubled (0.5 = as
 //!   drawn, lower darker, higher brighter), so lit pools glow instead of only being less dark.
 //!   `light_at` gives the same light on the CPU, for what is drawn after it (the hero).
+pub mod sources;
+
 use std::cell::RefCell;
 
 use macroquad::miniquad::{BlendFactor, BlendState, BlendValue, Equation};
@@ -17,7 +19,7 @@ use sim::campaign::StageId;
 
 /// Where the top of a sprite's shadow falls, per unit of sprite height, from its feet: down and
 /// to the right, away from a moon in the upper left, flattened onto the ground.
-pub const SKEW: Vec2 = Vec2::new(0.62, 0.30);
+pub const SKEW: Vec2 = Vec2::new(0.42, 0.21);
 /// How dark a full shadow is.
 pub const SHADOW_ALPHA: f32 = 0.30;
 
@@ -34,10 +36,16 @@ impl<'a> Shadows<'a> {
     /// A `w` x `h` sprite standing at `feet` (the ground point under it), mirrored if `flip`.
     /// `alpha` scales the darkness (a sprite floating off the ground casts a fainter one).
     pub fn push(&mut self, tex: &'a Texture2D, feet: Vec2, w: f32, h: f32, flip: bool, alpha: f32) {
+        self.push_skew(tex, feet, w, h, flip, alpha, SKEW);
+    }
+
+    /// Like `push`, cast along `skew` (see `Lights::skew_at`) instead of the moon's.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_skew(&mut self, tex: &'a Texture2D, feet: Vec2, w: f32, h: f32, flip: bool, alpha: f32, skew: Vec2) {
         if alpha <= 0.01 {
             return;
         }
-        let top = feet + SKEW * h;
+        let top = feet + skew * h;
         let half = vec2(w / 2.0, 0.0);
         // Texture top (v = 0) lies away from the light, its feet (v = 1) at the sprite's feet.
         self.quads.push((tex, [top - half, top + half, feet + half, feet - half], flip, alpha));
@@ -85,18 +93,21 @@ pub struct Light {
     pub pos: Vec2,
     pub radius: f32,
     pub color: Color,
+    /// Whether it casts the hero's shadow (not the hero's own light).
+    pub casts: bool,
 }
 
 /// The light map and its materials (one per thread: the game draws on one).
 pub struct Lights {
     rt: Option<(RenderTarget, u32, u32)>,
+    silhouette: Option<RenderTarget>,
     multiply: Option<Material>,
     pub list: Vec<Light>,
     ambient: Color,
 }
 
 thread_local! {
-    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, multiply: None, list: Vec::new(), ambient: WHITE });
+    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, multiply: None, list: Vec::new(), ambient: WHITE });
 }
 
 const MUL_VERTEX: &str = r#"#version 100
@@ -139,8 +150,28 @@ impl Lights {
 
     pub fn add(&mut self, pos: Vec2, radius: f32, color: Color) {
         if self.list.len() < 600 {
-            self.list.push(Light { pos, radius, color });
+            self.list.push(Light { pos, radius, color, casts: true });
         }
+    }
+
+    /// A light that casts no shadow (the hero's own glow).
+    pub fn add_own(&mut self, pos: Vec2, radius: f32, color: Color) {
+        self.list.push(Light { pos, radius, color, casts: false });
+    }
+
+    /// Which way a shadow falls at `p` (per unit of height, like `SKEW`): away from the
+    /// strongest lights near it, blending back to the moon's direction away from them.
+    pub fn skew_at(&self, p: Vec2) -> Vec2 {
+        let mut v = SKEW.normalize() * 0.6;
+        for l in self.list.iter().filter(|l| l.casts) {
+            let d = p - l.pos;
+            let k = falloff(d.length(), l.radius) * (l.color.r + l.color.g + l.color.b) * 6.0;
+            if k > 0.0 {
+                v += d.normalize_or_zero() * k;
+            }
+        }
+        let dir = v.normalize_or(SKEW.normalize());
+        dir * SKEW.length()
     }
 
     /// The light at `p` as a tint for a sprite drawn after the map (its doubled light, at
@@ -154,6 +185,36 @@ impl Lights {
             c.b += l.color.b * k;
         }
         Color::new((c.r.min(0.7) * 2.0).min(1.0), (c.g.min(0.7) * 2.0).min(1.0), (c.b.min(0.7) * 2.0).min(1.0), 1.0)
+    }
+
+    /// The rig's shadow: the posed rig drawn black into a small soft target, then laid on the
+    /// ground along `skew` from its feet, so it walks and sways with the hero.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rig_shadow(&mut self, def: &crate::rig::RigDef, st: &crate::rig::RigState, feet: Vec2, left: bool, skew: Vec2, alpha: f32, cam: &Camera2D) {
+        const BOX: f32 = 48.0;
+        const ABOVE: f32 = 44.0; // the box reaches this far above the feet, BOX - ABOVE below
+        if self.silhouette.is_none() {
+            let rt = render_target(96, 96);
+            rt.texture.set_filter(FilterMode::Linear);
+            self.silhouette = Some(rt);
+        }
+        let rt = self.silhouette.clone().unwrap();
+        let mut c = Camera2D::from_display_rect(Rect::new(feet.x - BOX / 2.0, feet.y - ABOVE, BOX, BOX));
+        c.render_target = Some(rt.clone());
+        set_camera(&c);
+        clear_background(Color::new(0.0, 0.0, 0.0, 0.0));
+        crate::rig::draw(def, st, feet, left, BLACK);
+        set_camera(cam);
+        let col = Color::new(0.0, 0.0, 0.0, SHADOW_ALPHA * alpha);
+        let vertices = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .iter()
+            .map(|&(u, v): &(f32, f32)| {
+                let height = ABOVE - v * BOX;
+                let q = feet + vec2((u - 0.5) * BOX, 0.0) + skew * height;
+                Vertex::new(q.x, q.y, 0.0, u, 1.0 - v, col)
+            })
+            .collect();
+        draw_mesh(&Mesh { vertices, indices: vec![0, 1, 2, 0, 2, 3], texture: Some(rt.texture.clone()) });
     }
 
     /// Renders the light map over `view` (world units) with `cam`, then multiplies it onto

@@ -124,6 +124,9 @@ float upEdge(float f0, float ch) {
     return -1.0;
 }
 
+// Towards the moon (upper left), which casts every shadow in the world (crate::light::SKEW).
+const vec2 MOON = vec2(-0.8, -0.6);
+
 void main() {
     vec2 w = world;
     vec4 m = M(vec2(0.0));
@@ -174,6 +177,9 @@ void main() {
         float band = (1.0 - sm(s / 4.0)) * step(0.0, s) * (1.0 - r);
         c *= 1.0 - band * (0.4 * (1.0 - south));
         c *= 1.0 + band * 0.22 * south * (1.0 - sm(s / 2.0));
+        // Edges facing the moon catch its light.
+        float lit = sm((dot(-normalize(gr + 1e-6), MOON) - 0.2) / 0.5);
+        c *= 1.0 + band * 0.25 * lit;
     }
 
     // Rock faces below edges with higher ground to the north: the higher edge first, the
@@ -199,6 +205,19 @@ void main() {
             c *= 1.0 - 0.45 * (1.0 - sm((d - FACE) / SHADOW)) * (1.0 - r);
         }
     }
+    // Higher ground casts a shadow away from the moon: a pixel is shaded when the ground
+    // towards the moon is higher than it, darker the nearer that higher ground is.
+    float shade = 0.0;
+    for (int i = 0; i < 2; i++) {
+        float ch = float(i);
+        float f0 = mix(m.r, m.b, ch) - 0.5;
+        if (f0 >= 0.0) { continue; }
+        for (int k = 1; k <= 8; k++) {
+            vec4 q = M(MOON * 6.0 * float(k));
+            if (mix(q.r, q.b, ch) - 0.5 >= 0.0) { shade = max(shade, 1.0 - float(k - 1) / 8.0); break; }
+        }
+    }
+    c *= 1.0 - 0.34 * sm(shade) * (1.0 - 0.5 * faced);
     gl_FragColor = vec4(c * Exposure * color.rgb, 1.0);
 }
 "#;
