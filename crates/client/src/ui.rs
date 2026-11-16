@@ -242,12 +242,12 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let p = &world.player;
     let hero = hero_def(world.cfg.hero);
     let t = get_time() as f32;
-    // Everything sits at least MARGIN from the edges; the XP bar is the outermost piece.
-    let (ox, oy) = (kit::MARGIN - 8.0, kit::MARGIN - 6.0);
+    let (ox, oy) = hud_origin();
 
     // XP bar across the top with a level badge.
     let frac = world.player.xp as f32 / world.xp_to_next() as f32;
-    kit::bar(kit::MARGIN, kit::MARGIN, w - 2.0 * kit::MARGIN, 10.0, frac, SKY, Color::new(0.05, 0.04, 0.10, 0.9));
+    let xp = hud_rect(HudPart::Xp, world, touch);
+    kit::bar(xp.x, xp.y, xp.w, xp.h, frac, SKY, Color::new(0.05, 0.04, 0.10, 0.9));
 
     // Hero card, top-left: portrait, HP, special meter.
     kit::panel(12.0 + ox, 24.0 + oy, 300.0, 78.0);
@@ -257,7 +257,8 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let lv = format!("{}", p.level);
     let d = kit::measure(&lv, 15);
     kit::text(&lv, 72.0 + ox - d.width / 2.0, 93.0 + oy, 15.0, INK);
-    kit::bar(92.0 + ox, 38.0 + oy, 206.0, 16.0, p.hp / p.max_hp, Color::new(0.95, 0.30, 0.42, 1.0), Color::new(0.18, 0.06, 0.10, 0.95));
+    let hp = hud_rect(HudPart::Health, world, touch);
+    kit::bar(hp.x, hp.y, hp.w, hp.h, p.hp / p.max_hp, Color::new(0.95, 0.30, 0.42, 1.0), Color::new(0.18, 0.06, 0.10, 0.95));
     kit::text(&format!("{:.0} / {:.0}", p.hp, p.max_hp), 100.0 + ox, 51.0 + oy, 13.0, INK);
     match world.form_kind() {
         Some(kind) => {
@@ -343,8 +344,9 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     }
 
     // Timer card, top-centre.
-    let (tw, tx) = (220.0, (w - 220.0) / 2.0);
-    kit::panel(tx, 22.0 + oy, tw, 62.0);
+    let timer = hud_rect(HudPart::Timer, world, touch);
+    let tw = timer.w;
+    kit::panel(timer.x, timer.y, timer.w, timer.h);
     let st = world.stage();
     let night = world.time >= st.final_at;
     centered(&fmt_time(world.time), 60.0 + oy, 36.0, if night { Color::new(1.0, 0.55, 0.45, 1.0) } else { INK });
@@ -394,6 +396,54 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     let x = w - kit::MARGIN - cw;
     kit::chip(x, 60.0 + oy, "SEN", &sen, GOLD);
     draw_texture_ex(&assets.coin, x - 22.0, 66.0 + oy, WHITE, DrawTextureParams { dest_size: Some(vec2(18.0, 18.0)), ..Default::default() });
+}
+
+/// Everything sits at least MARGIN from the edges; the XP bar is the outermost piece.
+fn hud_origin() -> (f32, f32) {
+    (kit::MARGIN - 8.0, kit::MARGIN - 6.0)
+}
+
+#[derive(Clone, Copy)]
+pub enum HudPart {
+    Xp,
+    Health,
+    Loadout,
+    Special,
+    Timer,
+    Minimap,
+    Stats,
+    Boss,
+}
+
+/// Where `hud` (and the small `minimap`) draws `part`, in UI pixels; the tutorial spotlights these.
+pub fn hud_rect(part: HudPart, world: &World, touch: bool) -> Rect {
+    let w = screen_width();
+    let (ox, oy) = hud_origin();
+    match part {
+        HudPart::Xp => Rect::new(kit::MARGIN, kit::MARGIN, w - 2.0 * kit::MARGIN, 10.0),
+        HudPart::Health => Rect::new(92.0 + ox, 38.0 + oy, 206.0, 16.0),
+        // The meter bar with its name and SPACE keycap; on touch, the SPECIAL button.
+        HudPart::Special if touch => crate::touch::special_rect(),
+        HudPart::Special => Rect::new(92.0 + ox, 62.0 + oy, 210.0, 34.0),
+        HudPart::Loadout => {
+            let hero = hero_def(world.cfg.hero);
+            let weapons = hero.weapon_slots as f32 * 40.0 + 8.0 + 34.0;
+            let passives = hero.passive_slots as f32 * 31.0;
+            Rect::new(14.0 + ox, 110.0 + oy, weapons.max(passives), 72.0)
+        }
+        HudPart::Timer => Rect::new((w - 220.0) / 2.0, 22.0 + oy, 220.0, 62.0),
+        HudPart::Minimap => Rect::new(w - kit::MARGIN - 150.0, 116.0, 150.0, 150.0),
+        HudPart::Stats => {
+            let chip = |label: &str, value: String| kit::measure(&value, 20).width + kit::measure(label, 14).width + 28.0;
+            let widest = chip("SEN", world.sen.to_string()).max(chip("KILLS", world.kills.to_string()));
+            // The coin sits 22 px left of the Sen chip.
+            Rect::new(w - kit::MARGIN - widest - 22.0, 24.0 + oy, widest + 22.0, 66.0)
+        }
+        HudPart::Boss => {
+            let by = 14.0 + oy;
+            Rect::new((w - 460.0) / 2.0 - 10.0, 90.0 + by, 480.0, BOSS_PANEL_BOTTOM - 90.0 - by)
+        }
+    }
 }
 
 /// Element pip at a weapon slot's top-right corner; the full tag shows in the pause menu.
@@ -503,8 +553,19 @@ fn title_case(s: &str) -> String {
 
 // ───────────────────────── Level-up ─────────────────────────
 
-/// Draws the level-up cards; returns the card taken by click, digit, or focus plus Enter/Space.
-pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut usize, touch: bool) -> Option<usize> {
+/// Seconds the level-up, replace and shrine screens wait before choosing for the player.
+pub const PICK_SECONDS: f32 = 10.0;
+
+/// Bar centred on `cx` that shrinks from `w` wide as `left` runs out, with the seconds beside it.
+fn countdown(cx: f32, y: f32, w: f32, left: f32) {
+    let frac = (left / PICK_SECONDS).clamp(0.0, 1.0);
+    let c = if left <= 3.0 { VERMILION } else { GOLD };
+    kit::rounded(cx - w / 2.0 * frac, y, w * frac, 6.0, 3.0, c);
+    kit::text(&format!("{}s", left.max(0.0).ceil()), cx + w / 2.0 + 8.0, y + 7.0, 14.0, c);
+}
+
+/// Draws the level-up cards and the `left`-seconds countdown; returns the card taken by click, digit, or focus plus Enter/Space.
+pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut usize, touch: bool, left: f32) -> Option<usize> {
     dim_screen(0.62);
     let (w, h) = (screen_width(), screen_height());
     let t = get_time() as f32;
@@ -513,6 +574,7 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
     centered("LEVEL UP!", h * 0.13 + 44.0, 40.0, GOLD);
     let hint = if touch { "choose one" } else { "Arrows choose  ·  Enter take" };
     centered(&format!("Level {}  ·  {hint}", world.player.level), h * 0.13 + 66.0, 15.0, DIM);
+    countdown(w / 2.0, h * 0.13 + 82.0, 440.0, left);
 
     let (ch, gap) = (250.0, 26.0);
     // Phone labels are bigger, so the cards widen to keep the matchup line on one row.
@@ -593,7 +655,7 @@ pub fn level_up(world: &World, offer: &[Upgrade], assets: &Assets, focus: &mut u
 }
 
 /// Replace-skill picker. Returns Some(Some(j)) to overwrite `replace_targets()[j]`, Some(None) to cancel, None while undecided.
-pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: bool) -> Option<Option<usize>> {
+pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: bool, left: f32) -> Option<Option<usize>> {
     let Some(new) = world.replacing else { return Some(None) };
     let targets = world.replace_targets();
     let n = targets.len();
@@ -605,6 +667,7 @@ pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: 
     let (px, py) = ((w - pw) / 2.0, ((h - ph) / 2.0).max(kit::MARGIN));
     kit::panel_ex(px, py, pw, ph, Color::new(0.14, 0.07, 0.1, 0.96), tier_color(new.tier()));
     centered("Replace which skill?", py + 38.0, 30.0, GOLD);
+    countdown(w / 2.0, py + 76.0, pw - 80.0, left);
 
     let row = |i: usize| Rect::new(px + 16.0, py + head_h + i as f32 * (row_h + gap), pw - 32.0, row_h);
     let mouse: Vec2 = mouse_position().into();
@@ -675,13 +738,14 @@ pub fn replace_picker(world: &World, assets: &Assets, focus: &mut usize, touch: 
 // ───────────────────────── Shrine ─────────────────────────
 
 /// Shrine choice. Returns Some(Some(i)) for a pick, Some(None) to walk away, None while undecided.
-pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize) -> Option<Option<usize>> {
+pub fn shrine(offer: &[ShrineEvent], assets: &Assets, focus: &mut usize, left: f32) -> Option<Option<usize>> {
     let (w, h) = (screen_width(), screen_height());
     dim_screen(0.72);
     kit::panel_ex(w / 2.0 - 250.0, h * 0.12, 500.0, 84.0, Color::new(0.18, 0.10, 0.04, 0.95), GOLD);
     draw_texture_ex(&assets.shrine, w / 2.0 - 232.0, h * 0.12 + 14.0, WHITE, DrawTextureParams { dest_size: Some(vec2(48.0, 54.0)), ..Default::default() });
     centered("A ROADSIDE SHRINE", h * 0.12 + 46.0, 36.0, GOLD);
     centered("Every blessing has a price.", h * 0.12 + 70.0, 15.0, DIM);
+    countdown(w / 2.0, h * 0.12 + 92.0, 500.0, left);
     let (cw, ch, gap) = (340.0, 210.0, 30.0);
     let x0 = (w - (offer.len() as f32 * cw + (offer.len() as f32 - 1.0) * gap)) / 2.0;
     let y0 = h * 0.32;
@@ -1102,7 +1166,8 @@ pub fn minimap(world: &World, assets: &Assets, big: bool, just_opened: bool) -> 
         let size = (h - 140.0).min(w - 80.0).min(620.0);
         (size, (w - size) / 2.0, 90.0, 900.0)
     } else {
-        (150.0, w - kit::MARGIN - 150.0, 116.0, 650.0)
+        let r = hud_rect(HudPart::Minimap, world, false);
+        (r.w, r.x, r.y, 650.0)
     };
     if big {
         dim_screen(0.6);

@@ -259,6 +259,8 @@ pub struct Profile {
     pub music_volume: f32,
     pub sfx_volume: f32,
     pub auto_special_off: bool,
+    /// First-run tutorial: one bit per tip already shown (see the client's `tutorial::Step`).
+    pub tips: u32,
 }
 
 impl Default for Profile {
@@ -310,6 +312,7 @@ impl Default for Profile {
             music_volume: 0.6,
             sfx_volume: 0.8,
             auto_special_off: false,
+            tips: 0,
         }
     }
 }
@@ -675,6 +678,7 @@ impl Profile {
         s += &format!("passives={}\n", join(&self.passives_found));
         s += &format!("shrines={}\n", join(&self.shrines_found));
         s += &format!("music_volume={}\nsfx_volume={}\nauto_special_off={}\n", self.music_volume, self.sfx_volume, self.auto_special_off as u8);
+        s += &format!("tips={}\n", self.tips);
         s += &format!(
             "wins={}\ndeaths={}\ndawn_outs={}\nbest_kills={}\ntime_played={}\nsen_earned={}\nchests={}\nshrines_taken={}\nawakened_total={}\nspecials={}\n",
             self.wins, self.deaths, self.dawn_outs, self.best_kills, self.time_played, self.sen_earned, self.chests_opened, self.shrines_taken, self.awakenings, self.specials_used
@@ -710,6 +714,7 @@ impl Profile {
     /// Lenient: unknown keys and bad values are ignored, so old saves keep loading.
     pub fn parse(text: &str) -> Profile {
         let mut p = Profile::default();
+        let mut has_tips = false;
         for line in text.lines() {
             let Some((k, v)) = line.split_once('=') else { continue };
             let (k, v) = (k.trim(), v.trim());
@@ -787,6 +792,10 @@ impl Profile {
                     }
                 }
                 "auto_special_off" => p.auto_special_off = v == "1",
+                "tips" => {
+                    has_tips = true;
+                    p.tips = v.parse().unwrap_or(0);
+                }
                 "music_volume" => p.music_volume = v.parse::<f32>().unwrap_or(0.6).clamp(0.0, 1.0),
                 "sfx_volume" => p.sfx_volume = v.parse::<f32>().unwrap_or(0.8).clamp(0.0, 1.0),
                 _ => {
@@ -825,6 +834,10 @@ impl Profile {
                     }
                 }
             }
+        }
+        // Saves from before the tutorial belong to players who already know the game.
+        if !has_tips && p.runs > 0 {
+            p.tips = u32::MAX;
         }
         if !p.is_unlocked(p.selected) {
             p.selected = HeroId::Ren;
@@ -883,6 +896,17 @@ mod tests {
     use super::*;
     use crate::content::EnemyRarity;
     use crate::WorldConfig;
+
+    #[test]
+    fn tips_round_trip_and_veterans_skip_the_tutorial() {
+        let mut p = Profile::default();
+        assert_eq!(p.tips, 0, "a new player sees every tip");
+        p.tips = 0b1011;
+        assert_eq!(Profile::parse(&p.serialize()).tips, 0b1011);
+        let old_save = "v=1\nruns=3\n";
+        assert_eq!(Profile::parse(old_save).tips, u32::MAX, "players from before the tutorial skip it");
+        assert_eq!(Profile::parse("v=1\nruns=0\n").tips, 0);
+    }
 
     #[test]
     fn future_item_line_round_trips() {

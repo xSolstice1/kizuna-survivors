@@ -2,30 +2,23 @@
 
     python3 tools/hd/app_icon.py
 
-Ren is rendered from the supersampled canvas (not the 4x PNG) so the 512px icon stays sharp,
-and kept inside the maskable safe zone (the centre circle, 80% of the icon) so launchers that
-crop to a circle or squircle never clip him.
+Ren is the art-pass portrait (art/hd/ren_front.png), kept inside the maskable safe zone (the
+centre circle, 80% of the icon) so launchers that crop to a circle or squircle never clip him.
 """
 import pathlib
-import sys
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent))
-import hdkit  # noqa: E402
-import heroes_a  # noqa: E402
-from PIL import Image  # noqa: E402
+from PIL import Image
 
-WEB = hdkit.ROOT / "web"
-BG = "#1c1828"
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+BG = (0x1C, 0x18, 0x28)
 
-captured = []
-hdkit.Art.save = lambda self, path: captured.append(self.img)
-heroes_a.ren(False)
-ren = captured[0]
+ren = Image.open(ROOT / "art/hd/ren_front.png").convert("RGBA")
+ren = ren.crop(ren.getchannel("A").getbbox())
 
 for size in (512, 192):
     h = int(size * 0.74)
     sprite = ren.resize((h * ren.width // ren.height, h), Image.LANCZOS)
-    icon = Image.new("RGBA", (size, size), hdkit.rgb(BG))
+    icon = Image.new("RGBA", (size, size), BG)
     icon.alpha_composite(sprite, ((size - sprite.width) // 2, (size - h) // 2))
-    icon.convert("RGB").save(WEB / f"icon-{size}.png")
-    print(WEB / f"icon-{size}.png")
+    icon.convert("RGB").save(ROOT / f"web/icon-{size}.png")
+    print(ROOT / f"web/icon-{size}.png")

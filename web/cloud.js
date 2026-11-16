@@ -290,9 +290,11 @@
         set("kz_cloud_oauth_state", state);
         var url = URL_ + "/auth/v1/authorize?provider=" + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back(true) + "?state=" + state);
         // A sign-in window; this tab signs in by itself when it finishes. Blocked popups fall back
-        // to signing in in this tab.
+        // to signing in in this tab, and so does the installed app: there a popup opens as a
+        // separate browser tab with no opener, which would load and sign in a second game.
+        var installed = matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches || navigator.standalone;
         var w = 480, h = 640, x = (screen.width - w) / 2, y = (screen.height - h) / 2;
-        var popup = window.open(url, "kz_sign_in", "popup,width=" + w + ",height=" + h + ",left=" + x + ",top=" + y);
+        var popup = !installed && window.open(url, "kz_sign_in", "popup,width=" + w + ",height=" + h + ",left=" + x + ",top=" + y);
         if (!popup) { location.href = url; return; }
         say("Complete sign-in in the Google window.", 0);
       };

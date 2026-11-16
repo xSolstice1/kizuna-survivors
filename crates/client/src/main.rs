@@ -21,6 +21,7 @@ mod synth;
 mod terrain_bake;
 mod textinput;
 mod touch;
+mod tutorial;
 mod ui;
 mod vfx;
 mod voice;
@@ -135,6 +136,7 @@ async fn main() {
     let mut overlay_focus = 0usize;
     let mut overlay_was_open = false;
     let mut cards_focus = 0usize;
+    let mut pick_left = ui::PICK_SECONDS;
 
     let mut collection = menu::CollectionState::default();
     let mut armory_state = armory::ArmoryState::default();
@@ -149,6 +151,8 @@ async fn main() {
     let mut map_opened_now = false;
     let mut ult_alert = ui::UltAlert::default();
     let mut touch = touch::TouchControls::default();
+    // The tutorial step on screen and when it first showed.
+    let mut tip: Option<(tutorial::Step, f64)> = None;
 
     kit::init();
     // One shared atlas for every sprite and font glyph: draws stop switching textures, so a
@@ -216,10 +220,12 @@ async fn main() {
         // UI draws in virtual 1280x720 pixels (scaled down on small screens).
         kit::begin_ui();
         let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
-        touch.update(in_run && !map_open);
+        touch.update(in_run && !map_open && tip.is_none());
         let portrait = screen_height() > screen_width();
         if (touch.pause || portrait) && in_run {
             screen = Screen::Paused;
+            // Unseen, so it shows again on resume; a kept tip would draw over the results after Give up.
+            tip = None;
         }
         let now = get_time();
         // A cloud save to load (another device's progress), applied between runs.
@@ -362,8 +368,9 @@ async fn main() {
 
         // --- Global keys ---
         let over = matches!(world.state, RunState::Dead | RunState::Won);
-        // Esc pauses only during play; on the shrine screen it means "walk away".
-        if is_key_pressed(KeyCode::Escape) && !dev.open && !over && !map_open && (screen == Screen::Paused || !world.paused()) {
+        // Esc pauses only during play; on the shrine screen it means "walk away", on a tutorial step "skip".
+        let tip_shown = screen == Screen::Playing && tip.is_some();
+        if is_key_pressed(KeyCode::Escape) && !dev.open && !over && !map_open && !tip_shown && (screen == Screen::Paused || !world.paused()) {
             screen = if screen == Screen::Paused { Screen::Playing } else { Screen::Paused };
         }
         if is_key_pressed(KeyCode::N) {
@@ -471,13 +478,26 @@ async fn main() {
 
         // --- Fixed-timestep sim (paused while a menu or level-up is open) ---
         // Map toggle (M / Tab) during play.
-        if screen == Screen::Playing && !over && !world.paused() && (is_key_pressed(KeyCode::M) || is_key_pressed(KeyCode::Tab)) {
+        if screen == Screen::Playing && !over && !world.paused() && tip.is_none() && (is_key_pressed(KeyCode::M) || is_key_pressed(KeyCode::Tab)) {
             map_open = !map_open;
         }
         if screen != Screen::Playing || over {
             map_open = false;
         }
-        if screen == Screen::Playing && !world.paused() && !map_open {
+        // First-run tutorial: a step waits for a calm moment of play (no menu, card or map open).
+        let in_view = |p: sim::Vec2| (p.x - world.player.pos.x).abs() < world.view_half.x - 40.0 && (p.y - world.player.pos.y).abs() < world.view_half.y - 40.0;
+        let chest_in_view = world.chests.iter().map(|c| c.0).find(|&p| in_view(p));
+        let shrine_in_view = world.shrine.filter(|&p| in_view(p));
+        if tip.is_none() && screen == Screen::Playing && !over && !world.paused() && !map_open && !portrait && stress.is_none() && perf.is_none() {
+            let sights = tutorial::Sights {
+                special_ready: world.player.special >= 1.0 && world.form_kind().is_none(),
+                chest: chest_in_view.is_some(),
+                shrine: shrine_in_view.is_some(),
+                boss: world.boss().is_some(),
+            };
+            tip = tutorial::due(profile.tips, &sights).map(|step| (step, now));
+        }
+        if screen == Screen::Playing && !world.paused() && !map_open && tip.is_none() {
             acc += dt;
             let mut input = read_input();
             input.move_dir = input.move_dir + touch.dir();
@@ -532,7 +552,7 @@ async fn main() {
         // so draw everything where it is between the last two steps: the player between its
         // last two positions, moving things back along their velocity by the time not yet
         // simulated. Put back right after drawing, so the sim never sees it.
-        let live = screen == Screen::Playing && !world.paused() && !map_open;
+        let live = screen == Screen::Playing && !world.paused() && !map_open && tip.is_none();
         let back = if live { (1.0 - (acc / DT).clamp(0.0, 1.0)) * DT } else { 0.0 };
         let player_now = world.player.pos;
         if back > 0.0 {
@@ -592,12 +612,12 @@ async fn main() {
             let t_m = get_time();
             let clicked = !map_open && !over && !world.paused() && ui::minimap(&world, &assets, false, false);
             perf_parts[3] += (get_time() - t_m) * 1000.0;
-            if clicked {
+            if clicked && tip.is_none() {
                 map_open = true;
                 map_opened_now = true;
             }
         }
-        let alert_blocked = world.paused() || screen == Screen::Paused || map_open;
+        let alert_blocked = world.paused() || screen == Screen::Paused || map_open || tip.is_some();
         let ult_ready = matches!(screen, Screen::Playing | Screen::Paused) && !matches!(world.state, RunState::Dead | RunState::Won) && world.player.special >= 1.0 && world.form_kind().is_none();
         if ult_alert.update(ult_ready, alert_blocked, dt) {
             audio.play(synth::Sfx::Rise);
@@ -613,6 +633,41 @@ async fn main() {
 
         if let (Some((text, left)), false) = (&fx.banner, world.paused()) {
             ui::banner(text, *left, world.boss().is_some());
+        }
+        if let (Some((step, shown_at)), Screen::Playing, false, false) = (tip, &screen, map_open, portrait) {
+            let age = (now - shown_at) as f32;
+            // A box `size` world units across around `p`, in UI pixels. Not `cam.world_to_screen`:
+            // it assumes a y-flipped camera, and `camera_for` builds a y-down one.
+            let around = |p: sim::Vec2, size: f32| {
+                let k = render::world_scale() / kit::ui_scale();
+                let c = (vec2(p.x, p.y) - cam.target) * k + vec2(kit::screen_width(), kit::screen_height()) / 2.0;
+                Rect::new(c.x - size * k / 2.0, c.y - size * k * 0.55, size * k, size * k)
+            };
+            let hud = |part| ui::hud_rect(part, &world, touch.active);
+            use tutorial::Step;
+            use ui::HudPart;
+            let hole = match step {
+                Step::Hero => around(world.player.pos, 48.0),
+                Step::Chest => around(chest_in_view.unwrap_or(world.player.pos), 40.0),
+                Step::Shrine => around(shrine_in_view.unwrap_or(world.player.pos), 64.0),
+                Step::Xp => hud(HudPart::Xp),
+                Step::Health => hud(HudPart::Health),
+                Step::Loadout => hud(HudPart::Loadout),
+                Step::Special | Step::SpecialReady => hud(HudPart::Special),
+                Step::Timer => hud(HudPart::Timer),
+                Step::Map => hud(HudPart::Minimap),
+                Step::Sen => hud(HudPart::Stats),
+                Step::Boss => hud(HudPart::Boss),
+            };
+            if let Some(action) = tutorial::draw(step, hole, &world, touch.active, age) {
+                audio.play(synth::Sfx::Click);
+                profile.tips |= match action {
+                    tutorial::Action::Next => step.bit(),
+                    tutorial::Action::Skip => u32::MAX,
+                };
+                save::store(&profile);
+                tip = None;
+            }
         }
         let mut overlay_picked = false;
         let focus_overlay_open = world.chest_result.is_none() && (world.shrine_offer.is_some() || world.offer.is_some());
@@ -634,7 +689,10 @@ async fn main() {
             if fresh {
                 overlay_focus = 0;
             }
-            let choice = ui::shrine(&offer, &assets, &mut overlay_focus);
+            pick_left = if fresh { ui::PICK_SECONDS } else { pick_left - dt };
+            let choice = ui::shrine(&offer, &assets, &mut overlay_focus, pick_left);
+            // Timing out walks away: a blessing's price is never paid unasked.
+            let choice = choice.or_else(|| (pick_left <= 0.0).then_some(None));
             if let Some(choice) = choice.filter(|_| !fresh) {
                 audio.play(if choice.is_some() { synth::Sfx::Chime } else { synth::Sfx::Click });
                 world.choose_shrine(choice);
@@ -645,7 +703,10 @@ async fn main() {
             if fresh {
                 overlay_focus = 0;
             }
-            let choice = ui::replace_picker(&world, &assets, &mut overlay_focus, touch.active);
+            pick_left = if fresh { ui::PICK_SECONDS } else { pick_left - dt };
+            let choice = ui::replace_picker(&world, &assets, &mut overlay_focus, touch.active, pick_left);
+            // Timing out cancels: an owned skill is never overwritten unasked.
+            let choice = choice.or_else(|| (pick_left <= 0.0).then_some(None));
             if let Some(choice) = choice.filter(|_| !fresh) {
                 audio.play(synth::Sfx::Click);
                 if choice.is_none() {
@@ -659,9 +720,17 @@ async fn main() {
             if fresh {
                 overlay_focus = std::mem::take(&mut cards_focus);
             }
-            let picked = ui::level_up(&world, &offer, &assets, &mut overlay_focus, touch.active);
+            pick_left = if fresh { ui::PICK_SECONDS } else { pick_left - dt };
+            let picked = ui::level_up(&world, &offer, &assets, &mut overlay_focus, touch.active, pick_left);
             if let Some(i) = picked.filter(|_| !fresh) {
                 audio.play(synth::Sfx::Click);
+                world.choose(i);
+                overlay_picked = true;
+            } else if pick_left <= 0.0 {
+                audio.play(synth::Sfx::Click);
+                // A focused Replace card would open the replace picker, which times out to Cancel: take a plain card instead.
+                let plain = |i: usize| offer.get(i).is_some_and(|&u| !world.is_replacement(u));
+                let i = if plain(overlay_focus) { overlay_focus } else { (0..offer.len()).find(|&i| plain(i)).unwrap_or(overlay_focus) };
                 world.choose(i);
                 overlay_picked = true;
             }
