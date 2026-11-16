@@ -91,16 +91,10 @@ fn world_enemy_src(k: EnemyKind) -> Option<&'static str> {
     })
 }
 
-/// The art name of a hero with a cut-out rig (art/rig/<name>, art/hd/rig/<name>).
+/// The art name of a hero with a cut-out rig: its key, when art/rig/<key>/game.json exists
+/// (see build.rs). Every rigged hero wears gear the same way (`Assets::dress`).
 fn rig_name(h: HeroId) -> Option<&'static str> {
-    Some(match h {
-        HeroId::Ren => "ren",
-        HeroId::Riku => "riku",
-        HeroId::Shun => "shun",
-        HeroId::Toya => "toya",
-        HeroId::Kuon => "kuon",
-        _ => return None,
-    })
+    sprites::rig_json(h.key()).map(|_| h.key())
 }
 
 /// The art name of a hero's transformed form.
@@ -115,30 +109,16 @@ fn form_name(h: HeroId) -> Option<&'static str> {
     })
 }
 
-/// Worn gear pieces and accessory anchors (tools/ai/gear_art.py slice).
+/// Worn gear pieces and accessory anchors (tools/ai/gear_art.py slice); none yet = no gear.
 fn wear_json(name: &str) -> &'static str {
-    match name {
-        "ren" => include_str!("../../../art/rig/ren/wear.json"),
-        "riku" => include_str!("../../../art/rig/riku/wear.json"),
-        "shun" => include_str!("../../../art/rig/shun/wear.json"),
-        "toya" => include_str!("../../../art/rig/toya/wear.json"),
-        "kuon" => include_str!("../../../art/rig/kuon/wear.json"),
-        _ => unreachable!(),
-    }
+    sprites::wear_json(name).unwrap_or(r#"{"anchors": {}, "pieces": {}}"#)
 }
 
 /// Slots drawn as part of the rig (outfit pieces); the other wearables hang on it as icons.
 const WORN: [sim::gear::Slot; 5] = [sim::gear::Slot::Hat, sim::gear::Slot::Top, sim::gear::Slot::Bottom, sim::gear::Slot::Gloves, sim::gear::Slot::Shoes];
 
 fn rig_json(name: &str) -> &'static str {
-    match name {
-        "ren" => include_str!("../../../art/rig/ren/game.json"),
-        "riku" => include_str!("../../../art/rig/riku/game.json"),
-        "shun" => include_str!("../../../art/rig/shun/game.json"),
-        "toya" => include_str!("../../../art/rig/toya/game.json"),
-        "kuon" => include_str!("../../../art/rig/kuon/game.json"),
-        _ => unreachable!(),
-    }
+    sprites::rig_json(name).expect("rigged hero without game.json")
 }
 
 pub struct Assets {
@@ -417,7 +397,8 @@ impl Assets {
                     Some(e) => format!("{}_{}", it.slot.key(), e.key()),
                     None => format!("{}_{}_{}", it.slot.key(), it.base_key(), it.tier()),
                 });
-            } else if matches!(it.slot, sim::gear::Slot::Necklace | sim::gear::Slot::Ring | sim::gear::Slot::Earring | sim::gear::Slot::Charm | sim::gear::Slot::Omamori) {
+            } else {
+                // Small gear and the Arsenal hang on the rig as their icons.
                 extras.push((it.slot, self.item_icon(it)));
                 sig.push(format!("{}#{}", it.slot.key(), it.id));
             }
@@ -2945,7 +2926,18 @@ mod tests {
                     assert!(sprites::has_art(&format!("wear/{name}/{piece}.{part}")), "missing art/hd/wear/{name}/{piece}.{part}.png");
                 }
             }
-            assert!(v["anchors"]["neck"].is_array(), "{name} has no gear anchors");
+            for a in ["neck", "ear", "hip", "hand", "back"] {
+                assert!(v["anchors"][a].is_array(), "{name} has no {a} anchor: run tools/ai/gear_art.py hero {name}");
+            }
+            for slot in WORN {
+                for b in 0..slot.base_count() {
+                    (it.slot, it.base) = (slot, b as u8);
+                    for t in 0..3 {
+                        let piece = format!("{}_{}_{t}", slot.key(), it.base_key());
+                        assert!(v["pieces"].get(&piece).is_some(), "{name} can't wear {piece}: run tools/ai/gear_art.py hero {name}");
+                    }
+                }
+            }
             for e in sim::gear::ALL_EXOTICS.into_iter().filter(|e| WORN.contains(&e.slot())) {
                 let piece = format!("{}_{}", e.slot().key(), e.key());
                 assert!(v["pieces"].get(&piece).is_some(), "{name} has no worn look for {piece}");

@@ -50,7 +50,7 @@ pub struct RigDef {
     parts: Vec<Part>,
     feet: Vec2,
     units_per_px: f32,
-    /// Small worn gear hung on the rig (necklace, earring, ring, charm, omamori).
+    /// Small worn gear hung on the rig (necklace, earring, ring, charm, omamori, Arsenal).
     extras: Vec<(Slot, Texture2D)>,
     anchors: Anchors,
 }
@@ -62,6 +62,8 @@ struct Anchors {
     ear: Vec2,
     hip: Vec2,
     hand: Vec2,
+    /// The far shoulder: the Arsenal is worn on the back, peeking over it.
+    back: Vec2,
 }
 
 impl RigDef {
@@ -91,7 +93,7 @@ impl RigDef {
         let pair = |x: &serde_json::Value| vec2(x[0].as_f64().unwrap_or(0.0) as f32, x[1].as_f64().unwrap_or(0.0) as f32);
         let a = &v["anchors"];
         let mut out = self.clone();
-        out.anchors = Anchors { neck: pair(&a["neck"]), ear: pair(&a["ear"]), hip: pair(&a["hip"]), hand: pair(&a["hand"]) };
+        out.anchors = Anchors { neck: pair(&a["neck"]), ear: pair(&a["ear"]), hip: pair(&a["hip"]), hand: pair(&a["hand"]), back: pair(&a["back"]) };
         out.extras = extras;
         for (i, name) in PARTS.iter().enumerate() {
             let patches: Vec<(Image, Rect)> = pieces
@@ -530,6 +532,8 @@ fn draw_scaled(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color,
 
     let parts = &def.parts;
     draw_part(&parts[HAIR], head, tint, 8, 16, hair_bend);
+    // The Arsenal on the back, tilted, its top showing over the far shoulder.
+    extra(Slot::Arsenal, body, an.back + vec2(1.5, -6.5) / def.units_per_px, 11.0, false, -28.0 + swing * 0.3);
     draw_part(&parts[ARM_FAR_UPPER], upper_far, tint, 1, 1, rigid);
     draw_part(&parts[ARM_FAR_FORE], fore_far, tint, 1, 1, rigid);
     draw_part(&parts[LEG_FAR], leg(LEG_FAR, q.leg[1], q.lift[1]), tint, 1, 1, rigid);
@@ -539,10 +543,10 @@ fn draw_scaled(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color,
     extra(Slot::Charm, body, an.hip, 3.6, true, swing);
     extra(Slot::Omamori, body, an.hip + vec2(-95.0, 10.0), 3.2, true, swing * 1.2);
     draw_part(&parts[HEAD], head, tint, 1, 1, rigid);
-    extra(Slot::Earring, head, an.ear, 2.2, true, swing * 0.5 - st.head.x * 2.0);
+    extra(Slot::Earring, head, an.ear, 1.8, true, swing * 0.5 - st.head.x * 2.0);
     draw_part(&parts[ARM_NEAR_UPPER], upper_near, tint, 1, 1, rigid);
     draw_part(&parts[ARM_NEAR_FORE], fore_near, tint, 1, 1, rigid);
-    extra(Slot::Ring, fore_near, an.hand, 1.8, false, 0.0);
+    extra(Slot::Ring, fore_near, an.hand, 0.9, false, 0.0);
 }
 
 /// A texture on the source-pixel rect `r`, mapped through `m`.

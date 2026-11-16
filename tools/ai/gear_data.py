@@ -97,9 +97,10 @@ def items():
             for t, tier in enumerate(TIERS):
                 yield slot, i, key(name), t, bg, f"{desc}; {tier}"
 
-# Where small gear hangs on each hero, in design-image pixels (1024 canvas): the base of the
-# neck (necklace), the visible earlobe (earring), the front of the hip (charms, omamori) and
-# the near hand's knuckles (ring). Picked by eye from art/ai/wear/anchors_<hero>.png.
+# Hand-picked overrides of the anchors gear_art.anchors() derives from each rig (design-image
+# pixels, 1024 canvas): the base of the neck (necklace), the visible earlobe (earring), the
+# front of the hip (charms, omamori), the near hand's knuckles (ring), the far shoulder (back,
+# Arsenal). A new hero needs none; add one only if a derived point looks off.
 ANCHORS = {
     "ren": {"neck": [569, 544], "ear": [459, 451], "hip": [645, 711], "hand": [382, 737]},
     "riku": {"neck": [552, 584], "ear": [412, 424], "hip": [632, 711], "hand": [385, 751]},

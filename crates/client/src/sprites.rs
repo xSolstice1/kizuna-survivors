@@ -46,6 +46,16 @@ pub fn free_art(path: &str) -> Texture2D {
     Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true }.texture()
 }
 
+/// A rigged hero's art/rig/<hero>/game.json, if it has a rig.
+pub fn rig_json(hero: &str) -> Option<&'static str> {
+    index::rig_json(hero)
+}
+
+/// A rigged hero's art/rig/<hero>/wear.json (worn gear and its anchors), if it has one.
+pub fn wear_json(hero: &str) -> Option<&'static str> {
+    index::wear_json(hero)
+}
+
 /// Whether art/hd/<path>.png (or .jpg) exists.
 pub fn has_art(path: &str) -> bool {
     index::png(path).is_some()

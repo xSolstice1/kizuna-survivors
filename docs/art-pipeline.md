@@ -197,8 +197,18 @@ writes `art/hd/rig/<hero>/*.png` and `art/rig/<hero>/game.json`. Then:
 
 - `python3 tools/ai/hero_art.py <hero> <design.png>` makes `art/hd/<hero>_front.png` (menus,
   288x384) and `art/hd/<hero>_face.png` (HUD portrait, 256x256 around the head).
-- In `crates/client/src/render.rs`, add the hero to `rig_name()` and `rig_json()`, and to the
-  front-view match in `Assets::load` if it isn't covered.
+- No code to add: the build finds every `art/rig/<key>/game.json` (the folder named by the
+  hero's `HeroId` key) and the game uses the rig, its front view and its face for that hero.
+
+### 5b. Gear (nano, ~$1.20)
+
+    python3 tools/ai/gear_art.py hero <hero>
+
+makes the 28 outfit edits (every base at every tier, plus the worn Exotics), slices them into
+worn pieces and writes `art/rig/<hero>/wear.json` with the accessory anchors, derived from the
+rig (override one in `gear_data.ANCHORS` only if it looks off). The client test
+`every_gear_base_has_an_icon_and_its_worn_pieces_exist` fails for any rigged hero that can't
+wear every piece, so a hero can't ship without it. Check a mixed outfit at game size.
 
 ### 6. Forms (pro, ~$0.14)
 
@@ -268,8 +278,10 @@ text drives its icon and how it looks on the body.
   waist; arms with the hands as gloves; legs with the feet as shoes) and writes patches over
   the rig's parts to `art/hd/wear/<hero>/`, with their rects in `art/rig/<hero>/wear.json`.
   The game applies them when the outfit changes (`RigDef::dressed`).
-- Necklace, earring, ring, charm and omamori hang on the rig as their icons, at the anchors
-  in `gear_data.ANCHORS` (picked from a grid over the design image).
+- Necklace, earring, ring, charm, omamori and the Arsenal (on the back) hang on the rig as
+  their icons, at anchors derived from the rig (`gear_art.anchors`).
+- Every outfit edit gets the item's icon as a reference image; without it the worn colours
+  and details drift from the icon.
 - Check a slice with a mixed outfit at game size before moving on; redo a bad edit by deleting
   `art/ai/wear/<hero>_<tag>.png` and running `wear` again.
 

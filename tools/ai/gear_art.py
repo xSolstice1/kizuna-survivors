@@ -4,6 +4,7 @@
     python3 -I tools/ai/gear_art.py icons-cut             # re-cut saved icon sheets
     python3 -I tools/ai/gear_art.py wear ren [--tier 0] [--only a0]   # outfit edits (nano)
     python3 -I tools/ai/gear_art.py slice ren             # cut the edits into worn pieces
+    python3 tools/ai/gear_art.py hero <name>              # a new rigged hero: wear + slice (~$1.20)
 
 Icons: art/hd/gear/<slot>/<base>_<tier>.png (256 palette PNGs), descriptions in gear_data.py.
 
@@ -32,6 +33,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import gear_data as G  # noqa: E402
 from icons_hd import PROMPT, cell, place, save, style_sheet  # noqa: E402
 from process import key_green, bleed  # noqa: E402
+from rig_export import TEXELS_PER_UNIT  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 HD = ROOT / "art" / "hd"
@@ -288,6 +290,30 @@ def owner_map(parts, m, changed, neck_y):
     return own
 
 
+def anchors(hero, parts, cut, waist_y):
+    """Where small gear hangs (design-image pixels), derived from the rig so a new hero needs no
+    hand-picking: the collar below the neck point, the back of the face for the earring, the
+    front of the hip at the waist, the near hand's knuckles, and the far shoulder (Arsenal, worn
+    on the back). gear_data.ANCHORS overrides any of them."""
+    nx, ny = cut["neck"]
+    hr = parts["head"][1]
+    tr, tp = parts["torso"][1], parts["torso"][2]
+    m = parts["arm_near_fore"][0][..., 3] > 0.5
+    ys, xs = np.where(m)
+    low = ys >= np.percentile(ys, 85)              # hands hang down: the forearm's lowest part
+    hand = [xs[low].mean(), ys[low].mean() - 0.1 * (ys.max() - ys.min())]
+    shoulder = parts["arm_far_upper"][2]
+    a = {
+        "neck": [nx, ny + 45],
+        "ear": [hr[0] + 0.3 * hr[2], ny - 0.14 * hr[3]],
+        "hip": [tp[0] + 0.16 * tr[2], waist_y + 25],
+        "hand": hand,
+        "back": [shoulder[0] - 20, shoulder[1] - 10],
+    }
+    a.update(G.ANCHORS.get(hero, {}))
+    return {k: [round(float(v)) for v in xy] for k, xy in a.items()}
+
+
 def save_piece(arr, path):
     """A patch as a palette PNG (~40% smaller than RGBA) whose first two entries are exactly
     alpha 0 (outside the region) and 1 (cleared), so quantising can't turn one into the other."""
@@ -338,7 +364,7 @@ def slice_hero(hero):
     waist_y = cut.get("waist_y") or find_waist(hero, base_rgb, base_a, m0["torso"]) or (cut["neck"][1] + cut["hem_y"]) / 2 + 40
     print(hero, "waist at", round(waist_y))
     reg, m = regions(parts, waist_y, cut["neck"][1])
-    k = 8 * game["units_per_px"]          # texels per source px (rig_export.py)
+    k = TEXELS_PER_UNIT * game["units_per_px"]   # texels per source px, as the rig's own parts
     out_dir = HD / "wear" / hero
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {}
@@ -354,7 +380,9 @@ def slice_hero(hero):
         # gaps and fill whatever the changed area encloses.
         soft = (np.linalg.norm(rgb - base_rgb, axis=-1) > 18) & (a > 0.02)
         # Pixels the edit removed (slimmer clothes, hair hidden by a hat) are changes too.
+        # The old outline's soft anti-aliased rim counts too, or a faint ring of it stays.
         removed = ndimage.binary_opening((base_a > 0.5) & (a < 0.1), iterations=1)
+        removed = ndimage.binary_dilation(removed, iterations=3) & (base_a > 0.02) & (a < 0.1)
         grown = ndimage.binary_fill_holes(ndimage.binary_closing(changed | removed | (soft & ndimage.binary_dilation(changed, iterations=6)), iterations=5))
         grown = ndimage.binary_dilation(grown, iterations=2)
         for slot, name, _, _ in edit_items(g, idx, t):
@@ -364,6 +392,8 @@ def slice_hero(hero):
                 # Only what the edit changed: unchanged pixels (hair locks over the body, the face
                 # under a hat) stay the rig's own, so pieces never leave a seam across them.
                 inside = region & (own == pi) & grown & ((a > 0.02) | m[part])
+                if slot == "hat" and part == "hair_back":
+                    inside = region & grown & m[part]
                 if not inside.any():
                     continue
                 inside = ndimage.binary_dilation(inside, iterations=1) & region
@@ -378,6 +408,10 @@ def slice_hero(hero):
                 pa = a[y0:y1, x0:x1].copy()
                 patch[..., :3] = np.where(hidden[..., None], pc[..., :3], patch[..., :3])
                 pa = np.where(hidden, pc[..., 3], pa)
+                if slot == "hat" and part == "hair_back":
+                    # Back hair hidden behind the head: where the hat edit took hair away or
+                    # covered it, clear it too, or it shows once the head's own hair is gone.
+                    pa = np.where(hidden, 0.0, pa)
                 patch[..., 3] = pa
                 im = Image.fromarray((patch * 255).clip(0, 255).astype(np.uint8), "RGBA")
                 tw, th = max(1, round(im.width * k)), max(1, round(im.height * k))
@@ -390,7 +424,7 @@ def slice_hero(hero):
                 save_piece(arr, out_dir / f"{name}.{part}.png")
                 pieces[part] = [int(x0), int(y0), int(x1 - x0), int(y1 - y0)]
             meta[name] = pieces
-    wear = {"anchors": G.ANCHORS.get(hero, {}), "pieces": meta}
+    wear = {"anchors": anchors(hero, parts, cut, waist_y), "pieces": meta}
     (ROOT / "art" / "rig" / hero / "wear.json").write_text(json.dumps(wear, indent=0, sort_keys=True))
     print(hero, len(meta), "pieces")
 
@@ -409,4 +443,8 @@ if __name__ == "__main__":
     elif a.cmd == "wear":
         edits(a.hero, a.tier, a.only)
     elif a.cmd == "slice":
+        slice_hero(a.hero)
+    elif a.cmd == "hero":
+        # Everything a newly rigged hero needs to wear gear: all outfit edits, then the slice.
+        edits(a.hero, a.tier, a.only)
         slice_hero(a.hero)
