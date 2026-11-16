@@ -26,6 +26,9 @@ pub struct StageArt {
     glow: Texture2D,
     /// Black with a clear centre: the downpour's limited sight.
     dark: Texture2D,
+    /// The current world's grass (loaded on first use) and the foreground branches.
+    grass: std::cell::RefCell<Option<(StageId, Option<crate::foliage::Grass>)>>,
+    branches: crate::foliage::Branches,
 }
 
 fn rgb(hex: u32, a: f32) -> Color {
@@ -167,7 +170,7 @@ impl StageArt {
         let glow = radial(64, [255, 255, 255], |d| (1.0 - d).max(0.0).powi(2));
         let dark = radial(128, [2, 3, 8], |d| ((d - 0.22) / 0.4).clamp(0.0, 1.0) * 0.86);
         let cards = (1..=5).map(|w| crate::terrain_bake::ground_texture(&format!("w{w}/terrain/ground_a"), 1.0)).collect();
-        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, vignette, glow, dark }
+        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, vignette, glow, dark, grass: std::cell::RefCell::new(None), branches: crate::foliage::Branches::load() }
     }
 
     fn get(&self, name: &str) -> &Texture2D {
@@ -321,15 +324,32 @@ impl StageArt {
         }
     }
 
-    /// Screen-space vignette, drawn after the world and before the UI.
+    /// The world's swaying grass (campaign worlds that have it), parted by the hero.
+    pub fn draw_grass(&self, stage: StageId, terrain: &sim::terrain::Terrain, view: Rect, hero: Vec2, time: f64) {
+        if !terrain.on {
+            return;
+        }
+        let mut g = self.grass.borrow_mut();
+        if g.as_ref().is_none_or(|(s, _)| *s != stage) {
+            *g = Some((stage, crate::foliage::Grass::load(stage)));
+        }
+        if let Some((_, Some(grass))) = g.as_ref() {
+            grass.draw(stage, view, hero, time);
+        }
+    }
+
+    /// Screen-space vignette, drawn after the world and before the UI, with the world's
+    /// foreground branches just inside it.
     pub fn draw_vignette(&self) {
-        draw_texture_ex(
-            &self.vignette,
-            0.0,
-            0.0,
-            WHITE,
-            DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() },
-        );
+        let d = DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() };
+        draw_texture_ex(&self.vignette, 0.0, 0.0, WHITE, d.clone());
+        // A second, fainter pass: deeper corners, the eye drawn to the middle.
+        draw_texture_ex(&self.vignette, 0.0, 0.0, Color::new(1.0, 1.0, 1.0, 0.45), d);
+    }
+
+    /// The world's foreground branches (screen space), `cam` the camera's world position.
+    pub fn draw_branches(&self, stage: StageId, cam: Vec2, time: f64) {
+        self.branches.draw(stage, cam, time);
     }
 
     /// Rainward 13's downpour: sight shrinks to a pool around the player, rain streaks

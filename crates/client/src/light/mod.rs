@@ -290,8 +290,16 @@ impl Lights {
             }
         });
         set_camera(cam);
+        // Exactly what the camera sees (its clip-space corners in the world), so the map
+        // covers the screen edge to edge whatever the zoom, shake or target size.
+        let inv = cam.matrix().inverse();
+        let a = inv.project_point3(vec3(-1.0, -1.0, 0.0));
+        let b = inv.project_point3(vec3(1.0, 1.0, 0.0));
+        let (x0, x1, y0, y1) = (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y));
+        let flip = a.y > b.y;
+        let _ = view;
         gl_use_material(mul);
-        draw_texture_ex(&rt.texture, view.x, view.y, WHITE, DrawTextureParams { dest_size: Some(vec2(view.w, view.h)), ..Default::default() });
+        draw_texture_ex(&rt.texture, x0, y0, WHITE, DrawTextureParams { dest_size: Some(vec2(x1 - x0, y1 - y0)), flip_y: !flip, ..Default::default() });
         gl_use_default_material();
     }
 }

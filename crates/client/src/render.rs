@@ -1544,6 +1544,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     stage.draw_ground(world.cfg.stage, &world.terrain, cam, time);
     let p = world.player.pos;
     let view = view_rect(cam);
+    stage.draw_grass(world.cfg.stage, &world.terrain, view, vec2(p.x, p.y + 6.0), time);
 
     // The rigged hero, drawn at the end of this fn (after the world target), at full resolution.
     let mut hires_player: Option<(std::rc::Rc<crate::rig::RigDef>, Vec2, bool, Color)> = None;
@@ -1757,8 +1758,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     crate::light::LIGHTS.with(|l| {
         let mut l = l.borrow_mut();
         crate::light::sources::gather(world, &mut l, view, time);
+        crate::ambient::lights(world.cfg.stage, view, time, &mut l);
         l.apply(cam, view, a.vfx.tex("glow"), &|f| a.vfx.additive(f));
     });
+    crate::ambient::draw(world.cfg.stage, view, time, &a.vfx);
     for i in 0..e.len() {
         if let Some(k) = e.carry[i] {
             let pos = e.pos[i];

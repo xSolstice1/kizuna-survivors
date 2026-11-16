@@ -4,11 +4,13 @@ use sim::world::DT;
 use sim::meta::{Profile, RunReport};
 use sim::{Input, RunState, Stress, World, WorldConfig};
 
+mod ambient;
 mod armory;
 mod audio;
 mod chest_ui;
 mod cloud;
 mod devmenu;
+mod foliage;
 mod kit;
 mod light;
 mod menu;
@@ -630,6 +632,9 @@ async fn main() {
             stage_art.draw_downpour(pp, now, fx.flash);
         }
         stage_art.draw_vignette();
+        if !matches!(world.state, RunState::Dead | RunState::Won) {
+            stage_art.draw_branches(world.cfg.stage, cam.target, now);
+        }
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {
             let t_h = get_time();
