@@ -10,6 +10,7 @@ mod chest_ui;
 mod cloud;
 mod devmenu;
 mod kit;
+mod light;
 mod menu;
 mod platform;
 mod render;
@@ -176,7 +177,24 @@ async fn main() {
     let mut perf_parts = [0.0f64; 5];
     if let Some(st) = perf {
         profile.stage = st;
-        if perf_real() {
+        if std::env::var("KZ_PERF_CALM").is_ok() {
+            // An ordinary early night, a minute in (for looking at the art, not timing).
+            world = new_world(None, &profile);
+            world.player.max_hp = 1e9;
+            world.player.hp = 1e9;
+            for _ in 0..3600 {
+                world.step(Default::default());
+                if world.offer.is_some() {
+                    world.bot_pick();
+                }
+                if world.chest_result.is_some() {
+                    world.close_chest();
+                }
+                if world.shrine_offer.is_some() {
+                    world.choose_shrine(None);
+                }
+            }
+        } else if perf_real() {
             // A realistic late night: full awakened loadout at 22:00, the player can't die.
             world = new_world(None, &profile);
             world.debug_max_loadout();
@@ -808,6 +826,17 @@ async fn main() {
             }
         }
         ui::rotate_prompt();
+        // Dev: `KZ_SHOT=<file.png>` with KZ_PERF saves the frame after `KZ_SHOT_FRAME` (120) frames
+        // and exits (for checking art and lighting natively, quicker than the web build).
+        if perf.is_some() {
+            if let Ok(path) = std::env::var("KZ_SHOT") {
+                let at = std::env::var("KZ_SHOT_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(120u32);
+                if perf_frames == at {
+                    get_screen_data().export_png(&path);
+                    return;
+                }
+            }
+        }
         next_frame().await
     }
 }
