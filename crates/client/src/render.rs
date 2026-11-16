@@ -1777,7 +1777,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let fox = form == Some(SpecialKind::NineTails);
     let hannya = form == Some(SpecialKind::Hannya);
     let blink = form.is_none() && pl.iframes > 0.0 && ((time * 20.0) as i32) % 2 == 0;
-    let lit = crate::light::LIGHTS.with(|l| l.borrow().light_at(vec2(p.x, p.y)));
+    let lit = crate::light::LIGHTS.with(|l| l.borrow_mut().eased_light(vec2(p.x, p.y), get_frame_time().min(0.1)));
     let tint = if blink { Color::new(lit.r, lit.g, lit.b, 0.35) } else { lit };
     let t = time as f32;
     if fox {
@@ -1923,7 +1923,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     crate::light::LIGHTS.with(|l| {
         let mut l = l.borrow_mut();
         let feet = vec2(p.x, p.y + 6.0);
-        let skew = l.skew_at(feet);
+        let skew = l.eased_skew(feet, get_frame_time().min(0.1));
         match &rig {
             Some(r) => l.rig_shadow(r, &fx.hero_rig, feet, pl.facing.x < 0.0, skew, 1.0, cam),
             None => {

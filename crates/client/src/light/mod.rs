@@ -101,13 +101,17 @@ pub struct Light {
 pub struct Lights {
     rt: Option<(RenderTarget, u32, u32)>,
     silhouette: Option<RenderTarget>,
+    /// The hero's shadow direction, eased towards `skew_at` so it turns, never snaps.
+    hero_skew: Option<Vec2>,
+    /// The hero's light tint, eased like `hero_skew` (attacks flashing by don't make it flicker).
+    hero_tint: Option<Color>,
     multiply: Option<Material>,
     pub list: Vec<Light>,
     ambient: Color,
 }
 
 thread_local! {
-    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, multiply: None, list: Vec::new(), ambient: WHITE });
+    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, hero_skew: None, hero_tint: None, multiply: None, list: Vec::new(), ambient: WHITE });
 }
 
 const MUL_VERTEX: &str = r#"#version 100
@@ -154,9 +158,12 @@ impl Lights {
         }
     }
 
-    /// A light that casts no shadow (the hero's own glow).
+    /// A light that steers no shadows: the hero's own glow, and anything that moves or comes
+    /// and goes (attacks, pickups, gems), which would make shadows swing about.
     pub fn add_own(&mut self, pos: Vec2, radius: f32, color: Color) {
-        self.list.push(Light { pos, radius, color, casts: false });
+        if self.list.len() < 600 {
+            self.list.push(Light { pos, radius, color, casts: false });
+        }
     }
 
     /// Which way a shadow falls at `p` (per unit of height, like `SKEW`): away from the
@@ -185,6 +192,29 @@ impl Lights {
             c.b += l.color.b * k;
         }
         Color::new((c.r.min(0.7) * 2.0).min(1.0), (c.g.min(0.7) * 2.0).min(1.0), (c.b.min(0.7) * 2.0).min(1.0), 1.0)
+    }
+
+    /// `light_at(p)` eased over time (`dt` seconds), for the tint of one character.
+    pub fn eased_light(&mut self, p: Vec2, dt: f32) -> Color {
+        let t = self.light_at(p);
+        let k = 1.0 - (-dt * 6.0).exp();
+        let c = match self.hero_tint {
+            Some(c) => Color::new(c.r + (t.r - c.r) * k, c.g + (t.g - c.g) * k, c.b + (t.b - c.b) * k, 1.0),
+            None => t,
+        };
+        self.hero_tint = Some(c);
+        c
+    }
+
+    /// `skew_at(p)` eased over time (`dt` seconds), for a shadow that follows one character.
+    pub fn eased_skew(&mut self, p: Vec2, dt: f32) -> Vec2 {
+        let target = self.skew_at(p);
+        let s = match self.hero_skew {
+            Some(prev) => prev + (target - prev) * (1.0 - (-dt * 4.0).exp()),
+            None => target,
+        };
+        self.hero_skew = Some(s);
+        s
     }
 
     /// The rig's shadow: the posed rig drawn black into a small soft target, then laid on the

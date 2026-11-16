@@ -74,9 +74,15 @@ pub fn prop(c: Color, flicker: f32) -> Glow {
     glow(160.0, c.r * k, c.g * k, c.b * k, 0.0)
 }
 
-/// Adds `g` shining from `p` (its ground point).
+/// Adds `g` shining from `p` (its ground point): a steady light that shadows fall away from.
 pub fn emit(l: &mut Lights, p: Vec2, g: Glow) {
     l.add(p - vec2(0.0, g.lift), g.radius, g.color);
+}
+
+/// Adds a passing light (moving, or there for a moment): it lights things but steers no
+/// shadows, so they don't swing about as it goes by.
+pub fn emit_passing(l: &mut Lights, p: Vec2, g: Glow) {
+    l.add_own(p - vec2(0.0, g.lift), g.radius, g.color);
 }
 
 /// Everything in the world that glows, near the view: the shrine, fire pools, soul lanterns,
@@ -98,7 +104,7 @@ pub fn gather(world: &World, l: &mut Lights, view: Rect, time: f64) {
     let e = &world.enemies;
     for i in 0..e.len() {
         if let Some(g) = enemy(e.kind[i]).filter(|g| near(e.pos[i], g.radius)) {
-            emit(l, v(e.pos[i]), g);
+            emit_passing(l, v(e.pos[i]), g);
         }
     }
     // Attacks light their path; with hundreds in flight only some of them do (it adds up).
@@ -106,20 +112,20 @@ pub fn gather(world: &World, l: &mut Lights, view: Rect, time: f64) {
     let step = 1 + pr.pos.len() / 150;
     for i in (0..pr.pos.len()).step_by(step) {
         if let Some(g) = projectile(pr.kind[i]).filter(|_| near(pr.pos[i], 60.0)) {
-            emit(l, v(pr.pos[i]), Glow { radius: g.radius + pr.radius[i] * 2.0, ..g });
+            emit_passing(l, v(pr.pos[i]), Glow { radius: g.radius + pr.radius[i] * 2.0, ..g });
         }
     }
     for sh in world.shots.iter().filter(|s| near(s.pos, 30.0)) {
         let c = crate::stage::bullet_color(sh.style);
-        emit(l, v(sh.pos), glow(30.0, 0.08 + c.r * 0.16, c.g * 0.12, c.b * 0.12, 0.0));
+        emit_passing(l, v(sh.pos), glow(30.0, 0.08 + c.r * 0.16, c.g * 0.12, c.b * 0.12, 0.0));
     }
     for (c, _) in world.chests.iter().filter(|c| near(c.0, 70.0)) {
-        emit(l, v(*c), glow(70.0, 0.30, 0.24, 0.10, 4.0));
+        emit_passing(l, v(*c), glow(70.0, 0.30, 0.24, 0.10, 4.0));
     }
     for (p, k) in world.pickups.iter().filter(|p| near(p.0, 60.0)) {
-        emit(l, v(*p), pickup(*k));
+        emit_passing(l, v(*p), pickup(*k));
     }
     for g in world.gems.pos.iter().step_by(3).filter(|g| near(**g, 24.0)) {
-        emit(l, v(*g), glow(24.0, 0.01, 0.04, 0.06, 0.0));
+        emit_passing(l, v(*g), glow(24.0, 0.01, 0.04, 0.06, 0.0));
     }
 }

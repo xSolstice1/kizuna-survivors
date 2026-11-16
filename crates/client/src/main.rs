@@ -523,6 +523,11 @@ async fn main() {
             acc += dt;
             let mut input = read_input();
             input.move_dir = input.move_dir + touch.dir();
+            if perf.is_some() && std::env::var("KZ_PERF_WALK").is_ok() {
+                // Dev: walk in a slow circle, to see animation and shadows in motion.
+                let a = world.time * 0.8;
+                input.move_dir = sim::Vec2::new(a.cos(), a.sin());
+            }
             special_queued |= is_key_pressed(KeyCode::Space) || touch.special;
             input.special = special_queued;
             let scale = render::world_scale();
@@ -830,10 +835,13 @@ async fn main() {
         // and exits (for checking art and lighting natively, quicker than the web build).
         if perf.is_some() {
             if let Ok(path) = std::env::var("KZ_SHOT") {
-                let at = std::env::var("KZ_SHOT_FRAME").ok().and_then(|v| v.parse().ok()).unwrap_or(120u32);
-                if perf_frames == at {
-                    get_screen_data().export_png(&path);
-                    return;
+                // KZ_SHOT_FRAME=120, or a list (KZ_SHOT_FRAME=30,32,34 with a {} in KZ_SHOT for the frame).
+                let frames: Vec<u32> = std::env::var("KZ_SHOT_FRAME").unwrap_or_else(|_| "120".into()).split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                if frames.contains(&perf_frames) {
+                    get_screen_data().export_png(&path.replace("{}", &perf_frames.to_string()));
+                    if frames.last() == Some(&perf_frames) {
+                        return;
+                    }
                 }
             }
         }
