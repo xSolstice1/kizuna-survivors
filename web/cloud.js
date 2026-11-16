@@ -11,6 +11,10 @@
 //     loadout) with the version it was based on; a stale version means another device saved
 //     first, so we pull and reconcile.
 //   - If this device and the cloud both changed, we ask the player which one to keep.
+//   - The device save belongs to one account (kz_cloud_user). It is never uploaded to another:
+//     signing in to a different account loads that account's save (or a fresh one), and signing
+//     out uploads what's left and resets the device to a fresh profile. Queued runs carry the
+//     account that played them.
 (function () {
   var cfg = window.KZ_CLOUD || {};
   var URL_ = (cfg.url || "").replace(/\/+$/, "");
@@ -23,7 +27,8 @@
   var local = null;          // latest state from the game (object)
   var server = null;         // last fetched cloud state (for conflicts)
   var incoming = null;       // state the game should load (string), when it should adopt the cloud
-  var pushTimer = null, retryTimer = null, busy = false;
+  var pushTimer = null, retryTimer = null, busy = false, signingOut = false;
+  var gen = 0;               // bumped on sign-out; replies from an older session are dropped
   // In-game feedback for the sign-in screen: text and kind (0 info, 1 error, 2 success).
   var message = "", messageKind = 0, pending = false, recovery = false, username = "";
   function say(text, kind) { message = text || ""; messageKind = kind || 0; }
@@ -149,12 +154,32 @@
   }
 
   // ───────────── Sync ─────────────
+  // The account whose progress the device save holds (null after sign-out). The device save is
+  // only ever a copy of one account: it is never uploaded to a different account, so signing out
+  // and into another account can't carry progress across.
+  var owner = get(LS.user);
+  // A brand-new profile, shaped like the cloud state (cloud.rs apply_json reads it as a default
+  // Profile). Loaded on sign-out and for an account that has no cloud save yet.
+  var FRESH = { profile: { sen: 0, dust: 0, doc: {} }, items: [], loadouts: [] };
   function syncedState() { var s = get(LS.synced); return s ? JSON.parse(s) : null; }
-  function markSynced(state, version) { set(LS.synced, canon(state)); set(LS.version, String(version)); set(LS.user, session && session.user ? session.user.id : null); }
+  function markSynced(state, version) {
+    owner = session && session.user ? session.user.id : null;
+    set(LS.synced, canon(state)); set(LS.version, String(version)); set(LS.user, owner);
+  }
+  function mineToSync() { return !!(session && session.user && owner === session.user.id); }
+  // Hands the game a state to load, which replaces its save; its pushes until it has taken
+  // it carry the old save and are ignored (kz_cloud_push).
+  function load(state) {
+    clearTimeout(pushTimer);
+    local = state;
+    incoming = JSON.stringify(state);
+  }
 
   function fail(e) {
     console.warn("cloud:", e && e.message);
-    status = 5;
+    // Until this account's save has loaded, stay on "connecting": playing offline on whatever the
+    // device holds would build on progress that isn't this account's.
+    status = mineToSync() ? 5 : 2;
     clearTimeout(retryTimer);
     retryTimer = setTimeout(reconcile, 15000);
   }
@@ -163,38 +188,41 @@
     if (!session || !local || busy) return;
     busy = true;
     status = 2;
+    var g = gen;
     var p = session.user ? Promise.resolve() : loadUser();
     p.then(function () { return rpc("get_state"); }).then(function (st) {
+      if (g !== gen) return;
       busy = false;
-      var mine = pick(local);
       username = st.username || username;
-      if (!st.exists) return push(true, Number(st.version || 0), null);
       server = st;
+      if (!mineToSync()) {
+        // The device holds no save of this account (signed out, or another account's): take the
+        // account's progress, or start it fresh.
+        if (st.exists) return adopt(st);
+        load(pick(FRESH));
+        return push(true, Number(st.version || 0), null);
+      }
+      if (!st.exists) return push(true, Number(st.version || 0), null);
+      var mine = pick(local);
       var theirs = pick(st);
-      var sameUser = get(LS.user) === session.user.id;
       var base = syncedState();
       if (canon(mine) === canon(theirs)) { markSynced(theirs, st.version); status = 3; return flushRuns(); }
-      if (sameUser && base && Number(get(LS.version)) === st.version) return push(false, st.version, base);   // only we changed
-      var untouched = sameUser && base && canon(mine) === canon(base);
-      var fresh = !sameUser && Number((mine.profile.doc || {}).runs || 0) === 0;
-      if (untouched || fresh) return adopt(st);                                                       // only the cloud changed
-      status = 6;                                                                                      // both changed: ask
-    }).catch(function (e) { busy = false; fail(e); });
+      if (base && Number(get(LS.version)) === st.version) return push(false, st.version, base);   // only we changed
+      if (base && canon(mine) === canon(base)) return adopt(st);                                   // only the cloud changed
+      status = 6;                                                                                  // both changed: ask
+    }).catch(function (e) { if (g !== gen) return; busy = false; fail(e); });
   }
 
   function adopt(st) {
     var theirs = pick(st);
     markSynced(theirs, st.version);
-    incoming = JSON.stringify(theirs);
+    load(theirs);
     status = 3;
     return flushRuns();
   }
 
-  // Sends the difference between `base` (null = everything) and the current local state.
-  function push(full, version, base) {
-    if (!session || !local) return;
-    busy = true;
-    status = 4;
+  // The rows that turn `base` (null = the server's last fetched items) into the local state.
+  function diff(full, base) {
     var mine = pick(local);
     var before = {};
     if (base && !full) base.items.forEach(function (i) { before[i.item_id] = canon(i); });
@@ -204,9 +232,22 @@
     var gone = [];
     var old = full ? (server ? server.items : []) : (base ? base.items : []);
     (old || []).forEach(function (i) { if (!keep[i.item_id]) gone.push(i.item_id); });
-    return rpc("sync_state", { p_base_version: version, p_profile: mine.profile, p_upsert: upsert, p_delete: gone, p_loadouts: mine.loadouts, p_reason: "sync" })
-      .then(function (v) { busy = false; markSynced(mine, v); status = 3; return flushRuns(); })
+    return { mine: mine, upsert: upsert, gone: gone };
+  }
+  function send(d, version) {
+    return rpc("sync_state", { p_base_version: version, p_profile: d.mine.profile, p_upsert: d.upsert, p_delete: d.gone, p_loadouts: d.mine.loadouts, p_reason: "sync" });
+  }
+
+  // Sends the difference between `base` (null = everything) and the current local state.
+  function push(full, version, base) {
+    if (!session || !local) return;
+    busy = true;
+    status = 4;
+    var d = diff(full, base), g = gen;
+    return send(d, version)
+      .then(function (v) { if (g !== gen) return; busy = false; markSynced(d.mine, v); status = 3; return flushRuns(); })
       .catch(function (e) {
+        if (g !== gen) return;
         busy = false;
         if (e.code === "P0409") return reconcile();   // another device saved first
         fail(e);
@@ -217,6 +258,7 @@
     clearTimeout(pushTimer);
     pushTimer = setTimeout(function () {
       if (status !== 3 && status !== 5) return;
+      if (!mineToSync()) return reconcile();
       var base = syncedState();
       if (base && canon(pick(local)) === canon(base)) return;
       if (status === 5) return reconcile();
@@ -224,14 +266,43 @@
     }, 2000);
   }
 
+  // Finished runs waiting to upload, each tagged with the account that played it ({ u, run }).
+  function runQueue() {
+    var q = [];
+    try { q = JSON.parse(get(LS.runs) || "[]"); } catch (e) {}
+    return Array.isArray(q) ? q.filter(function (r) { return r && r.u && r.run; }) : [];
+  }
+  // Uploads this account's queued runs, oldest first; other accounts' runs wait for them.
   function flushRuns() {
-    var q = JSON.parse(get(LS.runs) || "[]");
-    if (!q.length || !session) return;
-    rpc("record_run", { p_run: q[0] }).then(function () {
-      q.shift();
+    if (!session || !session.user) return Promise.resolve();
+    var uid = session.user.id;
+    var next = runQueue().filter(function (r) { return r.u === uid; })[0];
+    if (!next) return Promise.resolve();
+    return rpc("record_run", { p_run: next.run }).then(function () {
+      var q = runQueue(), i = q.findIndex(function (r) { return r.u === uid; });
+      if (i >= 0) q.splice(i, 1);
       set(LS.runs, JSON.stringify(q));
-      if (q.length) flushRuns();
+      return flushRuns();
     }).catch(function (e) { console.warn("cloud run:", e.message); });
+  }
+
+  // Signing out (here or in another tab): the device goes back to a fresh profile, since the
+  // account's progress lives in the cloud.
+  function endSession(note) {
+    gen++;
+    clearTimeout(pushTimer);
+    clearTimeout(retryTimer);
+    saveSession(null);
+    owner = null;
+    username = "";
+    recovery = false;
+    server = null;
+    busy = false;
+    set("kz_cloud_recovery", null);
+    [LS.synced, LS.version, LS.user].forEach(function (k) { set(k, null); });
+    load(pick(FRESH));
+    say(note || "", note ? 1 : 0);
+    status = status ? 1 : 0;
   }
 
   // ───────────── Start-up ─────────────
@@ -241,12 +312,14 @@
     if (!session && s) { try { session = JSON.parse(s); } catch (e) {} }
     if (hadHash) session.user = null;
     if (session) status = 2;
+    else load(pick(FRESH));   // signed out: no progress lives on the device
     recovery = recovery || get("kz_cloud_recovery") === "1";
     window.addEventListener("online", function () { if (status === 5) reconcile(); });
     // A sign-in finished in another tab or window (Google popup, an emailed link).
     window.addEventListener("storage", function (e) {
       if (e.key === "kz_cloud_recovery" && !e.newValue) { recovery = false; return; }   // password set elsewhere
-      if (e.key !== LS.session || !e.newValue) return;
+      if (e.key !== LS.session) return;
+      if (!e.newValue) { if (session) endSession(); return; }   // signed out in another tab
       try { session = JSON.parse(e.newValue); } catch (err) { return; }
       session.user = null;
       recovery = get("kz_cloud_recovery") === "1";
@@ -271,13 +344,16 @@
         return (p.indexOf("google") >= 0 ? 1 : 0) | (p.indexOf("discord") >= 0 ? 2 : 0) | (p.indexOf("email") >= 0 ? 4 : 0);
       };
       env.kz_cloud_push = function (ptr, len) {
+        if (incoming || signingOut) return;   // made before the game loaded the account's save
         try { local = JSON.parse(readStr(ptr, len)); } catch (e) { return; }
         if (status === 2 && !busy) reconcile();
         else schedulePush();
       };
       env.kz_cloud_run = function (ptr, len) {
-        var q = JSON.parse(get(LS.runs) || "[]");
-        q.push(JSON.parse(readStr(ptr, len)));
+        var u = session && session.user ? session.user.id : owner;
+        if (!u) return;
+        var q = runQueue();
+        try { q.push({ u: u, run: JSON.parse(readStr(ptr, len)) }); } catch (e) { return; }
         set(LS.runs, JSON.stringify(q.slice(-200)));
         if (status === 3) flushRuns();
       };
@@ -388,20 +464,30 @@
       env.kz_cloud_message_len = function () { outMsg = new TextEncoder().encode(message); return outMsg.length; };
       env.kz_cloud_message = function (ptr, len) { new Uint8Array(wasm_memory.buffer, ptr, len).set(outMsg.subarray(0, len)); };
       env.kz_cloud_clear_message = function () { say("", 0); };
+      // Uploads what hasn't synced yet (save and queued runs), then signs out and resets the
+      // device to a fresh profile.
       env.kz_cloud_sign_out = function () {
-        if (session) fetch(URL_ + "/auth/v1/logout", { method: "POST", headers: headers() }).catch(function () {});
-        saveSession(null);
-        username = "";
-        recovery = false;
-        set("kz_cloud_recovery", null);
-        [LS.synced, LS.version, LS.user].forEach(function (k) { set(k, null); });
-        status = status ? 1 : 0;
+        if (signingOut) return;
+        if (!session) return endSession();
+        signingOut = true;
+        clearTimeout(pushTimer);
+        clearTimeout(retryTimer);
+        status = 4;
+        var base = syncedState();
+        var dirty = mineToSync() && local && base && canon(pick(local)) !== canon(base);
+        var lost = false;
+        var last = dirty ? send(diff(false, base), Number(get(LS.version) || 0)) : Promise.resolve();
+        last.catch(function () { lost = true; }).then(flushRuns).then(function () {
+          fetch(URL_ + "/auth/v1/logout", { method: "POST", headers: headers() }).catch(function () {});
+          signingOut = false;
+          endSession(lost ? "Signed out. Your latest progress couldn't reach the cloud and wasn't saved." : "");
+        });
       };
       // 0 = keep the cloud save, 1 = keep this device's save.
       env.kz_cloud_resolve = function (choice) {
         if (status !== 6 || !server) return;
         if (choice === 0) adopt(server);
-        else push(true, server.version, null);
+        else if (mineToSync()) push(true, server.version, null);
       };
       env.kz_cloud_incoming_len = function () {
         if (!incoming) return 0;
