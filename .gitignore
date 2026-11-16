@@ -26,3 +26,6 @@ art/ai/
 # Rig previews (tools/ai/rig_preview.py): regenerable
 art/rig/*/preview_*
 art/rig/*/strip_*
+
+# Native client save (written to the working directory)
+kizuna_save.txt

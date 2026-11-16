@@ -1760,9 +1760,109 @@ pub fn elite_interval(t: f32) -> f32 {
     }
 }
 
+// ───────────────────────── Adaptive director ─────────────────────────
+
+/// Heat: how far the director pushes past (or eases off) the chosen tier, as a fraction.
+/// The band leans upward so a capable player ends up a little past the tier's default.
+pub const HEAT_MIN: f32 = -0.15;
+pub const HEAT_MAX: f32 = 0.30;
+/// Per second. Easing off is twice as fast as ramping up, so help arrives quickly.
+pub const HEAT_UP: f32 = 0.005;
+pub const HEAT_DOWN: f32 = 0.010;
+/// Heat holds for this long at the start of a run while the director reads the player.
+pub const HEAT_WARMUP: f32 = 60.0;
+pub const CLOSE_CALL_HP: f32 = 0.25;
+pub const CLOSE_CALL_STEP: f32 = 0.05;
+/// Seconds without refills after a close call, and the minimum gap between two of them.
+pub const CLOSE_CALL_PAUSE: f32 = 4.0;
+pub const CLOSE_CALL_GAP: f32 = 20.0;
+/// HP fraction the player must fall below during a peak to earn the relief payoff.
+pub const PEAK_LOW_HP: f32 = 0.40;
+pub const CROWD_RADIUS: f32 = 120.0;
+/// Smoothed count of enemies within `CROWD_RADIUS` that counts as being swamped.
+pub const CROWD_HIGH: f32 = 12.0;
+/// Share of max HP lost over ~20 s that counts as bleeding out.
+pub const DMG_RATE_HIGH: f32 = 0.5;
+/// Below this damage rate (and with HP high) the player is cruising.
+pub const CRUISE_DMG_RATE: f32 = 0.1;
+
+/// What the director reads each second, all smoothed: `hp` fraction, `dmg_rate` damage over the
+/// last ~20 s / max HP, `crowd` enemies within `CROWD_RADIUS`. Alive / target is not a signal: the
+/// refill keeps it at ~1.0 whatever the player does.
+#[derive(Clone, Copy, Debug)]
+pub struct HeatSignals {
+    pub hp: f32,
+    pub dmg_rate: f32,
+    pub crowd: f32,
+}
+
+/// One second of heat change. Struggling wins over cruising; with a boss alive heat can only fall.
+pub fn heat_step(heat: f32, s: HeatSignals, boss: bool) -> f32 {
+    let struggling = s.hp < 0.40 || s.dmg_rate >= DMG_RATE_HIGH || s.crowd >= CROWD_HIGH;
+    let cruising = s.hp > 0.70 && s.dmg_rate < CRUISE_DMG_RATE;
+    let delta = if struggling {
+        -HEAT_DOWN
+    } else if cruising && !boss {
+        HEAT_UP
+    } else {
+        0.0
+    };
+    (heat + delta).clamp(HEAT_MIN, HEAT_MAX)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WavePhase {
+    Build,
+    Peak,
+    Relief,
+}
+
+/// Phase and spawn-density multiplier at `frac` of the way through a round. Averages ~1.0 over
+/// a round: waves reshape pressure rather than add to it.
+pub fn wave_at(frac: f32) -> (WavePhase, f32) {
+    let f = frac.clamp(0.0, 1.0);
+    if f < 0.60 {
+        (WavePhase::Build, 0.90 + 0.20 * f / 0.60)
+    } else if f < 0.85 {
+        (WavePhase::Peak, 1.15)
+    } else {
+        (WavePhase::Relief, 0.80)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heat_falls_when_struggling_rises_when_cruising_holds_between() {
+        let calm = HeatSignals { hp: 0.9, dmg_rate: 0.0, crowd: 0.0 };
+        let hurt = HeatSignals { hp: 0.3, dmg_rate: 0.0, crowd: 0.0 };
+        let mid = HeatSignals { hp: 0.55, dmg_rate: 0.1, crowd: 3.0 };
+        assert!((heat_step(0.0, calm, false) - HEAT_UP).abs() < 1e-6);
+        assert!((heat_step(0.0, hurt, false) + HEAT_DOWN).abs() < 1e-6);
+        assert_eq!(heat_step(0.1, mid, false), 0.1);
+        assert_eq!(heat_step(0.1, calm, true), 0.1, "no rise while a boss is alive");
+        assert!(heat_step(0.1, hurt, true) < 0.1, "may still fall during a boss");
+        assert_eq!(heat_step(HEAT_MAX, calm, false), HEAT_MAX);
+        assert_eq!(heat_step(HEAT_MIN, hurt, false), HEAT_MIN);
+        let swamped = HeatSignals { hp: 0.8, dmg_rate: 0.0, crowd: CROWD_HIGH };
+        assert!(heat_step(0.0, swamped, false) < 0.0);
+        let bleeding = HeatSignals { hp: 0.8, dmg_rate: DMG_RATE_HIGH, crowd: 0.0 };
+        assert!(heat_step(0.0, bleeding, false) < 0.0);
+        let chipped = HeatSignals { hp: 0.9, dmg_rate: CRUISE_DMG_RATE, crowd: 0.0 };
+        assert_eq!(heat_step(0.1, chipped, false), 0.1, "high HP but taking steady damage is not cruising");
+    }
+
+    #[test]
+    fn waves_reshape_without_adding() {
+        assert_eq!(wave_at(0.0), (WavePhase::Build, 0.90));
+        assert_eq!(wave_at(0.7).0, WavePhase::Peak);
+        assert_eq!(wave_at(0.9), (WavePhase::Relief, 0.80));
+        assert_eq!(wave_at(1.7).0, WavePhase::Relief, "final round never ends; clamp");
+        let mean: f32 = (0..1000).map(|i| wave_at(i as f32 / 1000.0).1).sum::<f32>() / 1000.0;
+        assert!((mean - 1.0).abs() < 0.02, "{mean}");
+    }
 
     #[test]
     fn element_cycle_matches_spec() {
