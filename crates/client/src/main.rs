@@ -229,6 +229,9 @@ async fn main() {
             tip = None;
         }
         let now = get_time();
+        // The hero wears their equipped gear (rebuilt only when it changes).
+        let worn = if matches!(screen, Screen::Playing | Screen::Paused) { world.cfg.hero } else { profile.selected };
+        assets.dress(worn, &profile.equipped(worn));
         // A cloud save to load (another device's progress), applied between runs.
         if !matches!(screen, Screen::Playing | Screen::Paused) {
             if let Some(p) = cloud::incoming() {
@@ -582,7 +585,7 @@ async fn main() {
         }
         if live {
             if let Some(rig) = assets.rig(world.cfg.hero) {
-                fx.animate(rig, &world, dt);
+                fx.animate(&rig, &world, dt);
             }
         }
         let mut cam = render::camera_for(&world, &fx);

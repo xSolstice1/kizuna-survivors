@@ -46,6 +46,11 @@ pub fn free_art(path: &str) -> Texture2D {
     Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true }.texture()
 }
 
+/// Whether art/hd/<path>.png (or .jpg) exists.
+pub fn has_art(path: &str) -> bool {
+    index::png(path).is_some()
+}
+
 /// The decoded RGBA image of art/hd/<path>.png or .jpg (for the terrain textures).
 pub fn hd_image(path: &str) -> Image {
     let bytes = index::png(path).unwrap_or_else(|| panic!("missing art/hd/{path}.png"));
@@ -57,12 +62,12 @@ pub fn hd_image(path: &str) -> Image {
 /// smaller than its texture.
 pub fn hi_art(path: &str) -> Texture2D {
     let t = free_art(path);
-    mipmaps(&t);
+    mipmap(&t);
     t
 }
 
 /// Trilinear filtering. Skipped on WebGL 1, which can't mipmap non-power-of-two textures.
-fn mipmaps(t: &Texture2D) {
+pub fn mipmap(t: &Texture2D) {
     use macroquad::miniquad::{FilterMode as F, MipmapFilterMode as M};
     let gl = unsafe { get_internal_gl() };
     if gl.quad_context.info().gl_version_string.contains("WebGL 1") {

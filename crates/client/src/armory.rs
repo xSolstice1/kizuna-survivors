@@ -29,19 +29,6 @@ pub fn rarity_color(r: Rarity) -> Color {
     }
 }
 
-fn item_icon<'a>(assets: &'a Assets, it: &Item) -> &'a Texture2D {
-    if let Some(e) = it.exotic {
-        return assets.gear_icon_named(e.key());
-    }
-    if let Some(a) = it.art {
-        return assets.gear_icon_named(a.key());
-    }
-    match it.arsenal {
-        Some(k) => assets.icon(Upgrade::Weapon(k)),
-        None => assets.gear_icon(it.slot),
-    }
-}
-
 /// An item tile: rarity-tinted frame, icon, upgrade level, equipped / locked marks.
 pub fn item_cell(assets: &Assets, it: &Item, x: f32, y: f32, s: f32, selected: bool, worn: bool) {
     let c = rarity_color(it.rarity);
@@ -62,7 +49,7 @@ pub fn item_cell(assets: &Assets, it: &Item, x: f32, y: f32, s: f32, selected: b
         kit::rounded_outline(x + 3.5, y + 3.5, s - 7.0, s - 7.0, 5.0, 1.0, c);
     }
     let pad = s * 0.16;
-    draw_texture_ex(item_icon(assets, it), x + pad, y + pad, WHITE, DrawTextureParams { dest_size: Some(vec2(s - 2.0 * pad, s - 2.0 * pad)), ..Default::default() });
+    draw_texture_ex(&assets.item_icon(it), x + pad, y + pad, WHITE, DrawTextureParams { dest_size: Some(vec2(s - 2.0 * pad, s - 2.0 * pad)), ..Default::default() });
     if it.plus > 0 {
         kit::text(&format!("+{}", it.plus), x + 3.0, y + 12.0, 11.0, GOLD);
     }
@@ -323,7 +310,12 @@ pub fn armory(profile: &mut Profile, assets: &Assets, st: &mut ArmoryState, time
         crate::menu::centered_at("?", dx + dw / 2.0, dy + 160.0, 90.0, FAINT);
     } else {
         let tint = if open { WHITE } else { Color::new(0.0, 0.0, 0.0, 0.85) };
-        { let t = &assets.hero(hero)[0]; let w = 128.0 * t.width() / t.height(); draw_texture_ex(t, dx + dw / 2.0 - w / 2.0, dy + 66.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(w, 128.0)), ..Default::default() }); }
+        // The hero wearing what's equipped, so a change of gear shows at once.
+        assets.dress(hero, &profile.equipped(hero));
+        match assets.rig(hero) {
+            Some(rig) if open => crate::rig::preview(&rig, vec2(dx + dw / 2.0, dy + 194.0), 132.0, tint),
+            _ => { let t = &assets.hero(hero)[0]; let w = 128.0 * t.width() / t.height(); draw_texture_ex(t, dx + dw / 2.0 - w / 2.0, dy + 66.0 + bob, tint, DrawTextureParams { dest_size: Some(vec2(w, 128.0)), ..Default::default() }); }
+        }
     }
     // Who they are, in the column between the slots.
     let colx = dx + 16.0 + 50.0 + 64.0;

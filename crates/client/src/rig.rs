@@ -16,6 +16,8 @@ use std::f32::consts::TAU;
 use macroquad::models::{draw_mesh, Mesh, Vertex};
 use macroquad::prelude::*;
 
+use sim::gear::Slot;
+
 use crate::sprites;
 
 const SIM: f32 = 240.0;
@@ -34,6 +36,7 @@ const HEAD: usize = 6;
 const ARM_NEAR_UPPER: usize = 7;
 const ARM_NEAR_FORE: usize = 8;
 
+#[derive(Clone)]
 struct Part {
     tex: Texture2D,
     /// x, y, w, h in source pixels.
@@ -42,10 +45,23 @@ struct Part {
 }
 
 /// A hero's parts and geometry (art/hd/rig/<hero>/*.png + art/rig/<hero>/game.json).
+#[derive(Clone)]
 pub struct RigDef {
     parts: Vec<Part>,
     feet: Vec2,
     units_per_px: f32,
+    /// Small worn gear hung on the rig (necklace, earring, ring, charm, omamori).
+    extras: Vec<(Slot, Texture2D)>,
+    anchors: Anchors,
+}
+
+/// Where small gear hangs, in source pixels (art/rig/<hero>/wear.json).
+#[derive(Clone, Copy, Default)]
+struct Anchors {
+    neck: Vec2,
+    ear: Vec2,
+    hip: Vec2,
+    hand: Vec2,
 }
 
 impl RigDef {
@@ -61,8 +77,86 @@ impl RigDef {
                 Part { tex: sprites::hi_art(&format!("rig/{hero}/{name}")), rect: Rect::new(f(0), f(1), f(2), f(3)), pivot: pair(&p["pivot"]) }
             })
             .collect();
-        RigDef { parts, feet: pair(&v["feet"]), units_per_px: v["units_per_px"].as_f64().unwrap() as f32 }
+        RigDef { parts, feet: pair(&v["feet"]), units_per_px: v["units_per_px"].as_f64().unwrap() as f32, extras: Vec::new(), anchors: Anchors::default() }
     }
+
+    /// This rig wearing gear: `pieces` are worn piece names from `wear` (art/rig/<hero>/wear.json,
+    /// written by tools/ai/gear_art.py slice), `extras` small gear hung at its anchors.
+    ///
+    /// A piece is a patch over one or more parts, at the part texture's scale: patch alpha 0
+    /// leaves the part's pixel, 1 clears it (the new clothes are slimmer there), 2..255 replace
+    /// it. A patch may reach past the part's old rect (a hat brim), which grows the part.
+    pub fn dressed(&self, hero: &str, wear: &str, pieces: &[String], extras: Vec<(Slot, Texture2D)>) -> RigDef {
+        let v: serde_json::Value = serde_json::from_str(wear).expect("bad wear json");
+        let pair = |x: &serde_json::Value| vec2(x[0].as_f64().unwrap_or(0.0) as f32, x[1].as_f64().unwrap_or(0.0) as f32);
+        let a = &v["anchors"];
+        let mut out = self.clone();
+        out.anchors = Anchors { neck: pair(&a["neck"]), ear: pair(&a["ear"]), hip: pair(&a["hip"]), hand: pair(&a["hand"]) };
+        out.extras = extras;
+        for (i, name) in PARTS.iter().enumerate() {
+            let patches: Vec<(Image, Rect)> = pieces
+                .iter()
+                .filter_map(|p| {
+                    let r = v["pieces"][p.as_str()][*name].as_array()?;
+                    let f = |k: usize| r[k].as_f64().unwrap_or(0.0) as f32;
+                    Some((sprites::hd_image(&format!("wear/{hero}/{p}.{name}")), Rect::new(f(0), f(1), f(2), f(3))))
+                })
+                .collect();
+            if patches.is_empty() {
+                continue;
+            }
+            let base = sprites::hd_image(&format!("rig/{hero}/{name}"));
+            let (img, rect) = compose(&base, self.parts[i].rect, &patches);
+            let t = Texture2D::from_image(&img);
+            sprites::mipmap(&t);
+            out.parts[i] = Part { tex: t, rect, pivot: self.parts[i].pivot };
+        }
+        out
+    }
+}
+
+/// The part `base` (texture of source rect `rect`) with `patches` applied (see `dressed`).
+fn compose(base: &Image, rect: Rect, patches: &[(Image, Rect)]) -> (Image, Rect) {
+    let k = base.width as f32 / rect.w; // texels per source px
+    let mut u = rect;
+    for (_, r) in patches {
+        u = u.combine_with(*r);
+    }
+    let (w, h) = ((u.w * k).round().max(1.0) as usize, (u.h * k).round().max(1.0) as usize);
+    let mut px = vec![0u8; w * h * 4];
+    let mut put = |img: &Image, r: Rect, patch: bool| {
+        let (ox, oy) = (((r.x - u.x) * k).round() as i64, ((r.y - u.y) * k).round() as i64);
+        let (iw, ih) = (img.width as i64, img.height as i64);
+        for y in 0..ih {
+            let ty = oy + y;
+            if ty < 0 || ty >= h as i64 {
+                continue;
+            }
+            for x in 0..iw {
+                let tx = ox + x;
+                if tx < 0 || tx >= w as i64 {
+                    continue;
+                }
+                let s = ((y * iw + x) * 4) as usize;
+                let d = ((ty as usize) * w + tx as usize) * 4;
+                let a = img.bytes[s + 3];
+                if !patch {
+                    px[d..d + 4].copy_from_slice(&img.bytes[s..s + 4]);
+                } else if a == 1 {
+                    // Cleared: keep the bled colour so filtering at the new edge stays clean.
+                    px[d..d + 3].copy_from_slice(&img.bytes[s..s + 3]);
+                    px[d + 3] = 0;
+                } else if a >= 2 {
+                    px[d..d + 4].copy_from_slice(&img.bytes[s..s + 4]);
+                }
+            }
+        }
+    };
+    put(base, rect, false);
+    for (img, r) in patches {
+        put(img, *r, true);
+    }
+    (Image { bytes: px, width: w as u16, height: h as u16 }, u)
 }
 
 // --- springs --------------------------------------------------------------------------------
@@ -362,7 +456,27 @@ fn draw_part(part: &Part, m: Affine2, tint: Color, nx: usize, ny: usize, bend: i
 
 /// Draws the hero with its feet at `feet` (world units), mirrored when `left`.
 pub fn draw(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color) {
-    let k = def.units_per_px;
+    draw_scaled(def, st, feet, left, tint, 1.0);
+}
+
+/// The hero idling in a menu, `height` UI pixels tall, feet at `feet`. One shared idle state
+/// (menus show one hero at a time), advanced by the frame time.
+pub fn preview(def: &RigDef, feet: Vec2, height: f32, tint: Color) {
+    thread_local! {
+        static IDLE: std::cell::RefCell<RigState> = std::cell::RefCell::new(RigState::default());
+    }
+    IDLE.with(|st| {
+        let mut st = st.borrow_mut();
+        st.update(def, get_frame_time(), false, Vec2::ZERO, false);
+        draw_scaled(def, &st, feet, false, tint, height / FIGURE_UNITS);
+    });
+}
+
+/// A rig's height in world units (rig_export.py --height).
+const FIGURE_UNITS: f32 = 31.0;
+
+fn draw_scaled(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color, scale: f32) {
+    let k = def.units_per_px * scale;
     let world = Affine2::from_translation(feet) * Affine2::from_scale(vec2(if left { -k } else { k }, k)) * Affine2::from_translation(-def.feet);
     let q = st.pose;
     let tint = if st.hurt > 0.0 { Color::new(tint.r, tint.g * 0.55, tint.b * 0.6, tint.a) } else { tint };
@@ -403,6 +517,17 @@ pub fn draw(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color) {
         d * (sway + flare * (u - 0.5) * 2.0)
     };
 
+    // Small gear: icons hung at the anchors, sized in world units. Charms swing from the hip.
+    let swing = soft(st.skirt.sum(), 0.15) * 160.0 + 7.0 * st.walk * st.phase.sin();
+    let extra = |slot: Slot, m: Affine2, at: Vec2, size: f32, hang: bool, deg: f32| {
+        for (_, tex) in def.extras.iter().filter(|(s, _)| *s == slot) {
+            let px = size / def.units_per_px;
+            let r = if hang { Rect::new(at.x - px / 2.0, at.y, px, px) } else { Rect::new(at.x - px / 2.0, at.y - px / 2.0, px, px) };
+            draw_quad(tex, m * turn(at, deg), r, tint);
+        }
+    };
+    let an = def.anchors;
+
     let parts = &def.parts;
     draw_part(&parts[HAIR], head, tint, 8, 16, hair_bend);
     draw_part(&parts[ARM_FAR_UPPER], upper_far, tint, 1, 1, rigid);
@@ -410,7 +535,25 @@ pub fn draw(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color) {
     draw_part(&parts[LEG_FAR], leg(LEG_FAR, q.leg[1], q.lift[1]), tint, 1, 1, rigid);
     draw_part(&parts[LEG_NEAR], leg(LEG_NEAR, q.leg[0], q.lift[0]), tint, 1, 1, rigid);
     draw_part(&parts[TORSO], body, tint, 6, 14, skirt_bend);
+    extra(Slot::Necklace, body, an.neck, 3.6, false, 0.0);
+    extra(Slot::Charm, body, an.hip, 3.6, true, swing);
+    extra(Slot::Omamori, body, an.hip + vec2(-95.0, 10.0), 3.2, true, swing * 1.2);
     draw_part(&parts[HEAD], head, tint, 1, 1, rigid);
+    extra(Slot::Earring, head, an.ear, 2.2, true, swing * 0.5 - st.head.x * 2.0);
     draw_part(&parts[ARM_NEAR_UPPER], upper_near, tint, 1, 1, rigid);
     draw_part(&parts[ARM_NEAR_FORE], fore_near, tint, 1, 1, rigid);
+    extra(Slot::Ring, fore_near, an.hand, 1.8, false, 0.0);
+}
+
+/// A texture on the source-pixel rect `r`, mapped through `m`.
+fn draw_quad(tex: &Texture2D, m: Affine2, r: Rect, tint: Color) {
+    let c = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let vertices = c
+        .iter()
+        .map(|&(u, v)| {
+            let p = m.transform_point2(vec2(r.x + r.w * u, r.y + r.h * v));
+            Vertex::new(p.x, p.y, 0.0, u, v, tint)
+        })
+        .collect();
+    draw_mesh(&Mesh { vertices, indices: vec![0, 1, 2, 0, 2, 3], texture: Some(tex.clone()) });
 }

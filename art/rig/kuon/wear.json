@@ -1,0 +1,1198 @@
+{
+"anchors": {
+"ear": [
+372,
+404
+],
+"hand": [
+359,
+757
+],
+"hip": [
+505,
+704
+],
+"neck": [
+555,
+527
+]
+},
+"pieces": {
+"bottom_hakama_0": {
+"leg_far": [
+528,
+820,
+165,
+92
+],
+"leg_near": [
+367,
+820,
+168,
+98
+],
+"torso": [
+366,
+723,
+335,
+125
+]
+},
+"bottom_hakama_1": {
+"leg_far": [
+528,
+820,
+165,
+92
+],
+"leg_near": [
+367,
+820,
+168,
+98
+],
+"torso": [
+359,
+723,
+343,
+125
+]
+},
+"bottom_hakama_2": {
+"leg_far": [
+528,
+820,
+165,
+92
+],
+"leg_near": [
+367,
+820,
+168,
+98
+],
+"torso": [
+339,
+723,
+386,
+125
+]
+},
+"bottom_kobakama_0": {
+"leg_far": [
+531,
+820,
+161,
+92
+],
+"leg_near": [
+373,
+820,
+162,
+98
+],
+"torso": [
+366,
+723,
+335,
+125
+]
+},
+"bottom_kobakama_1": {
+"leg_far": [
+528,
+820,
+149,
+92
+],
+"leg_near": [
+372,
+820,
+163,
+98
+],
+"torso": [
+361,
+723,
+343,
+125
+]
+},
+"bottom_kobakama_2": {
+"leg_far": [
+531,
+820,
+146,
+92
+],
+"leg_near": [
+377,
+820,
+158,
+98
+],
+"torso": [
+365,
+723,
+336,
+125
+]
+},
+"bottom_pleated_skirt_0": {
+"leg_far": [
+533,
+820,
+138,
+92
+],
+"leg_near": [
+396,
+820,
+139,
+98
+],
+"torso": [
+365,
+723,
+334,
+125
+]
+},
+"bottom_pleated_skirt_1": {
+"leg_far": [
+531,
+820,
+142,
+92
+],
+"leg_near": [
+396,
+820,
+139,
+98
+],
+"torso": [
+363,
+723,
+339,
+125
+]
+},
+"bottom_pleated_skirt_2": {
+"leg_far": [
+532,
+820,
+150,
+92
+],
+"leg_near": [
+372,
+820,
+163,
+98
+],
+"torso": [
+349,
+723,
+368,
+125
+]
+},
+"bottom_wrapped_leggings_0": {
+"leg_far": [
+538,
+826,
+126,
+86
+],
+"leg_near": [
+396,
+820,
+131,
+98
+],
+"torso": [
+398,
+814,
+266,
+31
+]
+},
+"bottom_wrapped_leggings_1": {
+"leg_far": [
+536,
+843,
+130,
+69
+],
+"leg_near": [
+396,
+833,
+133,
+85
+],
+"torso": [
+397,
+830,
+268,
+16
+]
+},
+"bottom_wrapped_leggings_2": {
+"leg_far": [
+538,
+826,
+127,
+86
+],
+"leg_near": [
+396,
+820,
+133,
+98
+],
+"torso": [
+398,
+817,
+267,
+28
+]
+},
+"gloves_archer_s_glove_0": {
+"arm_far_fore": [
+688,
+738,
+44,
+53
+],
+"arm_near_fore": [
+315,
+683,
+111,
+123
+]
+},
+"gloves_archer_s_glove_1": {
+"arm_far_fore": [
+688,
+738,
+42,
+49
+],
+"arm_near_fore": [
+312,
+683,
+114,
+120
+]
+},
+"gloves_archer_s_glove_2": {
+"arm_far_fore": [
+688,
+735,
+50,
+58
+],
+"arm_near_fore": [
+309,
+683,
+117,
+127
+]
+},
+"gloves_ink_stained_gloves_0": {
+"arm_far_fore": [
+688,
+738,
+45,
+53
+],
+"arm_near_fore": [
+313,
+683,
+113,
+123
+]
+},
+"gloves_ink_stained_gloves_1": {
+"arm_far_fore": [
+688,
+737,
+45,
+49
+],
+"arm_near_fore": [
+314,
+683,
+112,
+115
+]
+},
+"gloves_ink_stained_gloves_2": {
+"arm_far_fore": [
+688,
+738,
+42,
+49
+],
+"arm_near_fore": [
+315,
+683,
+111,
+116
+]
+},
+"gloves_iron_bracers_0": {
+"arm_far_fore": [
+688,
+737,
+44,
+42
+],
+"arm_near_fore": [
+317,
+683,
+109,
+108
+]
+},
+"gloves_iron_bracers_1": {
+"arm_far_fore": [
+688,
+736,
+47,
+43
+],
+"arm_near_fore": [
+312,
+683,
+113,
+111
+]
+},
+"gloves_iron_bracers_2": {
+"arm_far_fore": [
+688,
+734,
+53,
+53
+],
+"arm_near_fore": [
+308,
+683,
+117,
+116
+]
+},
+"gloves_tekko_0": {
+"arm_far_fore": [
+688,
+736,
+48,
+53
+],
+"arm_near_fore": [
+315,
+683,
+104,
+119
+]
+},
+"gloves_tekko_1": {
+"arm_far_fore": [
+688,
+738,
+42,
+42
+],
+"arm_near_fore": [
+316,
+683,
+110,
+108
+]
+},
+"gloves_tekko_2": {
+"arm_far_fore": [
+688,
+736,
+48,
+55
+],
+"arm_near_fore": [
+310,
+683,
+116,
+123
+]
+},
+"hat_fox_ear_hood_0": {
+"head": [
+227,
+13,
+577,
+501
+]
+},
+"hat_fox_ear_hood_1": {
+"head": [
+227,
+17,
+570,
+494
+]
+},
+"hat_fox_ear_hood_2": {
+"head": [
+227,
+7,
+570,
+507
+]
+},
+"hat_moon_circlet_0": {
+"head": [
+276,
+165,
+483,
+337
+]
+},
+"hat_moon_circlet_1": {
+"head": [
+275,
+169,
+486,
+321
+]
+},
+"hat_moon_circlet_2": {
+"head": [
+277,
+152,
+482,
+350
+]
+},
+"hat_silk_eboshi_0": {
+"head": [
+329,
+2,
+397,
+500
+]
+},
+"hat_silk_eboshi_1": {
+"head": [
+372,
+20,
+304,
+482
+]
+},
+"hat_silk_eboshi_2": {
+"head": [
+237,
+9,
+522,
+493
+]
+},
+"hat_straw_kasa_0": {
+"head": [
+167,
+20,
+690,
+482
+]
+},
+"hat_straw_kasa_1": {
+"head": [
+165,
+20,
+694,
+482
+]
+},
+"hat_straw_kasa_2": {
+"head": [
+140,
+20,
+744,
+482
+]
+},
+"hat_tengu_cap_0": {
+"head": [
+342,
+23,
+349,
+479
+]
+},
+"hat_tengu_cap_1": {
+"head": [
+423,
+59,
+268,
+443
+]
+},
+"hat_tengu_cap_2": {
+"head": [
+275,
+20,
+483,
+482
+]
+},
+"shoes_cloud_sandals_0": {
+"leg_far": [
+547,
+912,
+144,
+85
+],
+"leg_near": [
+373,
+918,
+148,
+92
+]
+},
+"shoes_cloud_sandals_1": {
+"leg_far": [
+528,
+912,
+153,
+81
+],
+"leg_near": [
+373,
+918,
+142,
+87
+]
+},
+"shoes_cloud_sandals_2": {
+"leg_far": [
+529,
+912,
+153,
+84
+],
+"leg_near": [
+373,
+918,
+143,
+88
+]
+},
+"shoes_geta_0": {
+"leg_far": [
+528,
+912,
+169,
+95
+],
+"leg_near": [
+397,
+918,
+120,
+94
+]
+},
+"shoes_geta_1": {
+"leg_far": [
+528,
+912,
+167,
+93
+],
+"leg_near": [
+393,
+918,
+135,
+93
+]
+},
+"shoes_geta_2": {
+"leg_far": [
+528,
+912,
+167,
+101
+],
+"leg_near": [
+373,
+918,
+157,
+101
+]
+},
+"shoes_tabi_boots_0": {
+"leg_far": [
+547,
+912,
+142,
+86
+],
+"leg_near": [
+400,
+918,
+122,
+93
+]
+},
+"shoes_tabi_boots_1": {
+"leg_far": [
+547,
+912,
+137,
+85
+],
+"leg_near": [
+401,
+918,
+117,
+90
+]
+},
+"shoes_tabi_boots_2": {
+"leg_far": [
+546,
+912,
+139,
+86
+],
+"leg_near": [
+400,
+918,
+120,
+91
+]
+},
+"shoes_waraji_0": {
+"leg_far": [
+547,
+912,
+137,
+84
+],
+"leg_near": [
+400,
+918,
+116,
+89
+]
+},
+"shoes_waraji_1": {
+"leg_far": [
+547,
+912,
+144,
+87
+],
+"leg_near": [
+401,
+918,
+115,
+90
+]
+},
+"shoes_waraji_2": {
+"leg_far": [
+547,
+912,
+144,
+89
+],
+"leg_near": [
+398,
+918,
+119,
+93
+]
+},
+"top_festival_happi_0": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+672,
+566,
+61,
+119
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+303,
+564,
+121,
+124
+],
+"torso": [
+351,
+488,
+358,
+235
+]
+},
+"top_festival_happi_1": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+672,
+563,
+61,
+122
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+303,
+565,
+121,
+123
+],
+"torso": [
+348,
+488,
+361,
+235
+]
+},
+"top_festival_happi_2": {
+"arm_far_fore": [
+704,
+683,
+37,
+57
+],
+"arm_far_upper": [
+672,
+562,
+61,
+123
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+303,
+570,
+121,
+118
+],
+"torso": [
+346,
+487,
+363,
+236
+]
+},
+"top_haori_0": {
+"arm_far_fore": [
+704,
+683,
+33,
+57
+],
+"arm_far_upper": [
+672,
+568,
+65,
+117
+],
+"arm_near_fore": [
+296,
+681,
+97,
+73
+],
+"arm_near_upper": [
+296,
+564,
+128,
+123
+],
+"torso": [
+354,
+488,
+355,
+235
+]
+},
+"top_haori_1": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+685,
+597,
+49,
+88
+],
+"arm_near_fore": [
+296,
+681,
+98,
+73
+],
+"arm_near_upper": [
+296,
+564,
+128,
+124
+],
+"torso": [
+354,
+488,
+355,
+235
+]
+},
+"top_haori_2": {
+"arm_far_fore": [
+704,
+683,
+40,
+57
+],
+"arm_far_upper": [
+672,
+566,
+62,
+119
+],
+"arm_near_fore": [
+297,
+681,
+97,
+73
+],
+"arm_near_upper": [
+300,
+564,
+124,
+124
+],
+"torso": [
+345,
+488,
+364,
+235
+]
+},
+"top_lacquer_cuirass_0": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+672,
+549,
+61,
+136
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+300,
+564,
+124,
+124
+],
+"torso": [
+333,
+487,
+376,
+236
+]
+},
+"top_lacquer_cuirass_1": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+672,
+558,
+61,
+127
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+303,
+564,
+121,
+124
+],
+"torso": [
+337,
+487,
+372,
+236
+]
+},
+"top_lacquer_cuirass_2": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+672,
+557,
+61,
+128
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+297,
+564,
+127,
+124
+],
+"torso": [
+333,
+487,
+376,
+236
+]
+},
+"top_shrine_vestment_0": {
+"arm_far_fore": [
+704,
+677,
+58,
+63
+],
+"arm_far_upper": [
+672,
+560,
+90,
+125
+],
+"arm_near_fore": [
+273,
+677,
+121,
+77
+],
+"arm_near_upper": [
+275,
+564,
+149,
+124
+],
+"torso": [
+350,
+488,
+359,
+235
+]
+},
+"top_shrine_vestment_1": {
+"arm_far_fore": [
+704,
+681,
+56,
+59
+],
+"arm_far_upper": [
+672,
+563,
+77,
+122
+],
+"arm_near_fore": [
+273,
+679,
+121,
+75
+],
+"arm_near_upper": [
+281,
+564,
+143,
+124
+],
+"torso": [
+352,
+488,
+357,
+235
+]
+},
+"top_shrine_vestment_2": {
+"arm_far_fore": [
+704,
+677,
+58,
+63
+],
+"arm_far_upper": [
+672,
+558,
+90,
+127
+],
+"arm_near_fore": [
+273,
+677,
+121,
+77
+],
+"arm_near_upper": [
+275,
+564,
+149,
+124
+],
+"torso": [
+339,
+488,
+370,
+235
+]
+},
+"top_travel_kimono_0": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+672,
+563,
+61,
+122
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+303,
+564,
+121,
+124
+],
+"torso": [
+347,
+488,
+362,
+235
+]
+},
+"top_travel_kimono_1": {
+"arm_far_fore": [
+704,
+683,
+31,
+57
+],
+"arm_far_upper": [
+672,
+565,
+61,
+120
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+303,
+564,
+121,
+124
+],
+"torso": [
+344,
+487,
+365,
+236
+]
+},
+"top_travel_kimono_2": {
+"arm_far_fore": [
+704,
+683,
+33,
+57
+],
+"arm_far_upper": [
+672,
+555,
+61,
+130
+],
+"arm_near_fore": [
+301,
+683,
+93,
+71
+],
+"arm_near_upper": [
+303,
+564,
+121,
+124
+],
+"torso": [
+347,
+488,
+362,
+235
+]
+}
+}
+}

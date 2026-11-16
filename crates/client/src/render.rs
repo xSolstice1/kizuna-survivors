@@ -115,6 +115,21 @@ fn form_name(h: HeroId) -> Option<&'static str> {
     })
 }
 
+/// Worn gear pieces and accessory anchors (tools/ai/gear_art.py slice).
+fn wear_json(name: &str) -> &'static str {
+    match name {
+        "ren" => include_str!("../../../art/rig/ren/wear.json"),
+        "riku" => include_str!("../../../art/rig/riku/wear.json"),
+        "shun" => include_str!("../../../art/rig/shun/wear.json"),
+        "toya" => include_str!("../../../art/rig/toya/wear.json"),
+        "kuon" => include_str!("../../../art/rig/kuon/wear.json"),
+        _ => unreachable!(),
+    }
+}
+
+/// Slots drawn as part of the rig (outfit pieces); the other wearables hang on it as icons.
+const WORN: [sim::gear::Slot; 5] = [sim::gear::Slot::Hat, sim::gear::Slot::Top, sim::gear::Slot::Bottom, sim::gear::Slot::Gloves, sim::gear::Slot::Shoes];
+
 fn rig_json(name: &str) -> &'static str {
     match name {
         "ren" => include_str!("../../../art/rig/ren/game.json"),
@@ -137,7 +152,11 @@ pub struct Assets {
     kuon_domain: [Texture2D; 3],
     ren_divine: [Texture2D; 3],
     /// Per hero (in `ALL_HEROES` order): the cut-out rig used in a run, if it has one.
-    rigs: Vec<Option<crate::rig::RigDef>>,
+    rigs: Vec<Option<std::rc::Rc<crate::rig::RigDef>>>,
+    /// Per hero: the rig wearing its gear, and what it wears (see `dress`).
+    dressed: std::cell::RefCell<Vec<Option<(Vec<String>, std::rc::Rc<crate::rig::RigDef>)>>>,
+    /// Gear icons per base and tier (gear/<slot>/<base>_<tier>), loaded when first shown.
+    base_icons: std::cell::RefCell<std::collections::HashMap<String, Texture2D>>,
     /// Per hero: head crop of the front view, for the HUD portrait circle.
     faces: Vec<Option<Texture2D>>,
     /// Per hero: head crop of its transformed form (art/hd/<form>_face.png).
@@ -215,7 +234,9 @@ impl Assets {
             toya_mukade: frames(sprites::sprite("toya_mukade")),
             kuon_domain: frames(sprites::sprite("kuon_domain")),
             ren_divine: frames(sprites::sprite("ren_divine")),
-            rigs: ALL_HEROES.iter().map(|h| rig_name(*h).map(|n| crate::rig::RigDef::load(n, rig_json(n)))).collect(),
+            rigs: ALL_HEROES.iter().map(|h| rig_name(*h).map(|n| std::rc::Rc::new(crate::rig::RigDef::load(n, rig_json(n))))).collect(),
+            dressed: std::cell::RefCell::new(vec![None; ALL_HEROES.len()]),
+            base_icons: Default::default(),
             faces: ALL_HEROES.iter().map(|h| rig_name(*h).map(|n| sprites::hi_art(&format!("{n}_face")))).collect(),
             form_faces: ALL_HEROES.iter().map(|h| form_name(*h).map(|n| sprites::hi_art(&format!("{n}_face")))).collect(),
             cleaver: sprites::art("cleaver"),
@@ -372,9 +393,61 @@ impl Assets {
         }
     }
 
-    /// The hero's rig, if it has one.
-    pub fn rig(&self, h: HeroId) -> Option<&crate::rig::RigDef> {
-        self.rigs[ALL_HEROES.iter().position(|x| *x == h).unwrap()].as_ref()
+    /// The hero's rig, if it has one, wearing the gear last given to `dress`.
+    pub fn rig(&self, h: HeroId) -> Option<std::rc::Rc<crate::rig::RigDef>> {
+        let i = ALL_HEROES.iter().position(|x| *x == h).unwrap();
+        if let Some((_, r)) = &self.dressed.borrow()[i] {
+            return Some(r.clone());
+        }
+        self.rigs[i].clone()
+    }
+
+    /// Puts `items` (the hero's equipped gear) on the hero's rig. Cheap when nothing changed:
+    /// the rig is only rebuilt when the outfit does.
+    pub fn dress(&self, h: HeroId, items: &[&sim::gear::Item]) {
+        let i = ALL_HEROES.iter().position(|x| *x == h).unwrap();
+        let (Some(name), Some(base)) = (rig_name(h), self.rigs[i].as_ref()) else { return };
+        let mut pieces = Vec::new();
+        let mut extras = Vec::new();
+        let mut sig = Vec::new();
+        for it in items {
+            if WORN.contains(&it.slot) {
+                pieces.push(format!("{}_{}_{}", it.slot.key(), it.base_key(), it.tier()));
+            } else if matches!(it.slot, sim::gear::Slot::Necklace | sim::gear::Slot::Ring | sim::gear::Slot::Earring | sim::gear::Slot::Charm | sim::gear::Slot::Omamori) {
+                extras.push((it.slot, self.item_icon(it)));
+                sig.push(format!("{}#{}", it.slot.key(), it.id));
+            }
+        }
+        sig.extend(pieces.iter().cloned());
+        if matches!(&self.dressed.borrow()[i], Some((s, _)) if *s == sig) {
+            return;
+        }
+        let rig = if sig.is_empty() { base.clone() } else { std::rc::Rc::new(base.dressed(name, wear_json(name), &pieces, extras)) };
+        self.dressed.borrow_mut()[i] = Some((sig, rig));
+    }
+
+    /// An item's icon: its Exotic or Arsenal art, else its base at its tier (the slot's icon for
+    /// bases not drawn yet).
+    pub fn item_icon(&self, it: &sim::gear::Item) -> Texture2D {
+        if let Some(e) = it.exotic {
+            return self.gear_icon_named(e.key()).clone();
+        }
+        if let Some(a) = it.art {
+            return self.gear_icon_named(a.key()).clone();
+        }
+        if let Some(k) = it.arsenal {
+            return self.icon(Upgrade::Weapon(k)).clone();
+        }
+        if it.slot == sim::gear::Slot::Arsenal {
+            return self.gear_icon(it.slot).clone();
+        }
+        let path = format!("gear/{}/{}_{}", it.slot.key(), it.base_key(), it.tier());
+        if let Some(t) = self.base_icons.borrow().get(&path) {
+            return t.clone();
+        }
+        let t = if sprites::has_art(&path) { sprites::hi_art(&path) } else { self.gear_icon(it.slot).clone() };
+        self.base_icons.borrow_mut().insert(path, t.clone());
+        t
     }
 
     /// The hero's transformed-form HUD face, if it has one.
@@ -1478,7 +1551,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let view = view_rect(cam);
 
     // The rigged hero, drawn at the end of this fn (after the world target), at full resolution.
-    let mut hires_player: Option<(&crate::rig::RigDef, Vec2, bool, Color)> = None;
+    let mut hires_player: Option<(std::rc::Rc<crate::rig::RigDef>, Vec2, bool, Color)> = None;
 
     // Sakura Field sits on the ground under everything.
     for w in &world.weapons {
@@ -1753,6 +1826,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let feet = vec2(c.pos.x, c.pos.y + 6.0);
         match a.rig(world.cfg.hero).filter(|_| !(fox || hannya || mukade || domain || divine)) {
             Some(rig) => {
+                let rig = &*rig;
                 // A faint afterimage trailing behind when moving.
                 if c.moving {
                     crate::rig::draw(rig, &fx.hero_rig, feet - vec2(c.facing.x, c.facing.y) * 5.0, left, Color::new(0.5, 0.65, 1.0, 0.22 * fade));
@@ -1848,9 +1922,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         // target it is drawn after the target is on screen, at full device resolution.
         let feet = vec2(p.x, p.y + 6.0);
         if target.is_some() {
-            hires_player = Some((rig.unwrap(), feet, flip, tint));
+            hires_player = Some((rig.clone().unwrap(), feet, flip, tint));
         } else {
-            crate::rig::draw(rig.unwrap(), &fx.hero_rig, feet, flip, tint);
+            crate::rig::draw(rig.as_deref().unwrap(), &fx.hero_rig, feet, flip, tint);
         }
     } else {
         draw_texture_ex(tex, x, y, tint, params);
@@ -2222,7 +2296,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         if let Some((rig, feet, left, tint)) = hires_player.take() {
             let direct = Camera2D { target: cam.target, zoom: cam.zoom, offset: cam.offset, rotation: cam.rotation, render_target: None, viewport: cam.viewport };
             set_camera(&direct);
-            crate::rig::draw(rig, &fx.hero_rig, feet, left, tint);
+            crate::rig::draw(&rig, &fx.hero_rig, feet, left, tint);
             set_default_camera();
         }
     }
@@ -2844,6 +2918,31 @@ mod tests {
         let mut fx = Fx::new();
         fx.absorb(&[Event::BossSpawned(EnemyKind::GreatOni), Event::LeaderSpawned { kind: EnemyKind::Oni }], sim::Vec2::ZERO, 192.0);
         assert!(fx.banner.as_ref().is_some_and(|(t, _)| t.contains("APPROACHES")), "{:?}", fx.banner);
+    }
+
+    #[test]
+    fn every_gear_base_has_an_icon_and_its_worn_pieces_exist() {
+        use sim::gear::{roll_item, Rarity, ALL_SLOTS};
+        let mut it = roll_item(&mut sim::rng::Rng::new(1), Some(sim::gear::Slot::Hat), Rarity::Common, 1);
+        for slot in ALL_SLOTS.into_iter().filter(|s| *s != sim::gear::Slot::Arsenal) {
+            for b in 0..slot.base_count() {
+                (it.slot, it.base) = (slot, b as u8);
+                for t in 0..3 {
+                    let path = format!("gear/{}/{}_{t}", slot.key(), it.base_key());
+                    assert!(sprites::has_art(&path), "missing art/hd/{path}.png");
+                }
+            }
+        }
+        for h in ALL_HEROES {
+            let Some(name) = rig_name(h) else { continue };
+            let v: serde_json::Value = serde_json::from_str(wear_json(name)).unwrap();
+            for (piece, parts) in v["pieces"].as_object().unwrap() {
+                for part in parts.as_object().unwrap().keys() {
+                    assert!(sprites::has_art(&format!("wear/{name}/{piece}.{part}")), "missing art/hd/wear/{name}/{piece}.{part}.png");
+                }
+            }
+            assert!(v["anchors"]["neck"].is_array(), "{name} has no gear anchors");
+        }
     }
 
     #[test]

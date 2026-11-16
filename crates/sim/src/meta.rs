@@ -449,8 +449,13 @@ impl Profile {
         matching.iter().copied().find(|&p| l[p] == 0).unwrap_or(matching[0])
     }
 
+    /// The items the hero has equipped, in loadout order.
+    pub fn equipped(&self, hero: HeroId) -> Vec<&Item> {
+        self.loadouts[hero.index()].iter().filter_map(|id| if *id == 0 { None } else { self.item(*id) }).collect()
+    }
+
     pub fn loadout(&self, hero: HeroId) -> Loadout {
-        let items: Vec<&Item> = self.loadouts[hero.index()].iter().filter_map(|id| if *id == 0 { None } else { self.item(*id) }).collect();
+        let items = self.equipped(hero);
         let mut l = Loadout::from_items(&items);
         l.fingers = (self.items.iter().filter(|i| i.exotic == Some(gear::Exotic::SovereignFinger)).count() as u32).min(gear::MAX_FINGERS);
         l
