@@ -11,10 +11,13 @@ mod chest_ui;
 mod cloud;
 mod devmenu;
 mod foliage;
+mod herolight;
 mod kit;
 mod light;
+mod litsprite;
 mod menu;
 mod platform;
+mod post;
 mod render;
 mod rig;
 mod save;
@@ -28,6 +31,8 @@ mod tutorial;
 mod ui;
 mod vfx;
 mod voice;
+mod wind;
+mod worldfx;
 
 use render::{Assets, Fx};
 
@@ -196,6 +201,10 @@ async fn main() {
                     world.choose_shrine(None);
                 }
             }
+            // Dev: `KZ_PERF_AT=x,y` stands the hero there (to look at a cliff or a ramp).
+            if let Some((x, y)) = std::env::var("KZ_PERF_AT").ok().and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?)))) {
+                world.player.pos = sim::Vec2::new(x, y);
+            }
         } else if perf_real() {
             // A realistic late night: full awakened loadout at 22:00, the player can't die.
             world = new_world(None, &profile);
@@ -241,6 +250,12 @@ async fn main() {
         // UI draws in virtual 1280x720 pixels (scaled down on small screens).
         kit::begin_ui();
         let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
+        // Graphics quality: the saved choice, and Auto's watch on the frame rate (not in the
+        // dev harness, which measures one quality on purpose).
+        // Dev: `KZ_GFX=1..3` forces Low / Medium / High.
+        let forced = if cfg!(not(target_arch = "wasm32")) { std::env::var("KZ_GFX").ok().and_then(|v| v.parse().ok()) } else { None };
+        post::set_setting(forced.unwrap_or(profile.graphics));
+        post::frame(dt, in_run && perf.is_none());
         touch.update(in_run && !map_open && tip.is_none());
         let portrait = screen_height() > screen_width();
         if (touch.pause || portrait) && in_run {
@@ -630,10 +645,6 @@ async fn main() {
         if world.stage().mechanic == sim::campaign::Mechanic::Downpour {
             let pp = cam.world_to_screen(vec2(world.player.pos.x, world.player.pos.y));
             stage_art.draw_downpour(pp, now, fx.flash);
-        }
-        stage_art.draw_vignette();
-        if !matches!(world.state, RunState::Dead | RunState::Won) {
-            stage_art.draw_branches(world.cfg.stage, cam.target, now);
         }
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {

@@ -103,6 +103,7 @@ pub fn gather(world: &World, l: &mut Lights, view: Rect, time: f64) {
     for pl in &world.pools {
         let k = (pl.life / pl.max_life * 3.0).min(1.0) * flick(pl.pos.x);
         emit(l, v(pl.pos), glow(pl.radius * 2.6, 0.55 * k, 0.24 * k, 0.05 * k, 0.0));
+        crate::post::heat(v(pl.pos), pl.radius * 1.6, 0.8 * k);
     }
     for ln in &world.lanterns {
         emit(l, v(ln.pos), glow(ln.radius * 1.6, 0.10, 0.26, 0.32, 14.0));
@@ -111,6 +112,9 @@ pub fn gather(world: &World, l: &mut Lights, view: Rect, time: f64) {
     for i in 0..e.len() {
         if let Some(g) = enemy(e.kind[i]).filter(|g| near(e.pos[i], g.radius)) {
             emit_passing(l, v(e.pos[i]), g);
+            if matches!(e.kind[i], EnemyKind::Kagerou | EnemyKind::NightLord) {
+                crate::post::heat(v(e.pos[i]) - vec2(0.0, g.lift), g.radius * 0.4, 0.6);
+            }
         }
     }
     // Attacks light their path; with hundreds in flight only some of them do (it adds up).

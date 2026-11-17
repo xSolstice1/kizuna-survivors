@@ -1,4 +1,4 @@
-"""Foliage that moves: grass tufts per world and foreground branch silhouettes.
+"""Foliage that moves: grass tufts per world.
 
     python3 tools/ai/foliage_art.py          # generate what's missing (pro, 4 per call), then cut
     python3 tools/ai/foliage_art.py cut      # re-cut the saved sheets
@@ -6,8 +6,6 @@
 Grass: art/hd/<world>/grass_0..3.png, tufts seen from slightly above, roots at the bottom
 centre (the game sways their tops and bends them away from the hero). The world's own ground
 texture is the style and colour reference, so tufts sit in the painted ground.
-Branches: art/hd/fg/branch_0..3.png, dark leafy silhouettes reaching in from a screen edge
-(drawn huge and soft in front of everything, moving faster than the ground for depth).
 Raw sheets: art/ai/foliage/.
 """
 import json, pathlib, sys
@@ -38,12 +36,6 @@ SHEETS = {
         "a tall clump of pampas-like silver plume grass",
         "a tuft of brown and orange autumn grass",
     ]),
-    "fg/branch": (None, "magenta", [
-        "a dark leafy maple branch reaching in from the left edge, leaves as near-black silhouettes with faint deep green rim light",
-        "a dark pine bough hanging down from the top edge, needles as near-black silhouettes with faint deep blue rim light",
-        "a dark bamboo stalk with leaves leaning in from the right edge, near-black silhouettes with faint teal rim light",
-        "a dark cherry blossom branch reaching in from the bottom edge, near-black silhouettes with a few faint pink blossoms",
-    ]),
 }
 
 PROMPT = (
@@ -54,7 +46,6 @@ PROMPT = (
 )
 GRASS_STYLE = ("Use the reference image ONLY for colours and painting style: do NOT draw its ground, stones or any texture behind "
                "the grass. Only the grass itself, isolated on the flat key colour, soft painterly shading with gentle highlights, no outlines.")
-BRANCH_STYLE = "Soft, out-of-focus silhouettes as if very close to the camera, simple bold shapes, mostly near-black."
 
 
 def generate():
@@ -64,7 +55,7 @@ def generate():
         if out.exists():
             continue
         text = PROMPT.format(*subjects, bg="pure " + bg, hx="#FF00FF" if bg == "magenta" else "#00FF00",
-                             style=GRASS_STYLE if ref else BRANCH_STYLE)
+                             style=GRASS_STYLE)
         refs = [ROOT / ref] if ref else []
         if ref:
             tmp = RAW / f"ref_{name.replace('/', '_')}.png"
@@ -102,8 +93,8 @@ def cut():
                 alpha = alpha * ndimage.binary_dilation(np.isin(lab, [k + 1 for k, ar in enumerate(areas) if ar >= 0.02 * areas.max()]), iterations=2)
             ys, xs = np.where(alpha > 0.05)
             im = Image.fromarray(np.dstack([rgb, alpha * 255]).clip(0, 255).astype(np.uint8), "RGBA").crop((xs.min(), ys.min(), xs.max() + 1, ys.max() + 1))
-            # Grass: 128 px tall is plenty (drawn ~12 units); branches stay large (drawn huge).
-            h = 128 if "grass" in meta["name"] else 512
+            # 128 px tall is plenty (grass is drawn ~12 units tall).
+            h = 128
             im = im.resize((max(1, round(im.width * h / im.height)), h), Image.LANCZOS)
             out = HD / f"{meta['name']}_{i}.png"
             out.parent.mkdir(parents=True, exist_ok=True)

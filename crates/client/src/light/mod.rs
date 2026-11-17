@@ -160,6 +160,7 @@ pub struct Lamp {
     ground: Vec2,
     radius: f32,
     strength: f32,
+    color: Color,
 }
 
 /// How strong a lamp's shadow is at full falloff (its light's r + g + b times this).
@@ -218,12 +219,14 @@ pub struct Lights {
     shadow_lay: Option<Material>,
     /// The light map's brightest (per world: snow can't take as much as a dark street).
     cap: f32,
+    /// Wet ground (Rainward): lamps reflect as long streaks below them.
+    wet: bool,
     pub list: Vec<Light>,
     ambient: Color,
 }
 
 thread_local! {
-    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, lamps: Vec::new(), hero_tint: None, multiply: None, shadow_rt: None, shadow_add: None, shadow_lay: None, cap: 0.7, list: Vec::new(), ambient: WHITE });
+    pub static LIGHTS: RefCell<Lights> = RefCell::new(Lights { rt: None, silhouette: None, lamps: Vec::new(), hero_tint: None, multiply: None, shadow_rt: None, shadow_add: None, shadow_lay: None, cap: 0.7, wet: false, list: Vec::new(), ambient: WHITE });
 }
 
 const MUL_VERTEX: &str = r#"#version 100
@@ -297,9 +300,10 @@ impl Lights {
     /// Starts a frame's lights over the stage's ambient.
     pub fn begin(&mut self, stage: StageId) {
         self.cap = cap(stage);
+        self.wet = stage == StageId::Rainward;
         self.lamps.clear();
         for l in self.list.iter().filter(|l| l.casts) {
-            self.lamps.push(Lamp { ground: l.ground, radius: l.radius, strength: (l.color.r + l.color.g + l.color.b) * LAMP_SHADOW });
+            self.lamps.push(Lamp { ground: l.ground, radius: l.radius, strength: (l.color.r + l.color.g + l.color.b) * LAMP_SHADOW, color: l.color });
         }
         self.list.clear();
         self.ambient = ambient(stage);
@@ -351,6 +355,37 @@ impl Lights {
         };
         self.hero_tint = Some(c);
         c
+    }
+
+    /// How a character at `feet` is lit (crate::litsprite): by the moon, and when a lamp is
+    /// near, warmly from the lamp's side, the rim taking its colour.
+    pub fn rim_at(&self, feet: Vec2) -> crate::litsprite::Light {
+        // The hero is the one thing the eye follows: the moon models them a little more firmly
+        // than the crowd.
+        let m0 = crate::litsprite::MOON;
+        let moon = crate::litsprite::Light { rim: Color { a: 0.36, ..m0.rim }, shade: Color { a: 0.48, ..m0.shade }, ..m0 };
+        let best = self
+            .lamps
+            .iter()
+            .map(|l| {
+                let d = l.ground - feet;
+                (l, d, (falloff(d.length(), l.radius) * l.strength).min(1.0))
+            })
+            .filter(|x| x.2 > 0.02 && x.1.length() > 4.0)
+            .max_by(|a, b| a.2.total_cmp(&b.2));
+        let Some((l, d, k)) = best else { return moon };
+        // Towards the lamp, which shines from above it: a little upwards too.
+        let toward = (d.normalize() + vec2(0.0, -0.35)).normalize();
+        // The lamp's hue, softened towards white: light grazing an edge, not paint.
+        let m = l.color.r.max(l.color.g).max(l.color.b).max(1e-3);
+        let soft = |c: f32| 0.45 + 0.55 * c / m;
+        let lamp = Color::new(soft(l.color.r), soft(l.color.g), soft(l.color.b), 1.0);
+        let mix = |a: f32, b: f32| a + (b - a) * k;
+        crate::litsprite::Light {
+            dir: (moon.dir * (1.0 - k) + toward * k).normalize_or(moon.dir),
+            rim: Color::new(mix(moon.rim.r, lamp.r), mix(moon.rim.g, lamp.g), mix(moon.rim.b, lamp.b), mix(moon.rim.a, 0.55)),
+            shade: Color { a: moon.shade.a * 1.1, ..moon.shade },
+        }
     }
 
     /// The shadows cast at `feet` (see `casts_into`): the moon's, then each nearby lamp's.
@@ -498,10 +533,19 @@ impl Lights {
         set_camera(&lc);
         clear_background(self.ambient);
         let lights = &self.list;
+        let wet = self.wet;
         additive(&|| {
             for l in lights.iter() {
                 let d = l.radius * 2.0;
                 draw_texture_ex(glow, l.pos.x - l.radius, l.pos.y - l.radius, l.color, DrawTextureParams { dest_size: Some(vec2(d, d)), ..Default::default() });
+                // Wet ground mirrors a raised light: a long bright streak running down from
+                // under it, as lamps shine on a rainy street.
+                let lift = l.ground.y - l.pos.y;
+                if wet && l.casts && lift > 4.0 {
+                    let (w, h) = (l.radius * 0.32, l.radius * 1.1);
+                    let c = Color::new(l.color.r * 0.9, l.color.g * 0.9, l.color.b * 0.9, 1.0);
+                    draw_texture_ex(glow, l.ground.x - w / 2.0, l.ground.y + lift * 0.6 - h * 0.35, c, DrawTextureParams { dest_size: Some(vec2(w, h)), ..Default::default() });
+                }
             }
         });
         set_camera(cam);

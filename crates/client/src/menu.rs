@@ -870,7 +870,14 @@ pub fn settings(profile: &mut Profile, time: f64) -> Option<SettingsAction> {
     centered("SETTINGS", h * 0.22, 44.0, ACCENT);
     let mut changed = slider("Music", h * 0.36, &mut profile.music_volume);
     changed |= slider("Sound effects", h * 0.36 + 70.0, &mut profile.sfx_volume);
-    fullscreen_button(Rect::new((screen_width() - 300.0) / 2.0, h * 0.36 + 140.0, 300.0, 46.0));
+    fullscreen_button(Rect::new(screen_width() / 2.0 - 305.0, h * 0.36 + 140.0, 300.0, 46.0));
+    // Graphics quality: tap to cycle Auto, Low, Medium, High.
+    let label = format!("Graphics: {}", crate::post::setting_label(profile.graphics));
+    if kit::button(Rect::new(screen_width() / 2.0 + 5.0, h * 0.36 + 140.0, 300.0, 46.0), &label, true, kit::Style::Secondary) {
+        profile.graphics = (profile.graphics + 1) % 4;
+        crate::post::set_setting(profile.graphics);
+        changed = true;
+    }
     centered("All music and sound effects are generated in code.", h * 0.36 + 210.0, 16.0, DIM);
     account_panel(h * 0.36 + 222.0);
     if button(Rect::new((screen_width() - 200.0) / 2.0, h * 0.36 + 380.0, 200.0, 46.0), "Back", true) || is_key_pressed(KeyCode::Escape) {

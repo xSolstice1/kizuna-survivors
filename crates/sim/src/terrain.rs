@@ -1,16 +1,16 @@
 //! Terrain: high ground, low ground and the cliffs between them, for the campaign worlds.
 //!
 //! The map is endless and a pure function of (stage, cell): every run of a stage has the same
-//! hills and valleys. Each 16-unit cell has a level (0 low, 1 ground, 2 high) from smooth noise
-//! flattened into plateaus. Where the level changes there is a **cliff**: a wall for players
-//! and enemies alike (nobody falls off; projectiles fly over). In the top-down view a drop to
-//! the south shows its rock face below the edge (`FACE_CELLS` tall), so that wall is the
-//! lower cells under the face; drops to the other sides are walled on the higher cell (its rim). Either way every
-//! pair of side-by-side cells at different levels has a wall between them. The only way between levels is a
-//! **road**: wavy roads run every `ROAD_EVERY` cells in both directions and ramp over every
-//! level change they cross. The start is a clearing on a road crossing, so the player is always
-//! connected to the road network and can never be sealed in. Plateaus too small for a road are
-//! simply obstacles.
+//! layout. It is laid out as **terraces**: roads run every `ROAD_EVERY` cells both ways, and
+//! each road crossing is the centre of a flat district of low, middle or high ground
+//! (`shape`), its edges halfway between crossings. Where neighbouring districts differ there
+//! is a **cliff**: a wall for players and enemies alike (nobody falls off; projectiles fly
+//! over). In the top-down view a drop to the south shows its rock face below the edge
+//! (`FACE_CELLS` tall), and that face is the wall; drops to the other sides are walled by a
+//! thin lip on the high side (`RIM`). Roads are level across their width (`height_cells`), so
+//! the road joining two districts climbs their edge square on at its middle: every terrace's
+//! one way up per side, drawn as stairs or a ramp (`stairs`). The start's district is middle
+//! ground on a road crossing, so the player is always connected and never sealed in.
 //!
 //! The world keeps a cache of cells around the player (cheap lookups for thousands of enemies)
 //! and a flow field: the walking distance from the player to every cell nearby, so enemies go
@@ -46,14 +46,11 @@ const CACHE: i32 = 256;
 const FLOW: i32 = 112;
 const UNREACHED: u16 = u16::MAX;
 
-/// City worlds (Rainward 13, Shatterline Crossing) lay out as city blocks: straight streets
-/// and square raised plazas or sunken lots. The others are organic hills and hollows.
+/// City worlds (Rainward 13, Shatterline Crossing): straight streets and terrace edges; the
+/// others' roads and edges wind gently.
 pub fn city(stage: StageId) -> bool {
     matches!(stage, StageId::Rainward | StageId::Shatterline)
 }
-
-/// City block size, in cells (a road runs every 3 blocks).
-const BLOCK: f32 = 8.0;
 
 /// Whether a stage has terrain (the prologue streets stay flat).
 pub fn enabled(stage: StageId) -> bool {
@@ -82,36 +79,87 @@ fn salt(stage: StageId) -> u32 {
 pub const LOW_BELOW: f32 = 0.34;
 pub const HIGH_ABOVE: f32 = 0.62;
 
+/// Roads are level across their width out to this many cells from the centre line, blending
+/// back to the land over `ROAD_BLEND` more.
+const ROAD_FLAT: f32 = 1.7;
+const ROAD_BLEND: f32 = 1.2;
+
 /// The continuous height field at a point in cell units (cells sample it at their corner).
 /// The client draws its contour lines; the sim rounds it to cells.
+///
+/// The land's shape (`shape`), levelled by the roads: a road is level across its width and
+/// climbs only along its length, so wherever it meets a level change the edge runs straight
+/// across it (a clean flight of stairs cut into the cliff), a road never runs along a cliff
+/// half on each level, and where two roads cross is a flat square.
 pub fn height_cells(stage: StageId, x: f32, y: f32) -> f32 {
+    let raw = shape(stage, x, y);
+    let ((dv, cx), (dh, cy)) = road_centres(stage, x, y);
+    let flat = |d: f32| 1.0 - smooth(((d - ROAD_FLAT) / ROAD_BLEND).clamp(0.0, 1.0));
+    let (fv, fh) = (flat(dv), flat(dh));
+    if fv <= 0.0 && fh <= 0.0 {
+        return raw;
+    }
+    let road = if fv > 0.0 && fh > 0.0 {
+        shape(stage, cx, cy)
+    } else if fv > 0.0 {
+        shape(stage, cx, y)
+    } else {
+        shape(stage, x, cy)
+    };
+    raw + (road - raw) * fv.max(fh)
+}
+
+/// The land before the roads level it, laid out as terraces: one district per road
+/// crossing (its centre), each low, middle or high ground (`district_level`), flat, its
+/// edges halfway between crossings: gently winding in the wild, straight in cities. The
+/// road joining two districts crosses the middle of their shared edge square on, so every
+/// terrace has its one way up (stairs or a ramp) at the middle of each side, where its road
+/// comes in, and nowhere else. The start's district is middle ground.
+fn shape(stage: StageId, x: f32, y: f32) -> f32 {
     let s = salt(stage);
-    let n = if city(stage) {
-        // One height per city block (sampled at its centre), so levels change on block lines.
-        let (bx, by) = ((x / BLOCK).floor() + 0.5, (y / BLOCK).floor() + 0.5);
-        noise(bx / 2.2, by / 2.2, s) * 0.75 + noise(bx / 0.9, by / 0.9, s + 1) * 0.25
-    } else {
-        // Each octave on its own turned lattice, with a gentle warp, so contours wind
-        // organically instead of following the noise grid.
-        let rot = |a: f32, x: f32, y: f32| (x * a.cos() - y * a.sin(), x * a.sin() + y * a.cos());
-        let wx = (noise(x / 9.0, y / 9.0, s + 5) - 0.5) * 3.0;
-        let wy = (noise(x / 9.0, y / 9.0, s + 6) - 0.5) * 3.0;
-        let (ax, ay) = rot(0.62, x + wx, y + wy);
-        let (bx, by) = rot(-1.13, x + wx, y + wy);
-        noise(ax / 15.0, ay / 15.0, s) * 0.7 + noise(bx / 6.0, by / 6.0, s + 1) * 0.3
-    };
-    // Flat around the start (in cities, judged per block so block edges stay straight).
-    let d = if city(stage) {
-        let (bx, by) = (((x / BLOCK).floor() + 0.5) * BLOCK, ((y / BLOCK).floor() + 0.5) * BLOCK);
-        (bx * bx + by * by).sqrt()
-    } else {
-        (x * x + y * y).sqrt()
-    };
-    if d < CLEAR + 8.0 {
-        let k = smooth(((d - CLEAR) / 8.0).clamp(0.0, 1.0));
+    let d = ROAD_EVERY as f32;
+    // Districts are centred on the road crossings (centre lines at k * ROAD_EVERY + 0.5).
+    let (mut ux, mut uy) = (x - 0.5, y - 0.5);
+    if !city(stage) {
+        ux += (noise(x / 10.0, y / 10.0, s + 5) - 0.5) * 7.0;
+        uy += (noise(x / 10.0, y / 10.0, s + 6) - 0.5) * 7.0;
+    }
+    let (dx, dy) = (ux / d, uy / d);
+    let (bx, by) = (dx.round(), dy.round());
+    let (fx, fy) = (dx - bx, dy - by);
+    // Neighbouring districts blend over a cell either side of their edge (smooth contours).
+    let b = 0.9 / d;
+    let w = |f: f32| smooth(((f.abs() - (0.5 - b)) / (2.0 * b)).clamp(0.0, 1.0));
+    let (wx, wy) = (w(fx), w(fy));
+    let (sx, sy) = (if fx < 0.0 { -1 } else { 1 }, if fy < 0.0 { -1 } else { 1 });
+    let (bx, by) = (bx as i32, by as i32);
+    let h = |i: i32, j: i32| district_level(stage, bx + i, by + j);
+    let top = h(0, 0) + (h(sx, 0) - h(0, 0)) * wx;
+    let bot = h(0, sy) + (h(sx, sy) - h(0, sy)) * wx;
+    let n = top + (bot - top) * wy;
+    // Flat around the start (its district is middle ground anyway).
+    let r = (x * x + y * y).sqrt();
+    if r < CLEAR + 8.0 {
+        let k = smooth(((r - CLEAR) / 8.0).clamp(0.0, 1.0));
         0.5 + (n - 0.5) * k
     } else {
         n
+    }
+}
+
+/// A district's ground: about a quarter low, half middle, a quarter high (the start's is
+/// middle). Values sit well clear of the level thresholds, so a district is one level.
+fn district_level(stage: StageId, bx: i32, by: i32) -> f32 {
+    if bx == 0 && by == 0 {
+        return 0.5;
+    }
+    let r = (hash(bx, by, salt(stage) + 77) & 0xFFFF) as f32 / 65535.0;
+    if r < 0.24 {
+        0.18
+    } else if r < 0.74 {
+        0.48
+    } else {
+        0.8
     }
 }
 
@@ -129,15 +177,25 @@ pub fn road_distance(stage: StageId, p: Vec2) -> f32 {
 /// Distances (cells, continuous) to the nearest north-south road and the nearest east-west
 /// road centre lines.
 pub fn road_distances(stage: StageId, p: Vec2) -> (f32, f32) {
+    let ((v, _), (h, _)) = road_centres(stage, p.x / CELL, p.y / CELL);
+    (v, h)
+}
+
+/// For a point in cell units: (distance to, x of) the nearest north-south road's centre
+/// line, and (distance to, y of) the nearest east-west one's, at this point.
+fn road_centres(stage: StageId, x: f32, y: f32) -> ((f32, f32), (f32, f32)) {
     let s = salt(stage);
-    let (x, y) = (p.x / CELL, p.y / CELL);
-    let mut best = [f32::MAX; 2];
+    let mut best = [(f32::MAX, 0.0f32); 2];
     for (i, (c, t, off)) in [(x, y, 11u32), (y, x, 23u32)].into_iter().enumerate() {
         let k0 = (c / ROAD_EVERY as f32).round();
         for dk in -1..=1 {
             let k = k0 + dk as f32;
             let wob = if city(stage) { 0.0 } else { (noise(t / 18.0, k * 3.7, s + off) - 0.5) * 9.0 };
-            best[i] = best[i].min((c - (k * ROAD_EVERY as f32 + wob + 0.5)).abs());
+            let centre = k * ROAD_EVERY as f32 + wob + 0.5;
+            let d = (c - centre).abs();
+            if d < best[i].0 {
+                best[i] = (d, centre);
+            }
         }
     }
     (best[0], best[1])
@@ -245,6 +303,153 @@ pub struct Terrain {
 
 /// Step (units) of the smooth walls' look-around samples.
 const FINE: f32 = 8.0;
+/// How far inside a platform's edge (one not facing south) the smooth wall reaches: a thin
+/// lip at the edge itself, so the platform's top is walkable right up to where it drops
+/// (drawn as raised ground with a lit edge, not as a wall). The cells (`flags`, for the
+/// crowd and the flow field) still wall the whole rim cell.
+const RIM: f32 = 6.0;
+
+/// A flight of stairs: where a road's centre line crosses a level change. `top` and `bottom`
+/// are its ends on the centre line (world units), `width` the road's.
+#[derive(Clone, Copy, Debug)]
+pub struct Stair {
+    pub top: Vec2,
+    pub bottom: Vec2,
+    pub width: f32,
+}
+
+/// Every flight of stairs with a centre line touching `min`..`max`. A drop facing south is
+/// climbed over its rock face (`FACE_CELLS` long, down to the south); any other drop over
+/// a cell and a half, centred on the edge.
+pub fn stairs(stage: StageId, min: Vec2, max: Vec2) -> Vec<Stair> {
+    let mut out = Vec::new();
+    if !enabled(stage) {
+        return out;
+    }
+    let (c0, c1) = (cell_of(min), cell_of(max));
+    let width = (ROAD_HALF * 2 + 1) as f32 * CELL;
+    // North-south roads (salt 11: centre column k * ROAD_EVERY + wobble(row)), then
+    // east-west ones (salt 23), each walked one cell at a time.
+    for (vertical, off) in [(true, 11u32), (false, 23u32)] {
+        let (a0, a1, t0, t1) = if vertical { (c0.0, c1.0, c0.1 - 3, c1.1 + 3) } else { (c0.1, c1.1, c0.0 - 3, c1.0 + 3) };
+        let k0 = ((a0 - 12) as f32 / ROAD_EVERY as f32).floor() as i32;
+        let k1 = ((a1 + 12) as f32 / ROAD_EVERY as f32).ceil() as i32;
+        for k in k0..=k1 {
+            let at = |t: i32| k * ROAD_EVERY + wobble(stage, k, t, off);
+            let level = |t: i32| {
+                let c = at(t);
+                if vertical { level_raw(stage, c, t) } else { level_raw(stage, t, c) }
+            };
+            for t in t0..t1 {
+                let (la, lb) = (level(t), level(t + 1));
+                if la == lb {
+                    continue;
+                }
+                // The edge between cells t and t + 1, on the centre line.
+                let c = (at(t) + at(t + 1)) as f32 * 0.5 + 0.5;
+                let e = (t + 1) as f32;
+                let p = |along: f32| if vertical { Vec2::new(c * CELL, along * CELL) } else { Vec2::new(along * CELL, c * CELL) };
+                let (top, bottom) = if vertical && la > lb {
+                    // Higher ground to the north: down the rock face to the south.
+                    (p(e), p(e + FACE_CELLS as f32))
+                } else if la > lb {
+                    (p(e - 0.75), p(e + 0.75))
+                } else {
+                    (p(e + 0.75), p(e - 0.75))
+                };
+                let mid = (top + bottom) * 0.5;
+                if mid.x >= min.x - CELL * 2.0 && mid.x <= max.x + CELL * 2.0 && mid.y >= min.y - CELL * 2.0 && mid.y <= max.y + CELL * 2.0 {
+                    out.push(Stair { top, bottom, width });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The smooth walls' rule (`Terrain::wall_field`) at `p`, given whether its cell is open (a
+/// road or the start clearing) and the height field `h`: positive inside a cliff.
+fn wall_field_with(p: Vec2, open: bool, h: impl Fn(Vec2) -> f32) -> f32 {
+    if open {
+        return -1.0;
+    }
+    let here = h(p);
+    let face = (FACE_CELLS as f32 * CELL / FINE) as i32;
+    let north = (1..=face).map(|k| h(Vec2::new(p.x, p.y - k as f32 * FINE))).fold(f32::MIN, f32::max);
+    const D: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let around = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (-D, -D), (D, -D)]
+        .iter()
+        .flat_map(|&(dx, dy)| [RIM * 0.5, RIM].map(move |k| (dx * k, dy * k)))
+        .map(|(dx, dy)| h(Vec2::new(p.x + dx, p.y + dy)))
+        .fold(f32::MAX, f32::min);
+    [LOW_BELOW, HIGH_ABOVE].iter().map(|&t| (t - here).min(north - t).max((here - t).min(t - around))).fold(f32::MIN, f32::max)
+}
+
+/// The smooth walls over a block of the world, computed from scratch: exactly the field the
+/// player collides with (`Terrain::wall_field`), for drawing. The client paints rock where
+/// it's positive, so what looks like a wall is one and nothing else is.
+pub struct WallGrid {
+    origin: (i32, i32),
+    n: i32,
+    heights: Vec<f32>,
+    open: Vec<bool>,
+    /// Road cells where the level changes: the stairs (the sim's RAMP flag).
+    ramps: Vec<bool>,
+}
+
+impl WallGrid {
+    /// Covers `min`..`max` (world units).
+    pub fn new(stage: StageId, min: Vec2, max: Vec2) -> WallGrid {
+        // A border for the look-arounds (two cells north, one around) and interpolation.
+        let (x0, y0) = (cell_of(min).0 - 4, cell_of(min).1 - 4);
+        let n = ((max.x - min.x).max(max.y - min.y) / CELL).ceil() as i32 + 9;
+        let mut heights = Vec::with_capacity((n * n) as usize);
+        let mut open = Vec::with_capacity((n * n) as usize);
+        for j in 0..n {
+            for i in 0..n {
+                let (x, y) = (x0 + i, y0 + j);
+                heights.push(height_cells(stage, x as f32 + 0.5, y as f32 + 0.5));
+                open.push(is_road(stage, x, y) || clear(x, y));
+            }
+        }
+        // Stairs: a road cell with any neighbour on another level (as `flags` marks RAMP).
+        let lv: Vec<u8> = heights.iter().map(|&h| level_of(h)).collect();
+        let mut ramps = vec![false; (n * n) as usize];
+        for j in 1..n - 1 {
+            for i in 1..n - 1 {
+                let me = lv[(j * n + i) as usize];
+                let road = is_road(stage, x0 + i, y0 + j);
+                ramps[(j * n + i) as usize] = road && (-1..=1).any(|dj| (-1..=1).any(|di| lv[((j + dj) * n + i + di) as usize] != me));
+            }
+        }
+        WallGrid { origin: (x0, y0), n, heights, open, ramps }
+    }
+
+    /// Whether `p` is on stairs (a road cell where the level changes).
+    pub fn ramp(&self, p: Vec2) -> bool {
+        let (cx, cy) = cell_of(p);
+        let (i, j) = ((cx - self.origin.0).clamp(0, self.n - 1), (cy - self.origin.1).clamp(0, self.n - 1));
+        self.ramps[(j * self.n + i) as usize]
+    }
+
+    /// The height field between cell centres (as `Terrain::height_at`).
+    fn height_at(&self, p: Vec2) -> f32 {
+        let (u, v) = (p.x / CELL - 0.5 - self.origin.0 as f32, p.y / CELL - 0.5 - self.origin.1 as f32);
+        let (i, j) = ((u.floor() as i32).clamp(0, self.n - 2), (v.floor() as i32).clamp(0, self.n - 2));
+        let (fx, fy) = (u - i as f32, v - j as f32);
+        let h = |i: i32, j: i32| self.heights[(j * self.n + i) as usize];
+        let top = h(i, j) + (h(i + 1, j) - h(i, j)) * fx;
+        let bot = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * fx;
+        top + (bot - top) * fy
+    }
+
+    /// The walls' field at `p`: positive inside a cliff, negative in the open.
+    pub fn field(&self, p: Vec2) -> f32 {
+        let (cx, cy) = cell_of(p);
+        let (i, j) = ((cx - self.origin.0).clamp(0, self.n - 1), (cy - self.origin.1).clamp(0, self.n - 1));
+        wall_field_with(p, self.open[(j * self.n + i) as usize], |q| self.height_at(q))
+    }
+}
 
 impl Terrain {
     pub fn new(stage: StageId) -> Self {
@@ -383,6 +588,11 @@ impl Terrain {
         self.cell(cx, cy) & WALL != 0
     }
 
+    /// Whether `p` is inside the smooth walls (what the player collides with).
+    pub fn solid_at(&self, p: Vec2) -> bool {
+        self.on && self.wall_field(p) > 0.0
+    }
+
     pub fn wall_at(&self, p: Vec2) -> bool {
         let (cx, cy) = cell_of(p);
         self.wall(cx, cy)
@@ -411,19 +621,7 @@ impl Terrain {
     /// north). Roads and the start clearing are open.
     fn wall_field(&self, p: Vec2) -> f32 {
         let (cx, cy) = cell_of(p);
-        if self.cell(cx, cy) & ROAD != 0 || clear(cx, cy) {
-            return -1.0;
-        }
-        let h = self.height_at(p);
-        let face = (FACE_CELLS as f32 * CELL / FINE) as i32;
-        let north = (1..=face).map(|k| self.height_at(Vec2::new(p.x, p.y - k as f32 * FINE))).fold(f32::MIN, f32::max);
-        const D: f32 = std::f32::consts::FRAC_1_SQRT_2;
-        let around = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (-D, -D), (D, -D)]
-            .iter()
-            .flat_map(|&(dx, dy)| (1..=(CELL / FINE) as i32).map(move |k| (dx * k as f32 * FINE, dy * k as f32 * FINE)))
-            .map(|(dx, dy)| self.height_at(Vec2::new(p.x + dx, p.y + dy)))
-            .fold(f32::MAX, f32::min);
-        [LOW_BELOW, HIGH_ABOVE].iter().map(|&t| (t - h).min(north - t).max((h - t).min(t - around))).fold(f32::MIN, f32::max)
+        wall_field_with(p, self.cell(cx, cy) & ROAD != 0 || clear(cx, cy), |q| self.height_at(q))
     }
 
     /// Pushes a circle out of the cliffs. The walls are smooth (the drawn contours, see
@@ -626,6 +824,86 @@ mod tests {
 
     const W1: StageId = StageId::ShrineValley;
 
+    /// A road is level across its width: it changes level only along its length (so its
+    /// stairs run straight across it), never half on one level and half on another.
+    #[test]
+    fn roads_are_level_across() {
+        for st in [W1, StageId::EmberLeaf, StageId::PaleCitadel, StageId::Rainward, StageId::Shatterline] {
+            let (mut rows, mut split) = (0, 0);
+            for k in -3..=3 {
+                for t in -120..120 {
+                    let c = k * ROAD_EVERY + wobble(st, k, t, 11);
+                    // Skip where an east-west road crosses (a flat square, judged both ways).
+                    if is_road(st, c - 3, t) || is_road(st, c + 3, t) {
+                        continue;
+                    }
+                    rows += 1;
+                    let l: Vec<u8> = (-ROAD_HALF..=ROAD_HALF).map(|d| level_raw(st, c + d, t)).collect();
+                    split += l.iter().any(|&v| v != l[0]) as u32;
+                }
+            }
+            assert!(split * 50 < rows, "{st:?}: {split} of {rows} road rows split across levels");
+        }
+    }
+
+    /// The layout is logical: every way up (a flight where a road crosses a level change) is
+    /// at the middle of a terrace's edge, where the road between two districts crosses it.
+    #[test]
+    fn every_way_up_is_mid_edge() {
+        for st in [W1, StageId::EmberLeaf, StageId::PaleCitadel, StageId::Rainward, StageId::Shatterline] {
+            let all = stairs(st, Vec2::new(-1500.0, -1500.0), Vec2::new(1500.0, 1500.0));
+            assert!(all.len() > 6, "{st:?}: {} flights", all.len());
+            let d = ROAD_EVERY as f32;
+            for f in &all {
+                let m = (f.top + f.bottom) * (0.5 / CELL);
+                // Edge midpoints: between two crossings, along x or along y.
+                let near = |u: f32, v: f32| {
+                    let (a, b) = (((u - 0.5) / d).round() * d + 0.5, (((v - 0.5) / d) - 0.5).round() * d + 0.5 * d + 0.5);
+                    ((u - a).powi(2) + (v - b).powi(2)).sqrt()
+                };
+                let off = near(m.x, m.y).min(near(m.y, m.x));
+                assert!(off < 8.0, "{st:?}: flight at {:?} is {off} cells from any edge's middle", m);
+            }
+        }
+    }
+
+    /// Every flight of stairs lies on road cells that the sim lets you climb (RAMP or ROAD).
+    #[test]
+    fn stairs_sit_on_the_roads_that_climb() {
+        for st in [W1, StageId::EmberLeaf, StageId::PaleCitadel, StageId::Rainward, StageId::Shatterline] {
+            let all = stairs(st, Vec2::new(-800.0, -800.0), Vec2::new(800.0, 800.0));
+            assert!(all.len() > 3, "{st:?}: {} stairs", all.len());
+            for s in &all {
+                for k in 0..=4 {
+                    let p = s.top + (s.bottom - s.top) * (k as f32 / 4.0);
+                    let (cx, cy) = cell_of(p);
+                    assert!(cell_raw(st, cx, cy) & ROAD != 0, "{st:?}: stairs {s:?} off the road at {p:?}");
+                }
+            }
+        }
+    }
+
+    /// What the client draws as wall is exactly what the player collides with.
+    #[test]
+    fn drawn_walls_are_the_real_walls() {
+        for st in [W1, StageId::EmberLeaf, StageId::PaleCitadel, StageId::Rainward, StageId::Shatterline] {
+            let t = Terrain::new(st);
+            let g = WallGrid::new(st, Vec2::new(-600.0, -600.0), Vec2::new(600.0, 600.0));
+            let mut walls = 0;
+            for j in -75..75 {
+                for i in -75..75 {
+                    let p = Vec2::new(i as f32 * 8.0 + 1.3, j as f32 * 8.0 + 2.7);
+                    let (a, b) = (t.wall_field(p), g.field(p));
+                    assert!((a - b).abs() < 1e-5, "{st:?} at {p:?}: sim {a} drawn {b}");
+                    walls += (a > 0.0) as u32;
+                    let (cx, cy) = cell_of(p);
+                    assert_eq!(g.ramp(p), t.cell(cx, cy) & RAMP != 0, "{st:?} stairs at {p:?}");
+                }
+            }
+            assert!(walls > 100, "{st:?} has walls to check");
+        }
+    }
+
     #[test]
     fn prologue_is_flat() {
         let t = Terrain::new(StageId::Shotengai);
@@ -696,7 +974,11 @@ mod tests {
             }
         }
         let (x, y) = found.expect("a cliff");
-        let inside = Vec2::new(x as f32 * CELL + 8.0, y as f32 * CELL + 8.0);
+        // A point inside the smooth wall in that cell (rims are thin: not every point is).
+        let inside = (0..64)
+            .map(|k| Vec2::new(x as f32 * CELL + (k % 8) as f32 * 2.0 + 1.0, y as f32 * CELL + (k / 8) as f32 * 2.0 + 1.0))
+            .find(|&p| t.wall_field(p) > 0.0)
+            .expect("smooth wall inside a wall cell");
         let out = t.resolve(inside, 6.0);
         assert!((out - inside).length() > 1.0);
         // Out means clear: no wall square within the radius.
