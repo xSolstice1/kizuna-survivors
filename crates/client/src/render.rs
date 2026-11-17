@@ -720,12 +720,14 @@ impl Fx {
                     };
                     if kind.rank() == Rank::Final {
                         self.shake = self.shake.max(0.6);
+                        crate::post::punch(1.0);
                         self.say(self.lines().night_lord_down);
                     }
                     self.spray(vec2(pos.x, pos.y), n, color);
                 }
                 Event::PlayerHurt => {
                     self.shake = self.shake.max(0.18);
+                    crate::post::punch(0.45);
                     self.hero_rig.hurt();
                 }
                 Event::LevelUp if !self.leveled_once => {
@@ -735,6 +737,7 @@ impl Fx {
                 Event::SpecialUsed { pos } => {
                     self.rings.push((vec2(pos.x, pos.y), 0.0));
                     self.shake = self.shake.max(0.25);
+                    crate::post::punch(0.6);
                     self.say(self.lines().special);
                 }
                 Event::RoundStarted { round, headline: Some(h) } => {
@@ -2317,8 +2320,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // The world was drawn into a screen-resolution target (cheap on high-DPI screens):
     // put it on screen before the crisp overlays.
     if let Some(rt) = target {
-        set_default_camera();
-        draw_texture_ex(&rt.texture, 0.0, 0.0, WHITE, DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() });
+        crate::post::present(&rt.texture, cam, world.cfg.stage, time, a.vfx.tex("glow"));
         if let Some((rig, feet, left, tint)) = hires_player.take() {
             let direct = Camera2D { target: cam.target, zoom: cam.zoom, offset: cam.offset, rotation: cam.rotation, render_target: None, viewport: cam.viewport };
             set_camera(&direct);

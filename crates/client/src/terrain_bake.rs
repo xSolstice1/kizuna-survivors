@@ -83,6 +83,8 @@ uniform vec4 Hex;
 // A south rock face is FACE units tall (2 sim cells); its foot shadow SHADOW more.
 const float FACE = 32.0;
 const float SHADOW = 16.0;
+// Edges facing any other way are walled for one sim cell on their higher side.
+const float RIM = 16.0;
 
 float sm(float t) { t = clamp(t, 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
 vec4 M(vec2 d) { return texture2D(Texture, uv + d * MaskScale); }
@@ -154,38 +156,60 @@ void main() {
     float tl = dot(trail, vec3(0.3, 0.59, 0.11)) / max(dot(texture2D(TrailTex, vec2(0.5)).rgb, vec3(0.3, 0.59, 0.11)), 0.05);
     float r = 1.0 - sm((rd - 1.45 + (wob - 0.5) * 0.9 + (tl - 1.0) * 0.35) / 0.55);
 
-    // Ground: each level its own texture and light (hollows dim and cool, plateaus bright).
+    // Ground: each level its own texture and light. One rule in every world: low ground is
+    // darker and cooler, high ground brighter, so levels read at a glance.
     vec3 c = vec3(0.0);
-    if (lo > 0.0) { c += hexTex(LowTex, tw, Hex.x) * lo * vec3(0.82, 0.88, 0.98); }
+    if (lo > 0.0) { c += hexTex(LowTex, tw, Hex.x) * lo * vec3(0.72, 0.78, 0.90); }
     if (mid > 0.0) { c += hexTex(GroundTex, tw, Hex.y) * mid; }
-    if (hi > 0.0) { c += hexTex(HighTex, tw, Hex.z) * hi * vec3(1.06, 1.05, 1.02); }
+    if (hi > 0.0) { c += hexTex(HighTex, tw, Hex.z) * hi * vec3(1.12, 1.10, 1.05); }
     c *= 0.9 + 0.2 * pr;
-    // Plateaus catch light towards their edges; hollows darken near the walls around them.
-    c *= 1.0 + 0.12 * hi * (1.0 - sm(sh / 24.0));
-    float occl = max((1.0 - sm(-sl / 24.0)) * step(sl, 0.0), (1.0 - sm(-sh / 24.0)) * step(sh, 0.0));
-    c *= 1.0 - 0.35 * occl * (1.0 - 0.6 * r);
+    c *= 1.0 + 0.10 * hi * (1.0 - sm(sh / 24.0));
     // A soft dark fringe where the road meets the ground.
     c *= 1.0 - 0.18 * sm(1.0 - abs(r - 0.5) * 2.0);
     c = mix(c, trail * (0.92 + 0.16 * pr), r);
 
-    // Rims: a dark band on the high side of edges that don't face south, a lip of light on
-    // the top of south faces.
+    // Walls, the same everywhere: rock is wall, ground is open, stairs lead between levels.
+    // An edge whose drop faces south shows its rock face below it (the faces loop). Any other
+    // edge is walled on its higher side for one sim cell (RIM units): drawn as a rocky rim
+    // with a lit lip at the drop and a dark crevice where the open ground begins. Roads cross
+    // them as stairs. The lower side gets contact shade at the wall's foot.
+    vec3 rockCap = texture2D(CliffTex, w / 64.0 + vec2(0.0, 0.3)).rgb;
     for (int i = 0; i < 2; i++) {
         float s = i == 0 ? sl : sh;
         vec2 gr = i == 0 ? gl : gh;
-        float south = sm((-normalize(gr + 1e-6).y - 0.35) / 0.4);
-        float band = (1.0 - sm(s / 4.0)) * step(0.0, s) * (1.0 - r);
-        c *= 1.0 - band * (0.4 * (1.0 - south));
-        c *= 1.0 + band * 0.22 * south * (1.0 - sm(s / 2.0));
-        // Edges facing the moon catch its light.
-        float lit = sm((dot(-normalize(gr + 1e-6), MOON) - 0.2) / 0.5);
-        c *= 1.0 + band * 0.25 * lit;
+        vec2 g = normalize(gr + 1e-6);
+        float south = sm((-g.y - 0.35) / 0.4);
+        float lit = sm((dot(-g, MOON) - 0.2) / 0.5);
+        float open = 1.0 - r;
+        // The rim band: 0 < s < RIM on the higher side (a little ragged, like rock).
+        float edge = RIM + (wob - 0.5) * 3.0;
+        float band = step(0.0, s) * (1.0 - sm((s - edge + 1.0) / 2.0)) * (1.0 - south);
+        if (band > 0.0) {
+            vec3 cap = mix(c, rockCap * (0.9 + 0.2 * pr), 0.55) * (1.0 + 0.18 * lit);
+            // Bevel: bright lip at the drop, a dark crevice line at the inner edge.
+            cap *= 1.0 + 0.45 * (1.0 - sm(s / 2.5));
+            cap *= 1.0 - 0.45 * sm((s - edge + 3.5) / 2.0) * (1.0 - sm((s - edge + 0.5) / 1.5));
+            // Stairs where a road crosses the rim: treads with dark risers, across the slope.
+            float st = fract(s / 4.0);
+            vec3 stone = mix(trail, rockCap, 0.35);
+            vec3 stairs = stone * (0.75 + 0.25 * sm(s / RIM)) * (1.0 - 0.5 * sm((st - 0.68) / 0.1));
+            stairs *= 1.0 + 0.35 * (1.0 - sm(st / 0.1));
+            // Curbs along the stairs' sides.
+            stairs *= 1.0 - 0.35 * (1.0 - sm(abs(r - 0.55) / 0.2));
+            c = mix(c, mix(cap, stairs, r), band);
+        }
+        // Contact shade on the lower side, crisp at the wall's foot, then broad.
+        float below = step(s, 0.0);
+        float ao = below * ((1.0 - sm(-s / 7.0)) * 0.40 + (1.0 - sm(-s / 26.0)) * 0.14);
+        c *= 1.0 - ao * (1.0 - 0.6 * r) * (1.0 - south);
+        // South edges: a lit lip along the top of the face.
+        float lipS = step(0.0, s) * (1.0 - sm(s / 2.5)) * south * open;
+        c *= 1.0 + lipS * (0.35 + 0.15 * lit);
     }
 
     // Rock faces below edges with higher ground to the north: the higher edge first, the
-    // nearer (lower) edge drawn over it. Where a road crosses a face it becomes a ramp: the
-    // road surface carried down the slope, shaded darker towards the foot, with the rock
-    // face rising beside it.
+    // nearer (lower) edge drawn over it. Where a road crosses a face it becomes stairs: treads
+    // and risers carried down the slope, darker towards the foot, the rock face beside them.
     float onRoad = sm((r - 0.3) / 0.45);
     float faced = 0.0;
     for (int i = 0; i < 2; i++) {
@@ -196,13 +220,19 @@ void main() {
         if (d < 0.0) { continue; }
         if (d < FACE) {
             float v = d / FACE;
-            vec3 rock = texture2D(CliffTex, vec2(w.x / 64.0, v * 0.98 + 0.01)).rgb * (1.05 - 0.3 * v);
-            rock *= 1.0 - 0.35 * sm((v - 0.8) / 0.2);
-            vec3 ramp = trail * (1.0 - 0.28 * v);
-            c = mix(rock, ramp, onRoad);
+            vec3 rock = texture2D(CliffTex, vec2(w.x / 64.0, v * 0.98 + 0.01)).rgb * (1.0 - 0.32 * v);
+            rock *= 1.0 - 0.45 * sm((v - 0.8) / 0.2);
+            rock *= 1.0 + 0.3 * (1.0 - sm(v / 0.07));
+            float st = fract(v * 7.0);
+            vec3 stairs = mix(trail, rock, 0.3) * (0.98 - 0.3 * v) * (1.0 - 0.5 * sm((st - 0.62) / 0.12));
+            stairs *= 1.0 + 0.35 * (1.0 - sm(st / 0.1));
+            stairs *= 1.0 - 0.35 * (1.0 - sm(abs(r - 0.55) / 0.2));
+            c = mix(rock, stairs, onRoad);
             faced = 1.0;
         } else if (faced < 0.5) {
-            c *= 1.0 - 0.45 * (1.0 - sm((d - FACE) / SHADOW)) * (1.0 - r);
+            // The face's foot: a crisp contact line, then its shadow.
+            float k = (d - FACE) / SHADOW;
+            c *= 1.0 - (0.5 * (1.0 - sm(k / 0.12)) + 0.35 * (1.0 - sm(k))) * (1.0 - r);
         }
     }
     // Higher ground casts a shadow away from the moon: a pixel is shaded when the ground

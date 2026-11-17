@@ -1,4 +1,5 @@
-//! Stage art: tiled ground, scattered props with glows, weather and a vignette.
+//! Stage art: tiled ground, scattered props with glows, weather and foreground branches (the
+//! vignette is the lens's, `post.rs`).
 //! The prologue (Neon Shotengai) has its own tiles; each campaign world has four ground
 //! tiles and four props (A tall light, B medium, C wide, D small) in `art/src/wN/`.
 //! The prop layout lives in `sim::stage` (it is also used for collision).
@@ -21,7 +22,6 @@ pub struct StageArt {
     baker: std::cell::RefCell<Option<crate::terrain_bake::Baker>>,
     /// Each campaign world's main terrain texture, for the map-select cards.
     cards: Vec<Texture2D>,
-    vignette: Texture2D,
     /// Soft white radial falloff, tinted per light.
     glow: Texture2D,
     /// Black with a clear centre: the downpour's limited sight.
@@ -163,14 +163,10 @@ impl StageArt {
                 sprites::art("w5/prop_d"),
             ]
         ];
-        let vignette = radial(128, [8, 4, 18], |d| {
-            let v = (d - 0.45).clamp(0.0, 1.0);
-            v * v * 0.78
-        });
         let glow = radial(64, [255, 255, 255], |d| (1.0 - d).max(0.0).powi(2));
         let dark = radial(128, [2, 3, 8], |d| ((d - 0.22) / 0.4).clamp(0.0, 1.0) * 0.86);
         let cards = (1..=5).map(|w| crate::terrain_bake::ground_texture(&format!("w{w}/terrain/ground_a"), 1.0)).collect();
-        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, vignette, glow, dark, grass: std::cell::RefCell::new(None), branches: crate::foliage::Branches::load() }
+        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, glow, dark, grass: std::cell::RefCell::new(None), branches: crate::foliage::Branches::load() }
     }
 
     fn get(&self, name: &str) -> &Texture2D {
@@ -343,15 +339,6 @@ impl StageArt {
         if let Some((_, Some(grass))) = g.as_ref() {
             grass.draw(stage, view, hero, time);
         }
-    }
-
-    /// Screen-space vignette, drawn after the world and before the UI, with the world's
-    /// foreground branches just inside it.
-    pub fn draw_vignette(&self) {
-        let d = DrawTextureParams { dest_size: Some(vec2(screen_width(), screen_height())), ..Default::default() };
-        draw_texture_ex(&self.vignette, 0.0, 0.0, WHITE, d.clone());
-        // A second, fainter pass: deeper corners, the eye drawn to the middle.
-        draw_texture_ex(&self.vignette, 0.0, 0.0, Color::new(1.0, 1.0, 1.0, 0.25), d);
     }
 
     /// The world's foreground branches (screen space), `cam` the camera's world position.

@@ -259,6 +259,9 @@ pub struct Profile {
     pub music_volume: f32,
     pub sfx_volume: f32,
     pub auto_special_off: bool,
+    /// Graphics quality: 0 auto (the default: starts high, steps down if frames run slow),
+    /// 1 low, 2 medium, 3 high.
+    pub graphics: u8,
     /// First-run tutorial: one bit per tip already shown (see the client's `tutorial::Step`).
     pub tips: u32,
 }
@@ -312,6 +315,7 @@ impl Default for Profile {
             music_volume: 0.6,
             sfx_volume: 0.8,
             auto_special_off: false,
+            graphics: 0,
             tips: 0,
         }
     }
@@ -682,7 +686,7 @@ impl Profile {
         s += &format!("awakenings={}\n", join(&self.awakenings_found));
         s += &format!("passives={}\n", join(&self.passives_found));
         s += &format!("shrines={}\n", join(&self.shrines_found));
-        s += &format!("music_volume={}\nsfx_volume={}\nauto_special_off={}\n", self.music_volume, self.sfx_volume, self.auto_special_off as u8);
+        s += &format!("music_volume={}\nsfx_volume={}\nauto_special_off={}\ngraphics={}\n", self.music_volume, self.sfx_volume, self.auto_special_off as u8, self.graphics);
         s += &format!("tips={}\n", self.tips);
         s += &format!(
             "wins={}\ndeaths={}\ndawn_outs={}\nbest_kills={}\ntime_played={}\nsen_earned={}\nchests={}\nshrines_taken={}\nawakened_total={}\nspecials={}\n",
@@ -797,6 +801,7 @@ impl Profile {
                     }
                 }
                 "auto_special_off" => p.auto_special_off = v == "1",
+                "graphics" => p.graphics = v.parse::<u8>().unwrap_or(0).min(3),
                 "tips" => {
                     has_tips = true;
                     p.tips = v.parse().unwrap_or(0);
