@@ -1895,7 +1895,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let tint = if blink { Color::new(lit.r, lit.g, lit.b, 0.35) } else { lit };
     let t = time as f32;
     if fox {
-        draw_fox_aura_and_tails(world, t);
+        // Nine-Tails: real tails behind him, the sweeping hits as foxfire lashes (crate::forms).
+        let strikes: Vec<(Vec2, Vec2)> = world.fox_tails().iter().map(|(a, b)| (vec2(a.x, a.y), vec2(b.x, b.y))).collect();
+        crate::forms::draw_fox(vec2(p.x, p.y - 2.0), if pl.facing.x < 0.0 { -1.0 } else { 1.0 }, &strikes, time, &a.vfx);
     }
     if hannya {
         draw_hannya_aura(world, t);
@@ -2525,32 +2527,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
 }
 
 /// Ninefold Foxfire: golden aura and nine lashing foxfire tails behind the player.
-fn draw_fox_aura_and_tails(world: &World, t: f32) {
-    let p = world.player.pos;
-    let c = vec2(p.x, p.y - 6.0);
-    let pulse = 0.5 + 0.5 * (t * 6.0).sin();
-    let ar = sim::content::FOX_AURA_RADIUS;
-    vfx_kit(|v| {
-        v.additive(|| {
-            v.draw("glow", c, ar * 2.6, 0.0, Color::new(1.0, 0.5, 0.1, 0.12 + 0.06 * pulse));
-            v.draw("ring", c, ar * 2.25, t * 0.5, Color::new(1.0, 0.8, 0.35, 0.55));
-        });
-        // Each tail a golden foxfire tail rooted at Riku, lashing side to side (painted, not
-        // added, so nine overlapping tails stay golden instead of burning white).
-        for (k, (root, tip)) in world.fox_tails().iter().enumerate() {
-            let (r0, t0) = (vec2(root.x, root.y), vec2(tip.x, tip.y));
-            let d = t0 - r0;
-            let sway = (t * 6.0 + k as f32 * 1.3).sin() * 0.22;
-            v.draw_wh("foxtail", r0 + d * 0.55, vec2(d.length() * 0.55, d.length() * 1.1), d.y.atan2(d.x) + std::f32::consts::FRAC_PI_2 + sway, Color::new(1.0, 0.7, 0.3, 0.85));
-        }
-        v.additive(|| {
-            for (k, (_, tip)) in world.fox_tails().iter().enumerate() {
-                v.draw("flame", vec2(tip.x, tip.y), 12.0, (t * 6.0 + k as f32).sin() * 0.2, Color::new(1.0, 0.75, 0.4, 0.45));
-            }
-        });
-    });
-}
-
 /// Golden spirit motes around Riku: a few in base form, a storm while transformed.
 fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
     let n = if fox { 28 } else { 6 };
