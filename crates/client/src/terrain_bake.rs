@@ -176,13 +176,15 @@ void main() {
     if (Relief > 0.0) {
         float e = 1.5 / 1024.0;
         vec3 l3 = vec3(0.299, 0.587, 0.114);
+        // Three plain reads of the main level's texture (no hex blend: relief only needs
+        // the local slope, and it's cheap).
         float h0; float hx; float hy;
         if (mid >= lo && mid >= hi) {
-            h0 = dot(hexTex(GroundTex, tw, Hex.y), l3); hx = dot(hexTex(GroundTex, tw + vec2(e, 0.0), Hex.y), l3); hy = dot(hexTex(GroundTex, tw + vec2(0.0, e), Hex.y), l3);
+            h0 = dot(texture2D(GroundTex, tw).rgb, l3); hx = dot(texture2D(GroundTex, tw + vec2(e, 0.0)).rgb, l3); hy = dot(texture2D(GroundTex, tw + vec2(0.0, e)).rgb, l3);
         } else if (hi > lo) {
-            h0 = dot(hexTex(HighTex, tw, Hex.z), l3); hx = dot(hexTex(HighTex, tw + vec2(e, 0.0), Hex.z), l3); hy = dot(hexTex(HighTex, tw + vec2(0.0, e), Hex.z), l3);
+            h0 = dot(texture2D(HighTex, tw).rgb, l3); hx = dot(texture2D(HighTex, tw + vec2(e, 0.0)).rgb, l3); hy = dot(texture2D(HighTex, tw + vec2(0.0, e)).rgb, l3);
         } else {
-            h0 = dot(hexTex(LowTex, tw, Hex.x), l3); hx = dot(hexTex(LowTex, tw + vec2(e, 0.0), Hex.x), l3); hy = dot(hexTex(LowTex, tw + vec2(0.0, e), Hex.x), l3);
+            h0 = dot(texture2D(LowTex, tw).rgb, l3); hx = dot(texture2D(LowTex, tw + vec2(e, 0.0)).rgb, l3); hy = dot(texture2D(LowTex, tw + vec2(0.0, e)).rgb, l3);
         }
         vec3 n = normalize(vec3(-(hx - h0) * 7.0, -(hy - h0) * 7.0, 1.0));
         vec3 L = normalize(vec3(MOON * 0.75, 0.66));
