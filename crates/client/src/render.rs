@@ -638,7 +638,7 @@ pub struct Fx {
     scorches: Vec<(Vec2, f32, f32)>,
 }
 
-const MAX_NUMBERS: usize = 40;
+const MAX_NUMBERS: usize = 26;
 const MAX_PARTICLES: usize = 360;
 
 impl Fx {
@@ -688,8 +688,21 @@ impl Fx {
                 break;
             }
             let a = k as f32 / n as f32 * std::f32::consts::TAU + rand::gen_range(-0.3, 0.3);
-            let speed = rand::gen_range(30.0, 90.0);
-            self.particles.push(Particle { pos, vel: vec2(a.cos(), a.sin()) * speed, age: 0.0, life: rand::gen_range(0.25, 0.45), color });
+            let speed = rand::gen_range(40.0, 140.0);
+            self.particles.push(Particle { pos, vel: vec2(a.cos(), a.sin()) * speed, age: 0.0, life: rand::gen_range(0.22, 0.42), color });
+        }
+    }
+
+    /// A hit's sparks: a few fast, short-lived streaks flying off away from the player.
+    fn sparks(&mut self, pos: Vec2, from: Vec2, color: Color) {
+        let away = (pos - from).normalize_or(vec2(1.0, 0.0));
+        let base = away.y.atan2(away.x);
+        for _ in 0..3 {
+            if self.particles.len() >= MAX_PARTICLES {
+                break;
+            }
+            let a = base + rand::gen_range(-0.9, 0.9);
+            self.particles.push(Particle { pos, vel: vec2(a.cos(), a.sin()) * rand::gen_range(110.0, 190.0), age: 0.0, life: rand::gen_range(0.1, 0.18), color });
         }
     }
 
@@ -707,8 +720,21 @@ impl Fx {
         for ev in events {
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
-                // show, ordinary hits one in six.
-                Event::Hit { pos, amount, crit, elem, mult } if self.show_numbers && (crit || amount >= 150.0 || { self.number_tick = self.number_tick.wrapping_add(1); self.number_tick % 6 == 0 }) => {
+                // show, ordinary hits one in six (one in fourteen once the screen is busy).
+                // Each shown hit also throws a few sparks.
+                Event::Hit { pos, amount, crit, elem, mult } if self.show_numbers && (crit || amount >= 150.0 || {
+                    self.number_tick = self.number_tick.wrapping_add(1);
+                    self.number_tick % if self.numbers.len() > 14 { 14 } else { 6 } == 0
+                }) => {
+                    let spark = match elem {
+                        Some(e) => {
+                            let c = crate::ui::element_color(e);
+                            Color::new(0.6 + 0.4 * c.r, 0.6 + 0.4 * c.g, 0.6 + 0.4 * c.b, 1.0)
+                        }
+                        None if crit => Color::new(1.0, 0.85, 0.4, 1.0),
+                        None => Color::new(1.0, 0.95, 0.85, 1.0),
+                    };
+                    self.sparks(vec2(pos.x, pos.y), vec2(player.x, player.y), spark);
                     if self.numbers.len() >= MAX_NUMBERS {
                         self.numbers.remove(0);
                     }
@@ -1869,7 +1895,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let tint = if blink { Color::new(lit.r, lit.g, lit.b, 0.35) } else { lit };
     let t = time as f32;
     if fox {
-        draw_fox_aura_and_tails(world, t);
+        // Nine-Tails: real tails behind him, the sweeping hits as foxfire lashes (crate::forms).
+        let strikes: Vec<(Vec2, Vec2)> = world.fox_tails().iter().map(|(a, b)| (vec2(a.x, a.y), vec2(b.x, b.y))).collect();
+        crate::forms::draw_fox(vec2(p.x, p.y - 2.0), if pl.facing.x < 0.0 { -1.0 } else { 1.0 }, &strikes, time, &a.vfx);
     }
     if hannya {
         draw_hannya_aura(world, t);
@@ -2268,9 +2296,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     }
     sprites.flush();
+    // An additive budget: the more glows on screen, the fainter each soft halo (the bright
+    // cores keep most of theirs), so a screen full of attacks stays readable instead of
+    // adding up to white.
+    let dens = 1.0 / (1.0 + glows.len() as f32 / 260.0).sqrt();
     vfx.additive(|| {
         for (n, c, wh, rot, tint) in &glows {
-            vfx.draw_wh(n, *c, *wh, *rot, *tint);
+            let k = if *n == "glow" { dens } else { dens.sqrt() };
+            vfx.draw_wh(n, *c, *wh, *rot, Color::new(tint.r, tint.g, tint.b, tint.a * k));
         }
     });
     for (n, c, wh, rot, flip, tint) in &solids {
@@ -2365,18 +2398,27 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     draw_hazards(world, time as f32, false);
     draw_mask(world, time as f32);
     // Enemy fire: fireballs, or each world's danmaku bullets (teardrops along their flight).
+    // Enemy bullets must read at a glance, a curtain of hundreds included: each gets a dark
+    // rim against the ground (normal blend), then a coloured body, a small hot core and only a
+    // faint glow, the glow thinning as the curtain thickens (so it never adds up to white).
+    let shots_in: Vec<&sim::world::Shot> = world.shots.iter().filter(|s| near(&view, s.pos.x, s.pos.y, 12.0)).collect();
+    let thin = 1.0 / (1.0 + shots_in.len() as f32 / 90.0).sqrt();
+    for s in shots_in.iter().filter(|s| s.style != 0) {
+        let r = sim::content::SHOT_RADIUS;
+        a.vfx.draw("bullet", vec2(s.pos.x, s.pos.y), r * 2.3, 0.0, Color::new(0.05, 0.02, 0.08, 0.75));
+    }
     a.vfx.additive(|| {
-        for s in &world.shots {
+        for s in &shots_in {
             let r = sim::content::SHOT_RADIUS;
             let c = vec2(s.pos.x, s.pos.y);
             let flick = 0.85 + 0.15 * (time as f32 * 20.0 + s.pos.x).sin();
             if s.style == 0 {
-                a.vfx.draw("fireball", c, r * 4.4 * flick, time as f32 * 3.0 + s.pos.x, WHITE);
+                a.vfx.draw("fireball", c, r * 4.4 * flick, time as f32 * 3.0 + s.pos.x, Color::new(1.0, 1.0, 1.0, 0.5 + 0.5 * thin));
             } else {
                 let bc = crate::stage::bullet_color(s.style);
-                a.vfx.draw("glow", c, r * 4.0, 0.0, Color::new(bc.r, bc.g, bc.b, 0.45 * flick));
-                a.vfx.draw_along("danmaku", c - vec2(s.vel.x, s.vel.y).normalize_or_zero() * r * 0.6, vec2(r * 4.2, r * 2.4), vec2(s.vel.x, s.vel.y), 0.0, Color::new(bc.r * 0.6 + 0.4, bc.g * 0.6 + 0.4, bc.b * 0.6 + 0.4, 1.0));
-                a.vfx.draw("bullet", c, r * 1.4, 0.0, Color::new(1.0, 0.97, 0.95, 1.0));
+                a.vfx.draw("glow", c, r * 2.8, 0.0, Color::new(bc.r, bc.g, bc.b, 0.3 * flick * thin));
+                a.vfx.draw_along("danmaku", c - vec2(s.vel.x, s.vel.y).normalize_or_zero() * r * 0.5, vec2(r * 3.4, r * 2.0), vec2(s.vel.x, s.vel.y), 0.0, Color::new(bc.r, bc.g, bc.b, 0.95));
+                a.vfx.draw("bullet", c, r * 0.9, 0.0, Color::new(1.0, 0.97, 0.95, 0.9));
             }
         }
         // Purifying Barrier: a hexagon shield bubble bursting outward.
@@ -2388,12 +2430,21 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     });
 
-    // Particles: glowing embers that shrink as they fade.
+    // Particles: hot sparks stretched along their flight (motion blur), a white-hot head,
+    // shrinking and cooling as they fade.
     a.vfx.additive(|| {
         for pt in fx.particles.iter().filter(|pt| near(&view, pt.pos.x, pt.pos.y, 4.0)) {
             let k = 1.0 - pt.age / pt.life;
             let c = Color::new(pt.color.r, pt.color.g, pt.color.b, k);
-            a.vfx.draw("ember", vec2(pt.pos.x, pt.pos.y), 3.0 + 5.0 * k, 0.0, c);
+            let p = vec2(pt.pos.x, pt.pos.y);
+            let speed = pt.vel.length();
+            if speed > 20.0 {
+                let len = 3.0 + speed * 0.07;
+                a.vfx.draw_wh("streak", p - pt.vel / speed * len * 0.35, vec2(len, 1.6 + 2.0 * k), pt.vel.y.atan2(pt.vel.x), c);
+                a.vfx.draw("glow", p, 2.5 + 2.0 * k, 0.0, Color::new(1.0, 1.0, 0.95, 0.8 * k));
+            } else {
+                a.vfx.draw("ember", p, 3.0 + 4.0 * k, 0.0, c);
+            }
         }
     });
     draw_drops(world, a, fx, &view, time);
@@ -2476,32 +2527,6 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
 }
 
 /// Ninefold Foxfire: golden aura and nine lashing foxfire tails behind the player.
-fn draw_fox_aura_and_tails(world: &World, t: f32) {
-    let p = world.player.pos;
-    let c = vec2(p.x, p.y - 6.0);
-    let pulse = 0.5 + 0.5 * (t * 6.0).sin();
-    let ar = sim::content::FOX_AURA_RADIUS;
-    vfx_kit(|v| {
-        v.additive(|| {
-            v.draw("glow", c, ar * 2.6, 0.0, Color::new(1.0, 0.5, 0.1, 0.12 + 0.06 * pulse));
-            v.draw("ring", c, ar * 2.25, t * 0.5, Color::new(1.0, 0.8, 0.35, 0.55));
-        });
-        // Each tail a golden foxfire tail rooted at Riku, lashing side to side (painted, not
-        // added, so nine overlapping tails stay golden instead of burning white).
-        for (k, (root, tip)) in world.fox_tails().iter().enumerate() {
-            let (r0, t0) = (vec2(root.x, root.y), vec2(tip.x, tip.y));
-            let d = t0 - r0;
-            let sway = (t * 6.0 + k as f32 * 1.3).sin() * 0.22;
-            v.draw_wh("foxtail", r0 + d * 0.55, vec2(d.length() * 0.55, d.length() * 1.1), d.y.atan2(d.x) + std::f32::consts::FRAC_PI_2 + sway, Color::new(1.0, 0.7, 0.3, 0.85));
-        }
-        v.additive(|| {
-            for (k, (_, tip)) in world.fox_tails().iter().enumerate() {
-                v.draw("flame", vec2(tip.x, tip.y), 12.0, (t * 6.0 + k as f32).sin() * 0.2, Color::new(1.0, 0.75, 0.4, 0.45));
-            }
-        });
-    });
-}
-
 /// Golden spirit motes around Riku: a few in base form, a storm while transformed.
 fn draw_spirit_motes(p: sim::Vec2, t: f32, fox: bool) {
     let n = if fox { 28 } else { 6 };
@@ -2592,21 +2617,10 @@ fn draw_hannya_aura(world: &World, t: f32) {
     let c = vec2(p.x, p.y - 6.0);
     let pulse = 0.5 + 0.5 * (t * 7.0).sin();
     let r = sim::content::HANNYA_AURA_RADIUS;
+    let _ = pulse;
     vfx_kit(|v| {
-        v.draw("glow", c, r * 2.8, 0.0, Color::new(0.15, 0.0, 0.03, 0.5));
-        v.additive(|| {
-            v.draw("glow", c, r * 2.4, 0.0, Color::new(0.7, 0.0, 0.1, 0.3 + 0.15 * pulse));
-            v.draw("ring", c, r * 2.2 * (0.95 + 0.05 * pulse), 0.0, Color::new(1.0, 0.2, 0.25, 0.7));
-            // Crimson flames rising around him.
-            for k in 0..7 {
-                let kf = k as f32;
-                let ph = (t * 1.4 + kf * 0.31).fract();
-                let an = kf * 2.39;
-                let rr = 10.0 + (k % 4) as f32 * 9.0;
-                let q = vec2(p.x + an.cos() * rr, p.y - 4.0 + an.sin() * rr * 0.5 - ph * 30.0);
-                v.draw("hellfire", q, 26.0 * (1.0 - ph * 0.5), 0.0, Color::new(1.0, 0.4, 0.4, 0.8 * (1.0 - ph)));
-            }
-        });
+        // The demon unbound: scorched ground, the mask looming, crimson flame (crate::forms).
+        crate::forms::draw_hannya(c, r, t as f64, v);
         // Hannya's Wrath charging: a ring of dread collapsing inward, the mask burning above.
         if world.player.form <= sim::content::HANNYA_FINALE_CHARGE {
             let k = 1.0 - world.player.form / sim::content::HANNYA_FINALE_CHARGE;
@@ -2699,12 +2713,18 @@ fn draw_spine_burst(c: Vec2, r: f32, k: f32) {
 
 /// Toya's crimson tendrils (base form) and the great centipede tail (Rampage).
 fn draw_tendrils_and_tail(world: &World, t: f32, mukade: bool) {
-    use std::f32::consts::{FRAC_PI_2, PI};
+    use std::f32::consts::FRAC_PI_2;
     let p = world.player.pos;
     let root = vec2(p.x, p.y - 8.0);
     let back = if world.player.facing.x < 0.0 { 1.0 } else { -1.0 };
     let (n, len, width) = if mukade { (6, 38.0, 14.0) } else { (4, 24.0, 10.0) };
     vfx_kit(|v| {
+        if mukade {
+            // The great centipede: an armoured, physical body (crate::forms).
+            v.additive(|| v.draw("glow", vec2(p.x, p.y - 20.0), 110.0, 0.0, Color::new(0.6, 0.0, 0.08, 0.18 + 0.06 * (t * 6.0).sin())));
+            crate::forms::draw_mukade(root, back, t as f64, v, v.tex("centipede_head"));
+            return;
+        }
         for k in 0..n {
             let kf = k as f32;
             let base_a = -FRAC_PI_2 + back * (0.5 + 0.35 * kf / n as f32) + if k % 2 == 0 { 0.25 } else { -0.25 };
@@ -2712,28 +2732,6 @@ fn draw_tendrils_and_tail(world: &World, t: f32, mukade: bool) {
             let a = base_a + sway + back * 0.4;
             let tip = root + vec2(a.cos(), a.sin()) * len;
             v.draw_wh("tendril", (root + tip) * 0.5, vec2(width, len * 1.1), a + FRAC_PI_2, WHITE);
-        }
-        if mukade {
-            // The great centipede tail: armoured segments arcing over his back, head at the tip.
-            let segs = 12;
-            let pts: Vec<Vec2> = (0..segs)
-                .map(|s| {
-                    let u = s as f32 / (segs - 1) as f32;
-                    let ang = PI * (0.15 + 0.85 * u);
-                    let wave = (t * 4.0 - u * 6.0).sin() * 4.0;
-                    vec2(root.x + back * (ang.cos() * -34.0 - 6.0) + back * wave * 0.3, root.y - ang.sin() * 46.0 + u * 10.0 + wave * 0.5)
-                })
-                .collect();
-            v.additive(|| v.draw("glow", vec2(p.x, p.y - 20.0), 130.0, 0.0, Color::new(0.7, 0.0, 0.1, 0.25 + 0.1 * (t * 6.0).sin())));
-            for s in (0..segs).rev() {
-                let u = s as f32 / (segs - 1) as f32;
-                let next = if s + 1 < segs { pts[s + 1] } else { pts[s] + (pts[s] - pts[s - 1]) };
-                let d = next - pts[s];
-                let size = 20.0 * (1.0 - u * 0.45);
-                let (name, sz) = if s == segs - 1 { ("centipede_head", size * 1.3) } else { ("segment", size) };
-                let pulse = ((t * 6.0 - u * 8.0).sin() * 0.5 + 0.5).powi(3);
-                v.draw_wh(name, pts[s], vec2(sz, sz), d.y.atan2(d.x) + FRAC_PI_2, Color::new(1.0, 0.85 + 0.15 * pulse, 0.85 + 0.15 * pulse, 1.0));
-            }
         }
     });
 }
@@ -2929,19 +2927,17 @@ fn draw_domain(world: &World, t: f32) {
     vfx_kit(|v| {
         // Darken everything (a very large rect around the player), then the night sky inside.
         draw_rectangle(p.x - 2000.0, p.y - 2000.0, 4000.0, 4000.0, Color::new(0.0, 0.0, 0.04, 0.45 * open));
-        v.draw("glow", c, r * 2.6, 0.0, Color::new(0.01, 0.02, 0.1, 0.9));
-        v.draw("glow", c, r * 1.8, 0.0, Color::new(0.01, 0.02, 0.1, 0.6));
+        crate::forms::draw_sky(c, r, t as f64, open);
         v.additive(|| {
-            v.draw("glow", c, r * 2.2, 0.0, Color::new(0.15, 0.2, 0.6, 0.15));
-            for k in 0..70 {
+            // The great stars of its constellations.
+            for k in 0..14 {
                 let a = k as f32 * 2.399;
-                let d = r * ((k as f32 * 0.618).fract()).sqrt();
-                let tw = 0.5 + 0.5 * (t * 3.0 + k as f32).sin();
-                let size = if k % 9 == 0 { 14.0 } else { 7.0 };
-                v.draw(if k % 9 == 0 { "star" } else { "sparkle" }, c + vec2(a.cos(), a.sin()) * d, size * (0.6 + 0.4 * tw), t + k as f32, Color::new(0.85, 0.92, 1.0, 0.4 + 0.6 * tw));
+                let d = r * ((k as f32 * 0.618).fract()).sqrt() * 0.9;
+                let tw = 0.5 + 0.5 * (t * 2.0 + k as f32).sin();
+                v.draw("star", c + vec2(a.cos(), a.sin()) * d, 10.0 * (0.7 + 0.3 * tw), t * 0.3 + k as f32, Color::new(0.85, 0.92, 1.0, 0.5 + 0.4 * tw));
             }
-            v.draw("circle", c, r * 1.9, t * 0.15, Color::new(0.5, 0.7, 1.0, 0.22));
-            v.draw("ring", c, r * 2.25, 0.0, Color::new(0.75, 0.9, 1.0, 0.9));
+            v.draw("circle", c, r * 1.9, t * 0.1, Color::new(0.5, 0.7, 1.0, 0.12));
+            v.draw("ring", c, r * 2.22, 0.0, Color::new(0.7, 0.85, 1.0, 0.5));
         });
         // Finale: the void sphere gathering above Kuon.
         if left <= sim::content::DOMAIN_FINALE_CHARGE {
@@ -2989,20 +2985,24 @@ fn draw_divine(world: &World, t: f32) {
     let r = 90.0 * open;
     let c = vec2(p.x, p.y + 2.0);
     vfx_kit(|v| {
+        // A seal of gold on the ground, turning; a halo behind her head; light from above.
+        v.draw_wh("glow", c, vec2(r * 2.2, r * 1.1), 0.0, Color::new(0.1, 0.06, 0.02, 0.25));
         v.additive(|| {
-            v.draw("glow", c, r * 2.4, 0.0, Color::new(1.0, 0.85, 0.6, 0.2));
-            v.draw_wh("circle", c, vec2(r * 2.1, r * 1.05), t * 0.6, Color::new(1.0, 0.75, 0.6, 0.6));
-            v.draw_wh("sigil", c, vec2(r * 1.6, r * 0.8), -t * 0.4, Color::new(1.0, 0.9, 0.6, 0.55));
-            v.draw_wh("pillar", vec2(p.x, p.y - 70.0), vec2(46.0, 160.0), 0.0, Color::new(1.0, 0.9, 0.65, 0.35 * open));
+            v.draw_wh("circle", c, vec2(r * 2.0, r), t * 0.3, Color::new(1.0, 0.75, 0.6, 0.26));
+            v.draw_wh("sigil", c, vec2(r * 1.5, r * 0.75), -t * 0.2, Color::new(1.0, 0.88, 0.6, 0.3));
+            v.draw_wh("pillar", vec2(p.x, p.y - 70.0), vec2(36.0, 160.0), 0.0, Color::new(1.0, 0.9, 0.7, 0.08 * open));
+            v.draw("ring", vec2(p.x, p.y - 27.0), 22.0 + 1.5 * (t * 2.0).sin(), 0.0, Color::new(1.0, 0.85, 0.5, 0.55 * open));
+            v.draw("glow", vec2(p.x, p.y - 27.0), 26.0, 0.0, Color::new(1.0, 0.85, 0.55, 0.16 * open));
         });
+        crate::forms::draw_silk(vec2(p.x, p.y), t as f64, open);
         // Great moon orbs circling her.
-        for k in 0..4 {
-            let a = t * 1.4 + k as f32 * std::f32::consts::FRAC_PI_2;
-            draw_moon_orb(vec2(p.x + a.cos() * 52.0, p.y - 10.0 + a.sin() * 30.0), 11.0, t * 5.0 + k as f32);
+        for k in 0..3 {
+            let a = t * 1.4 + k as f32 * std::f32::consts::TAU / 3.0;
+            draw_moon_orb(vec2(p.x + a.cos() * 52.0, p.y - 10.0 + a.sin() * 30.0), 9.0, t * 5.0 + k as f32);
         }
         // Floating ofuda.
-        for k in 0..12 {
-            let a = -t * 0.9 + k as f32 * std::f32::consts::TAU / 12.0;
+        for k in 0..8 {
+            let a = -t * 0.9 + k as f32 * std::f32::consts::TAU / 8.0;
             let rr = 30.0 + (k % 3) as f32 * 9.0;
             let q = vec2(p.x + a.cos() * rr, p.y - 12.0 + a.sin() * rr * 0.6 + (t * 3.0 + k as f32).sin() * 3.0);
             v.draw("ofuda", q, 12.0, (t * 2.0 + k as f32).sin() * 0.3, WHITE);
@@ -3012,8 +3012,8 @@ fn draw_divine(world: &World, t: f32) {
             let k = 1.0 - left / sim::content::DIVINE_FINALE_CHARGE;
             let fr = world.reach_cap(sim::content::DIVINE_FINALE_RADIUS) * (0.2 + 0.8 * k);
             v.additive(|| {
-                v.draw("glow", c, fr * 2.4, 0.0, Color::new(1.0, 0.85, 0.6, 0.15 + 0.2 * k));
-                v.draw("sigil", c, fr * 2.1, t, Color::new(1.0, 0.6, 0.6, 0.5 + 0.5 * k));
+                v.draw("glow", c, fr * 2.4, 0.0, Color::new(1.0, 0.85, 0.6, 0.06 + 0.1 * k));
+                v.draw_wh("sigil", c, vec2(fr * 2.1, fr * 1.05), t * 0.5, Color::new(1.0, 0.7, 0.6, 0.3 + 0.35 * k));
             });
         }
     });

@@ -1,6 +1,6 @@
 # Kizuna Survivors
 
-**An anime-styled pixel-art survivors-like ("bullet heaven") for the browser.**
+**An anime-styled survivors-like ("bullet heaven") for the browser.**
 Heroes pulled out of many different stories fight their way through five original worlds,
 one night at a time — thousands of Otherworlders on screen, big transforming specials, and an
 endless chase for better gear.
@@ -36,21 +36,22 @@ element effect: burn, soak, chain, stagger, knockback, slow, mark or drain.
 | | |
 |---|---|
 | ![Hidden Shrine Valley](docs/screenshots/run_shrine_valley.png) | ![Ember Leaf Frontier](docs/screenshots/run_ember_leaf.png) |
-| **Hidden Shrine Valley** — danmaku spirits, bullet curtains and Mitsuhime of the Veiled Moon | **Ember Leaf Frontier** — a ninja war, explosive tags and the Shogun of the Burning Leaf |
+| **Hidden Shrine Valley** (Ren): danmaku spirits, bullet curtains and Mitsuhime of the Veiled Moon | **Ember Leaf Frontier** (Riku, Nine-Tails): a ninja war, explosive tags and the Shogun of the Burning Leaf |
 | ![Pale Citadel of Souls](docs/screenshots/run_pale_citadel.png) | ![Rainward 13](docs/screenshots/run_rainward.png) |
-| **Pale Citadel of Souls** — spirit pressure, the Hollow Monarch and the Seraph of the Pale Throne | **Rainward 13** — a drowned ward in the rain, lightning and the Crimson Rain Lord |
+| **Pale Citadel of Souls** (Kuon): spirit pressure, the Hollow Monarch and the Seraph of the Pale Throne | **Rainward 13** (Shun, Hannya Unbound): a drowned ward in the rain, lightning and the Crimson Rain Lord |
 | ![Shatterline Crossing](docs/screenshots/run_shatterline.png) | ![Map select](docs/screenshots/map_select.png) |
-| **Shatterline Crossing** — hostile domains and the Shatterline Sovereign | **Map select** — clears, best times, boss progress and relics per world |
+| **Shatterline Crossing** (Toya, Hundred-Leg Rampage): hostile domains and the Shatterline Sovereign | **Map select**: clears, best times, boss progress and relics per world |
 
 ### Heroes
 
-Each hero is an original character with their own sprite, signature weapon, innate passive,
-weapon pool and a transforming **special move**:
+Each hero is an original character, rigged and animated (walk, idle, attacks), with a signature
+weapon, innate passive, weapon pool and a transforming **special move**. Every piece of gear they
+wear shows on them, on any hero, with no per-hero work.
 
 - **Ren Amane** — shrine maiden. Ofuda, yin-yang orbs, purification seals; *Divine Purification*. Affinity: Light.
-- **Riku Kazamine** — fox-masked shinobi. Foxfire orbs, familiars, shuriken, clones; *Ninefold Foxfire*. Affinity: Fire.
-- **Shun Yamikiri** — spirit ferryman with a great cleaver; *Hannya Unbound*. Affinity: Darkness.
-- **Toya Hyakuashi** — cursed youth with crimson tendrils; *Hundred-Leg Rampage*. Affinity: Earth.
+- **Riku Kazamine** — fox-masked shinobi. Foxfire orbs, familiars, shuriken, clones; *Ninefold Foxfire* (nine fox tails behind him, spirit tails lashing out). Affinity: Fire.
+- **Shun Yamikiri** — spirit ferryman with a great cleaver; *Hannya Unbound* (a demon mask looming behind him). Affinity: Darkness.
+- **Toya Hyakuashi** — cursed youth with crimson tendrils; *Hundred-Leg Rampage* (a great armoured centipede arcing over his back). Affinity: Earth.
 - **Kuon Hoshimi** — star-reading onmyōji who bends space; *Domain: Endless Firmament*. Affinity: Ice.
 
 A hero deals +10% with skills of their own element, and their special move deals it too.
@@ -104,6 +105,23 @@ More heroes are on the way. Heroes unlock by clearing worlds with a specific her
 
 ![Shrine Draw](docs/screenshots/shrine_draw.png)
 
+### Graphics
+
+- **A moonlit night in every world**: a light map with warm pools from lanterns, fire, spells
+  and pickups. Everything casts shadows, from the moon and from each lamp near it, and they
+  merge where they overlap. Characters are lit with volume: a rim of light on the side facing
+  the moon or the nearest lamp, shade on the far side.
+- **Readable maps**: every world is laid out as terraces, one per road crossing. Each has one
+  way up per side, a flight of stairs cut into the rock or a ramp, where its road comes in. Rock
+  is wall and ground is open, drawn from the very walls the game collides with.
+- **A camera lens**: bloom from real light, a colour grade per world, tilt-shift depth, heat
+  haze over fire, moonlight shafts, film grain. Plus swaying grass, drifting motes and mist,
+  rain on Rainward's wet streets, scorch marks, and enemies that burn away when they fall.
+- **Fights stay readable**: crisp enemy bullets with dark rims, sparks that streak, and a glow
+  budget so a screen full of attacks never washes out.
+- **Graphics setting** (Auto / Low / Medium / High). Auto starts high and steps down by itself
+  if the frame rate drops, so phones stay smooth.
+
 Also: a Shrine Shop of permanent upgrades, weapon **Awakenings**, a Collection, detailed Stats,
 floor power-ups, a data-driven minimap, and a fully synthesised soundtrack.
 
@@ -126,9 +144,12 @@ floor power-ups, a data-driven minimap, and a fully synthesised soundtrack.
   balance bot.
 - `crates/client` — rendering, UI kit (virtual 1280×720 layout, high-DPI text), touch controls,
   audio and screens.
-- **All art is generated as code**: pixel sprites are text `.px` files produced by the Python
-  scripts in `tools/` and parsed at build time. **All audio is synthesised** at startup — no audio
-  files ship.
+- **Art**: high-resolution 2D art made from our own designs with AI image models through
+  reproducible scripts (`tools/ai/`; see `docs/art-pipeline.md`). Heroes are cut-out rigs
+  animated in code, and worn gear is composed onto them at runtime. Lighting, shadows, terrain,
+  the transformations and the lens are shaders and geometry in code (`docs/lighting.md`,
+  `docs/graphics.md`). **All audio is synthesised** at startup; no audio files ship.
+- **Cloud saves** with sign-in (Supabase; `docs/cloud-saves.md`).
 
 ### Build and run
 
@@ -155,7 +176,11 @@ Requires a recent stable Rust toolchain with the `wasm32-unknown-unknown` target
 ```
 crates/sim      game simulation (campaign, enemies, gear, world, meta/save)
 crates/client   macroquad client (render, UI, menus, armory, audio, touch)
-art/src         pixel art as text (.px), generated by tools/*.py
+art/hd          high-resolution art (sprites, terrain, icons, gear)
+art/rig         rigged heroes (parts, poses, worn gear)
+art/src         the pixel-art layouts the HD art sits on (.px; sizes and hitboxes)
+tools/ai        art generation and processing scripts
+docs/           lighting, graphics, art pipeline and cloud saves
 assets/fonts    Nunito (SIL Open Font License)
 web/            index.html, JS plugins (save storage, fullscreen), PWA manifest, service worker and icons
 scripts/        build scripts

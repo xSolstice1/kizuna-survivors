@@ -8,8 +8,16 @@ pub struct Sprite {
     pub w: u16,
     pub h: u16,
     pub rgba: Vec<u8>,
-    /// Already at `UP`x resolution (a high-resolution PNG): no upscaling.
+    /// Already at `UP`x resolution or more (a high-resolution PNG): no upscaling.
     pub hd: bool,
+    /// Texels per art pixel for an HD sprite: `UP`, or twice that for art redrawn at double
+    /// density (it draws the same size, `nat`, just sharper).
+    pub up: u8,
+}
+
+thread_local! {
+    /// Textures drawn at other than `UP` texels per art pixel: their density over `UP`.
+    static DENSITY: std::cell::RefCell<std::collections::HashMap<macroquad::miniquad::TextureId, f32>> = std::cell::RefCell::new(Default::default());
 }
 
 mod index {
@@ -24,13 +32,15 @@ pub fn px(path: &str) -> &'static str {
 fn decode_hd(path: &str) -> Option<Sprite> {
     let bytes = index::png(path)?;
     let img = Image::from_file_with_format(bytes, Some(ImageFormat::Png)).ok()?;
-    // Must be exactly UP x the pixel art, so layouts and hitboxes stay the same.
+    // Must be exactly UP x (or 2 UP x, double density) the pixel art, so layouts and hitboxes
+    // stay the same.
     let base = parse(px(path));
-    if img.width as u32 != base.w as u32 * UP as u32 || img.height as u32 != base.h as u32 * UP as u32 {
-        macroquad::logging::warn!("hd art {path}: {}x{} is not {}x the pixel art; using pixels", img.width, img.height, UP);
+    let k = [UP as u32, UP as u32 * 2].into_iter().find(|&k| img.width as u32 == base.w as u32 * k && img.height as u32 == base.h as u32 * k);
+    let Some(k) = k else {
+        macroquad::logging::warn!("hd art {path}: {}x{} is not {}x (or {}x) the pixel art; using pixels", img.width, img.height, UP, UP * 2.0);
         return None;
-    }
-    Some(Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true })
+    };
+    Some(Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true, up: k as u8 })
 }
 
 /// A sprite by art path: the HD redraw when there is one, else the pixel source.
@@ -43,7 +53,7 @@ pub fn sprite(path: &str) -> Sprite {
 pub fn free_art(path: &str) -> Texture2D {
     let bytes = index::png(path).unwrap_or_else(|| panic!("missing art/hd/{path}.png"));
     let img = Image::from_file_with_format(bytes, Some(ImageFormat::Png)).expect("bad png");
-    Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true }.texture()
+    Sprite { w: img.width, h: img.height, rgba: img.bytes, hd: true, up: UP as u8 }.texture()
 }
 
 /// A rigged hero's art/rig/<hero>/game.json, if it has a rig.
@@ -110,7 +120,7 @@ pub fn silhouette(s: &Sprite) -> Texture2D {
             p[3] = 0;
         }
     });
-    Sprite { w: s.w, h: s.h, rgba, hd: s.hd }.texture()
+    Sprite { w: s.w, h: s.h, rgba, hd: s.hd, up: s.up }.texture()
 }
 
 /// A seamless ground tile by art path.
@@ -171,7 +181,7 @@ pub fn parse(src: &str) -> Sprite {
             rgba[o + 3] = 255;
         }
     }
-    Sprite { w: w as u16, h: h as u16, rgba, hd: false }
+    Sprite { w: w as u16, h: h as u16, rgba, hd: false, up: 1 }
 }
 
 /// Every sprite texture is stored at this multiple of its art size, smoothed (Scale2x twice)
@@ -181,7 +191,8 @@ pub const UP: f32 = 4.0;
 
 /// A texture's size in art pixels.
 pub fn nat(t: &Texture2D) -> Vec2 {
-    vec2(t.width(), t.height()) / UP
+    let k = DENSITY.with(|d| d.borrow().get(&t.raw_miniquad_id()).copied()).unwrap_or(1.0);
+    vec2(t.width(), t.height()) / (UP * k)
 }
 
 /// Scale2x (EPX): doubles a pixel image, rounding diagonal edges. `wrap` treats the
@@ -306,6 +317,11 @@ impl Sprite {
         let (w, h, px) = self.upscaled(false);
         let t = Texture2D::from_rgba8(w, h, &px);
         t.set_filter(FilterMode::Linear);
+        if self.hd && self.up as f32 != UP {
+            DENSITY.with(|d| d.borrow_mut().insert(t.raw_miniquad_id(), self.up as f32 / UP));
+            // Mipmaps keep the extra detail clean when drawn smaller.
+            mipmap(&t);
+        }
         t
     }
 
@@ -320,8 +336,8 @@ impl Sprite {
     /// Copy with the pixels in columns `xs` and rows `ys` shifted up by one
     /// (used to lift a leg for walk frames). The bottom row of the region clears.
     pub fn lift(&self, xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> Sprite {
-        // Ranges are in art pixels; HD sprites shift by one art pixel (UP texels).
-        let k = if self.hd { UP as usize } else { 1 };
+        // Ranges are in art pixels; HD sprites shift by one art pixel (`up` texels).
+        let k = if self.hd { self.up as usize } else { 1 };
         let (xs, ys) = (xs.start * k..xs.end * k, ys.start * k..ys.end * k);
         let w = self.w as usize;
         let mut rgba = self.rgba.clone();
@@ -337,7 +353,7 @@ impl Sprite {
                 }
             }
         }
-        Sprite { w: self.w, h: self.h, rgba, hd: self.hd }
+        Sprite { w: self.w, h: self.h, rgba, hd: self.hd, up: self.up }
     }
 }
 

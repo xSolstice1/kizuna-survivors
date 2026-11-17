@@ -204,7 +204,7 @@ pub mod shape {
 
     /// A moon orb of radius `r`: halo, then the orb turning by `rot`.
     pub fn moon_orb(c: Vec2, r: f32, rot: f32) {
-        spr("glow", c, Vec2::splat(r * 4.0), 0.0, Color::new(1.0, 0.9, 0.6, 0.45));
+        spr("glow", c, Vec2::splat(r * 3.4), 0.0, Color::new(1.0, 0.9, 0.6, 0.3));
         spr("moon", c, Vec2::splat(r * 2.4), rot * 0.3, WHITE);
     }
 

@@ -11,6 +11,7 @@ mod chest_ui;
 mod cloud;
 mod devmenu;
 mod foliage;
+mod forms;
 mod herolight;
 mod kit;
 mod light;
@@ -184,6 +185,12 @@ async fn main() {
     let mut perf_parts = [0.0f64; 5];
     if let Some(st) = perf {
         profile.stage = st;
+        // Dev: `KZ_HERO=riku` plays as that hero (by name, any case).
+        if let Ok(h) = std::env::var("KZ_HERO") {
+            if let Some(h) = sim::content::ALL_HEROES.iter().find(|x| format!("{x:?}").eq_ignore_ascii_case(&h)) {
+                profile.selected = *h;
+            }
+        }
         if std::env::var("KZ_PERF_CALM").is_ok() {
             // An ordinary early night, a minute in (for looking at the art, not timing).
             world = new_world(None, &profile);
@@ -199,6 +206,14 @@ async fn main() {
                 }
                 if world.shrine_offer.is_some() {
                     world.choose_shrine(None);
+                }
+            }
+            // Dev: `KZ_FORM=1` fires the hero's special (their transformation) and lets it settle.
+            if std::env::var("KZ_FORM").is_ok() {
+                world.player.special = 1.0;
+                world.step(sim::world::Input { special: true, ..Default::default() });
+                for _ in 0..40 {
+                    world.step(Default::default());
                 }
             }
             // Dev: `KZ_PERF_AT=x,y` stands the hero there (to look at a cliff or a ramp).

@@ -98,8 +98,14 @@ pub const FOX_DURATION: f32 = 8.0;
 pub const FOX_BLAST_RADIUS: f32 = 230.0;
 pub const FOX_BLAST_DAMAGE: f32 = 110.0;
 pub const FOX_TAILS: usize = 9;
-pub const FOX_TAIL_REACH: (f32, f32) = (55.0, 125.0);
-pub const FOX_TAIL_DAMAGE: f32 = 18.0;
+/// A tail's reach: resting (short, fanned behind Riku) and fully lashed out.
+pub const FOX_TAIL_REACH: (f32, f32) = (55.0, 130.0);
+/// Lashes per tail per second; the tails take turns (about three are out at once).
+pub const FOX_LASH_RATE: f32 = 0.55;
+/// How long of each lash cycle a tail is out (the rest it lies behind him).
+pub const FOX_LASH_SHARE: f32 = 0.34;
+/// Per tick along each tail (fewer tails reach far at once than before, so each hits harder).
+pub const FOX_TAIL_DAMAGE: f32 = 30.0;
 /// Seconds between tail / aura damage ticks.
 pub const FOX_TICK: f32 = 0.25;
 pub const FOX_AURA_RADIUS: f32 = 64.0;
