@@ -2927,19 +2927,17 @@ fn draw_domain(world: &World, t: f32) {
     vfx_kit(|v| {
         // Darken everything (a very large rect around the player), then the night sky inside.
         draw_rectangle(p.x - 2000.0, p.y - 2000.0, 4000.0, 4000.0, Color::new(0.0, 0.0, 0.04, 0.45 * open));
-        v.draw("glow", c, r * 2.6, 0.0, Color::new(0.01, 0.02, 0.1, 0.9));
-        v.draw("glow", c, r * 1.8, 0.0, Color::new(0.01, 0.02, 0.1, 0.6));
+        crate::forms::draw_sky(c, r, t as f64, open);
         v.additive(|| {
-            v.draw("glow", c, r * 2.2, 0.0, Color::new(0.15, 0.2, 0.6, 0.15));
-            for k in 0..70 {
+            // The great stars of its constellations.
+            for k in 0..14 {
                 let a = k as f32 * 2.399;
-                let d = r * ((k as f32 * 0.618).fract()).sqrt();
-                let tw = 0.5 + 0.5 * (t * 3.0 + k as f32).sin();
-                let size = if k % 9 == 0 { 14.0 } else { 7.0 };
-                v.draw(if k % 9 == 0 { "star" } else { "sparkle" }, c + vec2(a.cos(), a.sin()) * d, size * (0.6 + 0.4 * tw), t + k as f32, Color::new(0.85, 0.92, 1.0, 0.4 + 0.6 * tw));
+                let d = r * ((k as f32 * 0.618).fract()).sqrt() * 0.9;
+                let tw = 0.5 + 0.5 * (t * 2.0 + k as f32).sin();
+                v.draw("star", c + vec2(a.cos(), a.sin()) * d, 10.0 * (0.7 + 0.3 * tw), t * 0.3 + k as f32, Color::new(0.85, 0.92, 1.0, 0.5 + 0.4 * tw));
             }
-            v.draw("circle", c, r * 1.9, t * 0.15, Color::new(0.5, 0.7, 1.0, 0.22));
-            v.draw("ring", c, r * 2.25, 0.0, Color::new(0.75, 0.9, 1.0, 0.9));
+            v.draw("circle", c, r * 1.9, t * 0.1, Color::new(0.5, 0.7, 1.0, 0.12));
+            v.draw("ring", c, r * 2.22, 0.0, Color::new(0.7, 0.85, 1.0, 0.5));
         });
         // Finale: the void sphere gathering above Kuon.
         if left <= sim::content::DOMAIN_FINALE_CHARGE {
@@ -2987,20 +2985,24 @@ fn draw_divine(world: &World, t: f32) {
     let r = 90.0 * open;
     let c = vec2(p.x, p.y + 2.0);
     vfx_kit(|v| {
+        // A seal of gold on the ground, turning; a halo behind her head; light from above.
+        v.draw_wh("glow", c, vec2(r * 2.2, r * 1.1), 0.0, Color::new(0.1, 0.06, 0.02, 0.25));
         v.additive(|| {
-            v.draw("glow", c, r * 2.4, 0.0, Color::new(1.0, 0.85, 0.6, 0.2));
-            v.draw_wh("circle", c, vec2(r * 2.1, r * 1.05), t * 0.6, Color::new(1.0, 0.75, 0.6, 0.6));
-            v.draw_wh("sigil", c, vec2(r * 1.6, r * 0.8), -t * 0.4, Color::new(1.0, 0.9, 0.6, 0.55));
-            v.draw_wh("pillar", vec2(p.x, p.y - 70.0), vec2(46.0, 160.0), 0.0, Color::new(1.0, 0.9, 0.65, 0.35 * open));
+            v.draw_wh("circle", c, vec2(r * 2.0, r), t * 0.3, Color::new(1.0, 0.75, 0.6, 0.26));
+            v.draw_wh("sigil", c, vec2(r * 1.5, r * 0.75), -t * 0.2, Color::new(1.0, 0.88, 0.6, 0.3));
+            v.draw_wh("pillar", vec2(p.x, p.y - 70.0), vec2(36.0, 160.0), 0.0, Color::new(1.0, 0.9, 0.7, 0.08 * open));
+            v.draw("ring", vec2(p.x, p.y - 27.0), 22.0 + 1.5 * (t * 2.0).sin(), 0.0, Color::new(1.0, 0.85, 0.5, 0.55 * open));
+            v.draw("glow", vec2(p.x, p.y - 27.0), 26.0, 0.0, Color::new(1.0, 0.85, 0.55, 0.16 * open));
         });
+        crate::forms::draw_silk(vec2(p.x, p.y), t as f64, open);
         // Great moon orbs circling her.
-        for k in 0..4 {
-            let a = t * 1.4 + k as f32 * std::f32::consts::FRAC_PI_2;
-            draw_moon_orb(vec2(p.x + a.cos() * 52.0, p.y - 10.0 + a.sin() * 30.0), 11.0, t * 5.0 + k as f32);
+        for k in 0..3 {
+            let a = t * 1.4 + k as f32 * std::f32::consts::TAU / 3.0;
+            draw_moon_orb(vec2(p.x + a.cos() * 52.0, p.y - 10.0 + a.sin() * 30.0), 9.0, t * 5.0 + k as f32);
         }
         // Floating ofuda.
-        for k in 0..12 {
-            let a = -t * 0.9 + k as f32 * std::f32::consts::TAU / 12.0;
+        for k in 0..8 {
+            let a = -t * 0.9 + k as f32 * std::f32::consts::TAU / 8.0;
             let rr = 30.0 + (k % 3) as f32 * 9.0;
             let q = vec2(p.x + a.cos() * rr, p.y - 12.0 + a.sin() * rr * 0.6 + (t * 3.0 + k as f32).sin() * 3.0);
             v.draw("ofuda", q, 12.0, (t * 2.0 + k as f32).sin() * 0.3, WHITE);
@@ -3010,8 +3012,8 @@ fn draw_divine(world: &World, t: f32) {
             let k = 1.0 - left / sim::content::DIVINE_FINALE_CHARGE;
             let fr = world.reach_cap(sim::content::DIVINE_FINALE_RADIUS) * (0.2 + 0.8 * k);
             v.additive(|| {
-                v.draw("glow", c, fr * 2.4, 0.0, Color::new(1.0, 0.85, 0.6, 0.15 + 0.2 * k));
-                v.draw("sigil", c, fr * 2.1, t, Color::new(1.0, 0.6, 0.6, 0.5 + 0.5 * k));
+                v.draw("glow", c, fr * 2.4, 0.0, Color::new(1.0, 0.85, 0.6, 0.06 + 0.1 * k));
+                v.draw_wh("sigil", c, vec2(fr * 2.1, fr * 1.05), t * 0.5, Color::new(1.0, 0.7, 0.6, 0.3 + 0.35 * k));
             });
         }
     });
