@@ -78,12 +78,18 @@ void main() {
     float rim = clamp(out1, 0.0, 1.0) * sm(A(l * 0.35) * 1.4 - 0.2);
     // Core shadow: the far side.
     float dark = clamp(1.0 - 0.5 * (A(-l * 1.4) + A(-l * 2.8)), 0.0, 1.0);
+    // Key light across the figure: the half facing the light brighter, the far half darker
+    // (is the figure's edge near in that direction? a few units each way).
+    float nearLit = 1.0 - 0.5 * (A(l * 3.0) + A(l * 5.0));
+    float nearDark = 1.0 - 0.5 * (A(-l * 3.0) + A(-l * 5.0));
+    float side = clamp(nearLit - nearDark, -1.0, 1.0);
+    c *= 1.0 + 0.16 * side;
     // Volume: lit from above, darker towards the feet, occlusion right at them.
     float h = clamp((uv.y - Feet) / (1.0 - Feet) * 2.0, 0.0, 1.0);
-    c *= 0.84 + 0.22 * h;
+    c *= 0.8 + 0.28 * h;
     c *= 1.0 - 0.22 * (1.0 - sm(h / 0.12));
     c = mix(c, c * Shade.rgb, dark * Shade.a);
-    c += Rim.rgb * rim * Rim.a * 1.5 * (0.5 + 0.5 * dot(c, vec3(0.333)));
+    c += Rim.rgb * rim * Rim.a * 2.2 * (0.55 + 0.45 * dot(c, vec3(0.333)));
     // The world's grade.
     c = c * Gain + Lift * (1.0 - c);
     float g = dot(c, vec3(0.299, 0.587, 0.114));

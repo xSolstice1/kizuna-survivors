@@ -11,11 +11,14 @@ One rule: **rock is wall, ground is open, stairs lead between levels.**
   each chunk's mask (`sim::terrain::WallGrid`: the exact field the player collides with,
   `Terrain::wall_field`). The shader draws rock wherever it's positive, so what looks like a
   wall is one and nothing else is. Test: `drawn_walls_are_the_real_walls`.
-- A drop facing south shows its rock face. A drop facing any other way is walled on its high
-  side: a rocky rim, lit at the drop, outlined dark where open ground begins.
+- Platforms are raised ground: their surface runs to the edge, and the edge shows the
+  height. A drop facing south shows its rock face (the wall). Any other drop has a lit lip
+  and casts the platform's shadow on the lower ground; the sim's wall there is a thin lip
+  (`RIM`, 6 units), so the top is walkable right up to where it falls away.
+- Stairs are the sim's own ramp cells (`WallGrid::ramp`): lit treads, dark risers and stone
+  rails, across the slope.
 - On High the ground has relief: its texture is read as height and lit by the moon.
-- Roads crossing a level change are stone stairs with curbs. Low ground is darker and cooler,
-  high ground brighter. Every wall has contact shade at its foot.
+- Low ground is darker and cooler, high ground brighter.
 - To check a spot: `KZ_WALLS=1` dots the real walls red over the picture (native), and
   `KZ_PERF_AT=x,y` stands the hero there (`cargo run -p sim --example find_ramps` prints a ramp
   and a wall near each world's start).
@@ -41,7 +44,7 @@ moon (`litsprite.rs`).
 
 The hero is a rig of many parts, so it is first drawn whole into an off-screen image at
 screen resolution, then that image is lit (`herolight.rs`). That way the rim and shadow
-follow only the outer silhouette, never the seams between parts. It is lit from above,
+follow only the outer silhouette, never the seams between parts. It has a lit side and a shadow side across the whole figure, is lit from above,
 darker towards the feet, and takes the moon or the nearest lamp's softened colour
 (`Lights::rim_at`). It also gets the world's colour grade (`post::grade`), so it sits in the
 scene while staying sharp.

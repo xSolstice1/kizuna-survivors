@@ -360,7 +360,10 @@ impl Lights {
     /// How a character at `feet` is lit (crate::litsprite): by the moon, and when a lamp is
     /// near, warmly from the lamp's side, the rim taking its colour.
     pub fn rim_at(&self, feet: Vec2) -> crate::litsprite::Light {
-        let moon = crate::litsprite::MOON;
+        // The hero is the one thing the eye follows: the moon models them a little more firmly
+        // than the crowd.
+        let m0 = crate::litsprite::MOON;
+        let moon = crate::litsprite::Light { rim: Color { a: 0.36, ..m0.rim }, shade: Color { a: 0.48, ..m0.shade }, ..m0 };
         let best = self
             .lamps
             .iter()
@@ -380,8 +383,8 @@ impl Lights {
         let mix = |a: f32, b: f32| a + (b - a) * k;
         crate::litsprite::Light {
             dir: (moon.dir * (1.0 - k) + toward * k).normalize_or(moon.dir),
-            rim: Color::new(mix(moon.rim.r, lamp.r), mix(moon.rim.g, lamp.g), mix(moon.rim.b, lamp.b), mix(moon.rim.a, 0.5)),
-            shade: moon.shade,
+            rim: Color::new(mix(moon.rim.r, lamp.r), mix(moon.rim.g, lamp.g), mix(moon.rim.b, lamp.b), mix(moon.rim.a, 0.55)),
+            shade: Color { a: moon.shade.a * 1.1, ..moon.shade },
         }
     }
 

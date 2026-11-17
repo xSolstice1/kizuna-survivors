@@ -245,6 +245,11 @@ pub struct Terrain {
 
 /// Step (units) of the smooth walls' look-around samples.
 const FINE: f32 = 8.0;
+/// How far inside a platform's edge (one not facing south) the smooth wall reaches: a thin
+/// lip at the edge itself, so the platform's top is walkable right up to where it drops
+/// (drawn as raised ground with a lit edge, not as a wall). The cells (`flags`, for the
+/// crowd and the flow field) still wall the whole rim cell.
+const RIM: f32 = 6.0;
 
 /// The smooth walls' rule (`Terrain::wall_field`) at `p`, given whether its cell is open (a
 /// road or the start clearing) and the height field `h`: positive inside a cliff.
@@ -258,7 +263,7 @@ fn wall_field_with(p: Vec2, open: bool, h: impl Fn(Vec2) -> f32) -> f32 {
     const D: f32 = std::f32::consts::FRAC_1_SQRT_2;
     let around = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (-D, -D), (D, -D)]
         .iter()
-        .flat_map(|&(dx, dy)| (1..=(CELL / FINE) as i32).map(move |k| (dx * k as f32 * FINE, dy * k as f32 * FINE)))
+        .flat_map(|&(dx, dy)| [RIM * 0.5, RIM].map(move |k| (dx * k, dy * k)))
         .map(|(dx, dy)| h(Vec2::new(p.x + dx, p.y + dy)))
         .fold(f32::MAX, f32::min);
     [LOW_BELOW, HIGH_ABOVE].iter().map(|&t| (t - here).min(north - t).max((here - t).min(t - around))).fold(f32::MIN, f32::max)
@@ -272,6 +277,8 @@ pub struct WallGrid {
     n: i32,
     heights: Vec<f32>,
     open: Vec<bool>,
+    /// Road cells where the level changes: the stairs (the sim's RAMP flag).
+    ramps: Vec<bool>,
 }
 
 impl WallGrid {
@@ -289,7 +296,24 @@ impl WallGrid {
                 open.push(is_road(stage, x, y) || clear(x, y));
             }
         }
-        WallGrid { origin: (x0, y0), n, heights, open }
+        // Stairs: a road cell with any neighbour on another level (as `flags` marks RAMP).
+        let lv: Vec<u8> = heights.iter().map(|&h| level_of(h)).collect();
+        let mut ramps = vec![false; (n * n) as usize];
+        for j in 1..n - 1 {
+            for i in 1..n - 1 {
+                let me = lv[(j * n + i) as usize];
+                let road = is_road(stage, x0 + i, y0 + j);
+                ramps[(j * n + i) as usize] = road && (-1..=1).any(|dj| (-1..=1).any(|di| lv[((j + dj) * n + i + di) as usize] != me));
+            }
+        }
+        WallGrid { origin: (x0, y0), n, heights, open, ramps }
+    }
+
+    /// Whether `p` is on stairs (a road cell where the level changes).
+    pub fn ramp(&self, p: Vec2) -> bool {
+        let (cx, cy) = cell_of(p);
+        let (i, j) = ((cx - self.origin.0).clamp(0, self.n - 1), (cy - self.origin.1).clamp(0, self.n - 1));
+        self.ramps[(j * self.n + i) as usize]
     }
 
     /// The height field between cell centres (as `Terrain::height_at`).
@@ -446,6 +470,11 @@ impl Terrain {
 
     pub fn wall(&self, cx: i32, cy: i32) -> bool {
         self.cell(cx, cy) & WALL != 0
+    }
+
+    /// Whether `p` is inside the smooth walls (what the player collides with).
+    pub fn solid_at(&self, p: Vec2) -> bool {
+        self.on && self.wall_field(p) > 0.0
     }
 
     pub fn wall_at(&self, p: Vec2) -> bool {
@@ -692,6 +721,8 @@ mod tests {
                     let (a, b) = (t.wall_field(p), g.field(p));
                     assert!((a - b).abs() < 1e-5, "{st:?} at {p:?}: sim {a} drawn {b}");
                     walls += (a > 0.0) as u32;
+                    let (cx, cy) = cell_of(p);
+                    assert_eq!(g.ramp(p), t.cell(cx, cy) & RAMP != 0, "{st:?} stairs at {p:?}");
                 }
             }
             assert!(walls > 100, "{st:?} has walls to check");
@@ -768,7 +799,11 @@ mod tests {
             }
         }
         let (x, y) = found.expect("a cliff");
-        let inside = Vec2::new(x as f32 * CELL + 8.0, y as f32 * CELL + 8.0);
+        // A point inside the smooth wall in that cell (rims are thin: not every point is).
+        let inside = (0..64)
+            .map(|k| Vec2::new(x as f32 * CELL + (k % 8) as f32 * 2.0 + 1.0, y as f32 * CELL + (k / 8) as f32 * 2.0 + 1.0))
+            .find(|&p| t.wall_field(p) > 0.0)
+            .expect("smooth wall inside a wall cell");
         let out = t.resolve(inside, 6.0);
         assert!((out - inside).length() > 1.0);
         // Out means clear: no wall square within the radius.

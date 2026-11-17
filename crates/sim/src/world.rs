@@ -7886,12 +7886,13 @@ mod tests {
     fn player_cannot_walk_through_cliffs() {
         let mut w = World::new(WorldConfig { stage: StageId::ShrineValley, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
         w.weapons.clear();
-        // Walk straight in each direction for 6 s: never end up inside a cliff cell.
+        // Walk straight in each direction for 6 s: never end up inside a cliff (the smooth
+        // walls; a platform's rim cell is walkable up to the thin wall at its edge).
         for dir in [Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0), Vec2::new(0.7, 0.7)] {
             w.player.pos = Vec2::ZERO;
             for _ in 0..360 {
                 w.step(Input { move_dir: dir, ..Default::default() });
-                assert!(!w.terrain.wall_at(w.player.pos), "inside a cliff at {:?}", w.player.pos);
+                assert!(!w.terrain.solid_at(w.player.pos), "inside a cliff at {:?}", w.player.pos);
             }
         }
     }
