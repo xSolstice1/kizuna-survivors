@@ -2,8 +2,9 @@
 //!
 //! - **Nine-Tails** (Riku): nine tails of living flame that are the attack itself: each
 //!   follows its segment from the sim (`World::fox_tails`), resting long and fanned behind
-//!   him and whipping out in turn to strike, a long S-curve with whip lag, drawn through a
-//!   fire shader (white-hot core, orange body, red licking edges, streaks flowing to the tip).
+//!   him and whipping out in turn to strike, a long flowing S-curve with whip lag, painted as
+//!   the game's flames are (soft layers from an amber edge to a near-white heart, gentle
+//!   tongues, wisps at the tip, no outline).
 //! - **Hannya** (Shun) and **Mukade** (Toya): below.
 //!
 //! Ribbons (`ribbon`) and the fur material are general: any tail, tendril or body chain can
@@ -89,19 +90,16 @@ float vnoise(vec2 p) {
 void main() {
     float across = abs(uv.x * 2.0 - 1.0);
     float v = uv.y;
-    float n1 = vnoise(vec2(uv.x * 5.0, v * 4.0 - Time * 2.2));
-    float n2 = vnoise(vec2(uv.x * 13.0, v * 10.0 - Time * 4.0));
-    float n = n1 * 0.6 + n2 * 0.4;
-    // The silhouette licks and flickers, more towards the tip.
-    float edge = across + (n - 0.5) * (0.8 + 0.6 * v);
-    float body = 1.0 - smoothstep(0.55, 0.92, edge);
-    body *= 1.0 - smoothstep(0.8, 1.0, v + (n - 0.5) * 0.45);
-    // Tongues: the flame's own darker and brighter bands flowing to the tip.
-    float tongue = vnoise(vec2(uv.x * 3.0 + Time * 0.3, v * 6.0 - Time * 3.0));
-    float hot = 1.0 - smoothstep(0.0, 0.42, edge + v * 0.3);
-    vec3 c = mix(Base, Mid, smoothstep(0.1, 0.85, body) * (0.6 + 0.4 * tongue));
-    c = mix(c, Tip, hot * hot * 0.75);
-    c += Tip * pow(n2, 5.0) * 0.5 * body;
+    // Painted fire, as the game's flames are drawn: soft layered colour from an amber edge to
+    // a near-white heart, gentle tongues drifting to the tip (low frequency only: it flows,
+    // it doesn't jitter), the tip dissolving into wisps. No outline.
+    float w = vnoise(vec2(uv.x * 2.5, v * 3.0 - Time * 1.4)) * 0.65 + vnoise(vec2(uv.x * 5.0 + 3.0, v * 6.0 - Time * 2.2)) * 0.35;
+    float edge = across + (w - 0.5) * (0.35 + 0.5 * v);
+    float body = 1.0 - smoothstep(0.3, 0.95, edge);
+    body *= 1.0 - smoothstep(0.72, 1.0, v + (w - 0.5) * 0.35);
+    float depth = 1.0 - edge;
+    vec3 c = mix(Base, Mid, smoothstep(0.05, 0.45, depth));
+    c = mix(c, Tip, smoothstep(0.62, 0.95, depth) * (1.0 - 0.5 * v));
     gl_FragColor = vec4(c * color.rgb, body * color.a);
 }
 "#;
@@ -126,7 +124,7 @@ thread_local! {
     static STATE: RefCell<State> = const { RefCell::new(State { fur: None, glow: None, fire: None, fire_glow: None, failed: false, fox: None }) };
 }
 
-const POINTS: usize = 14;
+const POINTS: usize = 22;
 /// A tail's length and greatest width (world units).
 
 /// The fur material: painted, or (`light`) added as light.
@@ -238,7 +236,8 @@ pub fn draw_fox(_hips: Vec2, facing: f32, tails: &[(Vec2, Vec2)], time: f64, vfx
         let mut out = [a; POINTS];
         for (j, o) in out.iter_mut().enumerate() {
             let u = j as f32 / (POINTS - 1) as f32;
-            let wave = (t * 3.0 + k as f32 * 1.3 - u * 4.0).sin() * 0.06;
+            // A wave travelling down the tail: it flows.
+            let wave = (t * 2.4 + k as f32 * 1.3 - u * 5.0).sin() * 0.12 * u;
             let bend = s * ((u * std::f32::consts::PI).sin() * 0.3 - u * u * u * 0.22 + wave) * len * (1.0 - 0.7 * stretch);
             *o = a + d * u + side * bend;
         }
@@ -259,7 +258,7 @@ pub fn draw_fox(_hips: Vec2, facing: f32, tails: &[(Vec2, Vec2)], time: f64, vfx
             chain[0] = a;
             for j in 1..POINTS {
                 // Stiff at the root, loose at the tip: the tip trails, so a lash whips.
-                let stiff = 30.0 - 22.0 * j as f32 / POINTS as f32;
+                let stiff = 22.0 - 16.0 * j as f32 / POINTS as f32;
                 let cj = chain[j];
                 chain[j] = cj + (goal[j] - cj) * (1.0 - (-dt * stiff).exp());
             }
@@ -267,24 +266,24 @@ pub fn draw_fox(_hips: Vec2, facing: f32, tails: &[(Vec2, Vec2)], time: f64, vfx
         fox.tails.clone()
     });
     // Thin at the root, swelling thick, tapering to a point.
-    let width = |u: f32| 15.0 * (0.22 + 0.95 * (u.powf(0.75) * std::f32::consts::PI).sin().max(0.0)) * (1.0 - 0.4 * u);
+    let width = |u: f32| 17.0 * (0.25 + 0.95 * (u.powf(0.75) * std::f32::consts::PI).sin().max(0.0)) * (1.0 - 0.4 * u);
     let set = |m: &Material| {
         m.set_uniform("Time", t);
-        m.set_uniform("Base", vec3(0.62, 0.07, 0.02));
-        m.set_uniform("Mid", vec3(1.0, 0.4, 0.05));
-        m.set_uniform("Tip", vec3(1.0, 0.88, 0.55));
+        m.set_uniform("Base", vec3(0.92, 0.24, 0.04));
+        m.set_uniform("Mid", vec3(1.0, 0.5, 0.1));
+        m.set_uniform("Tip", vec3(1.0, 0.9, 0.62));
     };
     // The glow first (wide and soft, added), then the flames.
     gl_use_material(&light);
     set(&light);
     for chain in &chains {
-        draw_mesh(&ribbon(chain, |u| width(u) * 1.6, Color::new(1.0, 1.0, 1.0, 0.14)));
+        draw_mesh(&ribbon(chain, |u| width(u) * 1.8, Color::new(1.0, 0.55, 0.3, 0.12)));
     }
     gl_use_default_material();
     gl_use_material(&paint);
     set(&paint);
     for chain in &chains {
-        draw_mesh(&ribbon(chain, width, Color::new(1.0, 1.0, 1.0, 0.95)));
+        draw_mesh(&ribbon(chain, width, Color::new(1.0, 1.0, 1.0, 1.0)));
     }
     gl_use_default_material();
     // The tips burn brightest.
