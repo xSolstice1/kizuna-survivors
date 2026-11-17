@@ -3019,15 +3019,33 @@ impl World {
     }
 
     /// The nine tails as (root, tip) segments. Shared with the renderer so hits match visuals.
+    /// Riku's nine tails as segments (root, tip): what they hit with, and what is drawn. Each
+    /// rests short and fanned behind him, and in turn (staggered, about three out at once)
+    /// whips out to full reach, sweeping across an arc, and pulls back. The arcs turn over
+    /// time, so every direction is covered.
     pub fn fox_tails(&self) -> [(Vec2, Vec2); FOX_TAILS] {
+        use std::f32::consts::{FRAC_PI_2, PI, TAU};
         let t = self.time;
         let root = self.player.pos + Vec2::new(0.0, -6.0);
         let mut out = [(root, root); FOX_TAILS];
         for (k, seg) in out.iter_mut().enumerate() {
             let kf = k as f32;
-            let a = t * 0.7 + kf * std::f32::consts::TAU / FOX_TAILS as f32 + 0.35 * (t * 2.3 + kf * 1.7).sin();
-            let lash = 0.5 + 0.5 * (t * 5.0 + kf * 2.1).sin();
-            let reach = FOX_TAIL_REACH.0 + (FOX_TAIL_REACH.1 - FOX_TAIL_REACH.0) * lash;
+            let spread = (kf - (FOX_TAILS - 1) as f32 / 2.0) / ((FOX_TAILS - 1) as f32 / 2.0);
+            let rest = -FRAC_PI_2 + spread * 1.1;
+            // Staggered: tail k lashes at phase k * 4/9 of the cycle (neighbours not in a row).
+            let ph = (t * FOX_LASH_RATE + (kf * 4.0 / FOX_TAILS as f32).fract()).fract();
+            let (a, reach) = if ph < FOX_LASH_SHARE {
+                let u = ph / FOX_LASH_SHARE;
+                // Out and back (fast out, a beat at full stretch), sweeping across its arc.
+                let out_k = (u * PI).sin().powf(0.6);
+                let aim = kf * TAU / FOX_TAILS as f32 + t * 0.35;
+                let sweep = aim + (u - 0.5) * 1.4;
+                // From the rest angle to the sweep and back.
+                let ang = rest + wrap(sweep - rest) * out_k;
+                (ang, FOX_TAIL_REACH.0 + (FOX_TAIL_REACH.1 - FOX_TAIL_REACH.0) * out_k)
+            } else {
+                (rest + 0.12 * (t * 2.0 + kf * 1.3).sin(), FOX_TAIL_REACH.0)
+            };
             *seg = (root, root + Vec2::from_angle(a) * reach);
         }
         out
@@ -9080,4 +9098,9 @@ mod tests {
         let got = lives(&w);
         assert!(got.len() == 10 && got.iter().all(|l| (l - want).abs() < 1e-3), "cyclone: {got:?} vs {want}");
     }
+}
+
+/// An angle wrapped to -pi..pi.
+fn wrap(a: f32) -> f32 {
+    (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
