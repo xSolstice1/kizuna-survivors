@@ -638,7 +638,7 @@ pub struct Fx {
     scorches: Vec<(Vec2, f32, f32)>,
 }
 
-const MAX_NUMBERS: usize = 40;
+const MAX_NUMBERS: usize = 26;
 const MAX_PARTICLES: usize = 360;
 
 impl Fx {
@@ -688,8 +688,21 @@ impl Fx {
                 break;
             }
             let a = k as f32 / n as f32 * std::f32::consts::TAU + rand::gen_range(-0.3, 0.3);
-            let speed = rand::gen_range(30.0, 90.0);
-            self.particles.push(Particle { pos, vel: vec2(a.cos(), a.sin()) * speed, age: 0.0, life: rand::gen_range(0.25, 0.45), color });
+            let speed = rand::gen_range(40.0, 140.0);
+            self.particles.push(Particle { pos, vel: vec2(a.cos(), a.sin()) * speed, age: 0.0, life: rand::gen_range(0.22, 0.42), color });
+        }
+    }
+
+    /// A hit's sparks: a few fast, short-lived streaks flying off away from the player.
+    fn sparks(&mut self, pos: Vec2, from: Vec2, color: Color) {
+        let away = (pos - from).normalize_or(vec2(1.0, 0.0));
+        let base = away.y.atan2(away.x);
+        for _ in 0..3 {
+            if self.particles.len() >= MAX_PARTICLES {
+                break;
+            }
+            let a = base + rand::gen_range(-0.9, 0.9);
+            self.particles.push(Particle { pos, vel: vec2(a.cos(), a.sin()) * rand::gen_range(110.0, 190.0), age: 0.0, life: rand::gen_range(0.1, 0.18), color });
         }
     }
 
@@ -707,8 +720,21 @@ impl Fx {
         for ev in events {
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
-                // show, ordinary hits one in six.
-                Event::Hit { pos, amount, crit, elem, mult } if self.show_numbers && (crit || amount >= 150.0 || { self.number_tick = self.number_tick.wrapping_add(1); self.number_tick % 6 == 0 }) => {
+                // show, ordinary hits one in six (one in fourteen once the screen is busy).
+                // Each shown hit also throws a few sparks.
+                Event::Hit { pos, amount, crit, elem, mult } if self.show_numbers && (crit || amount >= 150.0 || {
+                    self.number_tick = self.number_tick.wrapping_add(1);
+                    self.number_tick % if self.numbers.len() > 14 { 14 } else { 6 } == 0
+                }) => {
+                    let spark = match elem {
+                        Some(e) => {
+                            let c = crate::ui::element_color(e);
+                            Color::new(0.6 + 0.4 * c.r, 0.6 + 0.4 * c.g, 0.6 + 0.4 * c.b, 1.0)
+                        }
+                        None if crit => Color::new(1.0, 0.85, 0.4, 1.0),
+                        None => Color::new(1.0, 0.95, 0.85, 1.0),
+                    };
+                    self.sparks(vec2(pos.x, pos.y), vec2(player.x, player.y), spark);
                     if self.numbers.len() >= MAX_NUMBERS {
                         self.numbers.remove(0);
                     }
@@ -2268,9 +2294,14 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     }
     sprites.flush();
+    // An additive budget: the more glows on screen, the fainter each soft halo (the bright
+    // cores keep most of theirs), so a screen full of attacks stays readable instead of
+    // adding up to white.
+    let dens = 1.0 / (1.0 + glows.len() as f32 / 260.0).sqrt();
     vfx.additive(|| {
         for (n, c, wh, rot, tint) in &glows {
-            vfx.draw_wh(n, *c, *wh, *rot, *tint);
+            let k = if *n == "glow" { dens } else { dens.sqrt() };
+            vfx.draw_wh(n, *c, *wh, *rot, Color::new(tint.r, tint.g, tint.b, tint.a * k));
         }
     });
     for (n, c, wh, rot, flip, tint) in &solids {
@@ -2365,18 +2396,27 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     draw_hazards(world, time as f32, false);
     draw_mask(world, time as f32);
     // Enemy fire: fireballs, or each world's danmaku bullets (teardrops along their flight).
+    // Enemy bullets must read at a glance, a curtain of hundreds included: each gets a dark
+    // rim against the ground (normal blend), then a coloured body, a small hot core and only a
+    // faint glow, the glow thinning as the curtain thickens (so it never adds up to white).
+    let shots_in: Vec<&sim::world::Shot> = world.shots.iter().filter(|s| near(&view, s.pos.x, s.pos.y, 12.0)).collect();
+    let thin = 1.0 / (1.0 + shots_in.len() as f32 / 90.0).sqrt();
+    for s in shots_in.iter().filter(|s| s.style != 0) {
+        let r = sim::content::SHOT_RADIUS;
+        a.vfx.draw("bullet", vec2(s.pos.x, s.pos.y), r * 2.3, 0.0, Color::new(0.05, 0.02, 0.08, 0.75));
+    }
     a.vfx.additive(|| {
-        for s in &world.shots {
+        for s in &shots_in {
             let r = sim::content::SHOT_RADIUS;
             let c = vec2(s.pos.x, s.pos.y);
             let flick = 0.85 + 0.15 * (time as f32 * 20.0 + s.pos.x).sin();
             if s.style == 0 {
-                a.vfx.draw("fireball", c, r * 4.4 * flick, time as f32 * 3.0 + s.pos.x, WHITE);
+                a.vfx.draw("fireball", c, r * 4.4 * flick, time as f32 * 3.0 + s.pos.x, Color::new(1.0, 1.0, 1.0, 0.5 + 0.5 * thin));
             } else {
                 let bc = crate::stage::bullet_color(s.style);
-                a.vfx.draw("glow", c, r * 4.0, 0.0, Color::new(bc.r, bc.g, bc.b, 0.45 * flick));
-                a.vfx.draw_along("danmaku", c - vec2(s.vel.x, s.vel.y).normalize_or_zero() * r * 0.6, vec2(r * 4.2, r * 2.4), vec2(s.vel.x, s.vel.y), 0.0, Color::new(bc.r * 0.6 + 0.4, bc.g * 0.6 + 0.4, bc.b * 0.6 + 0.4, 1.0));
-                a.vfx.draw("bullet", c, r * 1.4, 0.0, Color::new(1.0, 0.97, 0.95, 1.0));
+                a.vfx.draw("glow", c, r * 2.8, 0.0, Color::new(bc.r, bc.g, bc.b, 0.3 * flick * thin));
+                a.vfx.draw_along("danmaku", c - vec2(s.vel.x, s.vel.y).normalize_or_zero() * r * 0.5, vec2(r * 3.4, r * 2.0), vec2(s.vel.x, s.vel.y), 0.0, Color::new(bc.r, bc.g, bc.b, 0.95));
+                a.vfx.draw("bullet", c, r * 0.9, 0.0, Color::new(1.0, 0.97, 0.95, 0.9));
             }
         }
         // Purifying Barrier: a hexagon shield bubble bursting outward.
@@ -2388,12 +2428,21 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     });
 
-    // Particles: glowing embers that shrink as they fade.
+    // Particles: hot sparks stretched along their flight (motion blur), a white-hot head,
+    // shrinking and cooling as they fade.
     a.vfx.additive(|| {
         for pt in fx.particles.iter().filter(|pt| near(&view, pt.pos.x, pt.pos.y, 4.0)) {
             let k = 1.0 - pt.age / pt.life;
             let c = Color::new(pt.color.r, pt.color.g, pt.color.b, k);
-            a.vfx.draw("ember", vec2(pt.pos.x, pt.pos.y), 3.0 + 5.0 * k, 0.0, c);
+            let p = vec2(pt.pos.x, pt.pos.y);
+            let speed = pt.vel.length();
+            if speed > 20.0 {
+                let len = 3.0 + speed * 0.07;
+                a.vfx.draw_wh("streak", p - pt.vel / speed * len * 0.35, vec2(len, 1.6 + 2.0 * k), pt.vel.y.atan2(pt.vel.x), c);
+                a.vfx.draw("glow", p, 2.5 + 2.0 * k, 0.0, Color::new(1.0, 1.0, 0.95, 0.8 * k));
+            } else {
+                a.vfx.draw("ember", p, 3.0 + 4.0 * k, 0.0, c);
+            }
         }
     });
     draw_drops(world, a, fx, &view, time);

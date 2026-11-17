@@ -59,7 +59,7 @@ struct Look {
 }
 
 fn look(stage: StageId) -> Look {
-    let l = |lift: [f32; 3], gain: [f32; 3], saturation, contrast, bloom, vignette| Look { lift: Vec3::from(lift), gain: Vec3::from(gain), saturation, contrast, bloom, vignette, threshold: 0.70, shafts: Color::new(0.55, 0.66, 0.9, 0.07) };
+    let l = |lift: [f32; 3], gain: [f32; 3], saturation, contrast, bloom, vignette| Look { lift: Vec3::from(lift), gain: Vec3::from(gain), saturation, contrast, bloom, vignette, threshold: 0.84, shafts: Color::new(0.55, 0.66, 0.9, 0.07) };
     match stage {
         // Moonlit forest: cool blue-green shadows, warm lantern highlights.
         StageId::ShrineValley => l([0.010, 0.022, 0.040], [1.04, 1.01, 0.95], 1.08, 1.06, 0.55, 0.42),
@@ -68,7 +68,7 @@ fn look(stage: StageId) -> Look {
         // Burning wood: ember-warm throughout.
         StageId::EmberLeaf => Look { shafts: Color::new(1.0, 0.62, 0.38, 0.06), ..l([0.035, 0.012, 0.004], [1.06, 0.98, 0.88], 1.10, 1.07, 0.60, 0.45) },
         // Snow citadel: cold, clean, a little desaturated.
-        StageId::PaleCitadel => Look { threshold: 0.9, ..l([0.004, 0.014, 0.040], [0.97, 0.99, 1.03], 0.94, 1.05, 0.35, 0.36) },
+        StageId::PaleCitadel => Look { threshold: 0.95, ..l([0.004, 0.014, 0.040], [0.97, 0.99, 1.03], 0.94, 1.05, 0.35, 0.36) },
         // Rain city: teal shadows, sodium-orange lamps.
         StageId::Rainward => l([0.000, 0.022, 0.035], [1.04, 1.00, 0.94], 0.92, 1.08, 0.65, 0.48),
         // Shattered sky: violet.
@@ -134,7 +134,8 @@ void main() {
         + texture2D(Texture, uv + Texel * vec2(-1.0, 1.0)).rgb + texture2D(Texture, uv + Texel * vec2(1.0, 1.0)).rgb;
     s *= 0.25;
     float l = max(s.r, max(s.g, s.b));
-    gl_FragColor = vec4(s * sm((l - Threshold) / 0.35), 1.0) * color;
+    // A narrow knee: only real light (lanterns, spells, neon) blooms, not white things.
+    gl_FragColor = vec4(s * sm((l - Threshold) / 0.16), 1.0) * color;
 }
 "#;
 
