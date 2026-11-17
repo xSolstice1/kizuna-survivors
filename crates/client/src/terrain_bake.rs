@@ -79,6 +79,8 @@ uniform float Exposure;
 // Per texture (low, ground, high, trail): 1 hex-tiled, 0 plain repeat (regular grids of
 // tiles or slabs, whose joints must line up).
 uniform vec4 Hex;
+// Relief strength (0 off): the ground's texture read as height, lit by the moon.
+uniform float Relief;
 
 // A south rock face is FACE units tall (2 sim cells); its foot shadow SHADOW more.
 const float FACE = 32.0;
@@ -168,6 +170,24 @@ void main() {
     c *= 1.0 + 0.10 * hi * (1.0 - sm(sh / 24.0));
     // A soft dark fringe where the road meets the ground.
     c *= 1.0 - 0.18 * sm(1.0 - abs(r - 0.5) * 2.0);
+    // Relief: the main level's texture read as a height map (light = raised), lit by the
+    // moon from above and the upper left, so stones, roots and cobbles stand up from the
+    // ground instead of lying painted on it.
+    if (Relief > 0.0) {
+        float e = 1.5 / 1024.0;
+        vec3 l3 = vec3(0.299, 0.587, 0.114);
+        float h0; float hx; float hy;
+        if (mid >= lo && mid >= hi) {
+            h0 = dot(hexTex(GroundTex, tw, Hex.y), l3); hx = dot(hexTex(GroundTex, tw + vec2(e, 0.0), Hex.y), l3); hy = dot(hexTex(GroundTex, tw + vec2(0.0, e), Hex.y), l3);
+        } else if (hi > lo) {
+            h0 = dot(hexTex(HighTex, tw, Hex.z), l3); hx = dot(hexTex(HighTex, tw + vec2(e, 0.0), Hex.z), l3); hy = dot(hexTex(HighTex, tw + vec2(0.0, e), Hex.z), l3);
+        } else {
+            h0 = dot(hexTex(LowTex, tw, Hex.x), l3); hx = dot(hexTex(LowTex, tw + vec2(e, 0.0), Hex.x), l3); hy = dot(hexTex(LowTex, tw + vec2(0.0, e), Hex.x), l3);
+        }
+        vec3 n = normalize(vec3(-(hx - h0) * 7.0, -(hy - h0) * 7.0, 1.0));
+        vec3 L = normalize(vec3(MOON * 0.75, 0.66));
+        c *= 1.0 + (dot(n, L) - L.z) * 1.6 * Relief * (1.0 - r * 0.5);
+    }
     c = mix(c, trail * (0.92 + 0.16 * pr), r);
 
     // Walls exactly where the sim has them: rock is wall, ground is open, stairs lead between
@@ -331,7 +351,7 @@ impl Baker {
         let material = load_material(
             ShaderSource::Glsl { vertex: VERTEX, fragment: FRAGMENT },
             MaterialParams {
-                uniforms: vec![UniformDesc::new("MaskScale", UniformType::Float2), UniformDesc::new("Exposure", UniformType::Float1), UniformDesc::new("Hex", UniformType::Float4)],
+                uniforms: vec![UniformDesc::new("MaskScale", UniformType::Float2), UniformDesc::new("Exposure", UniformType::Float1), UniformDesc::new("Hex", UniformType::Float4), UniformDesc::new("Relief", UniformType::Float1)],
                 textures: SAMPLERS.iter().map(|s| s.to_string()).collect(),
                 pipeline_params: PipelineParams {
                     color_blend: Some(BlendState::new(Equation::Add, BlendFactor::Value(BlendValue::SourceAlpha), BlendFactor::OneMinusValue(BlendValue::SourceAlpha))),
@@ -373,6 +393,7 @@ impl Baker {
         let exposure = (0.17 / (0.3 * m[0] + 0.59 * m[1] + 0.11 * m[2]).max(0.01)).clamp(1.0, 1.6);
         if let Some(mat) = &material {
             mat.set_uniform("Exposure", exposure);
+            mat.set_uniform("Relief", if crate::post::quality() == crate::post::Quality::High { 1.0f32 } else { 0.0 });
         }
         let fill = Color::new(m[0] * exposure, m[1] * exposure, m[2] * exposure, 1.0);
         Baker { stage, material, _textures: textures, fill, chunks: HashMap::new() }

@@ -373,12 +373,14 @@ impl Lights {
         let Some((l, d, k)) = best else { return moon };
         // Towards the lamp, which shines from above it: a little upwards too.
         let toward = (d.normalize() + vec2(0.0, -0.35)).normalize();
+        // The lamp's hue, softened towards white: light grazing an edge, not paint.
         let m = l.color.r.max(l.color.g).max(l.color.b).max(1e-3);
-        let lamp = Color::new(l.color.r / m, l.color.g / m, l.color.b / m, 1.0);
+        let soft = |c: f32| 0.45 + 0.55 * c / m;
+        let lamp = Color::new(soft(l.color.r), soft(l.color.g), soft(l.color.b), 1.0);
         let mix = |a: f32, b: f32| a + (b - a) * k;
         crate::litsprite::Light {
             dir: (moon.dir * (1.0 - k) + toward * k).normalize_or(moon.dir),
-            rim: Color::new(mix(moon.rim.r, lamp.r), mix(moon.rim.g, lamp.g), mix(moon.rim.b, lamp.b), mix(moon.rim.a, 0.75)),
+            rim: Color::new(mix(moon.rim.r, lamp.r), mix(moon.rim.g, lamp.g), mix(moon.rim.b, lamp.b), mix(moon.rim.a, 0.5)),
             shade: moon.shade,
         }
     }

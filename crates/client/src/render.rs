@@ -1997,7 +1997,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             hires_player = Some((rig.clone().unwrap(), feet, flip, tint));
         } else {
             let light = crate::light::LIGHTS.with(|l| l.borrow().rim_at(feet));
-            crate::rig::draw_lit(rig.as_deref().unwrap(), &fx.hero_rig, feet, flip, tint, &light);
+            crate::herolight::draw(rig.as_deref().unwrap(), &fx.hero_rig, feet, flip, tint, &light, cam, world.cfg.stage);
+            set_camera(cam);
         }
     } else {
         draw_texture_ex(tex, x, y, tint, params);
@@ -2369,7 +2370,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             let direct = Camera2D { target: cam.target, zoom: cam.zoom, offset: cam.offset, rotation: cam.rotation, render_target: None, viewport: cam.viewport };
             set_camera(&direct);
             let light = crate::light::LIGHTS.with(|l| l.borrow().rim_at(feet));
-            crate::rig::draw_lit(&rig, &fx.hero_rig, feet, left, tint, &light);
+            crate::herolight::draw(&rig, &fx.hero_rig, feet, left, tint, &light, &direct, world.cfg.stage);
             set_default_camera();
         }
     }

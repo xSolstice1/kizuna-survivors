@@ -13,6 +13,7 @@ One rule: **rock is wall, ground is open, stairs lead between levels.**
   wall is one and nothing else is. Test: `drawn_walls_are_the_real_walls`.
 - A drop facing south shows its rock face. A drop facing any other way is walled on its high
   side: a rocky rim, lit at the drop, outlined dark where open ground begins.
+- On High the ground has relief: its texture is read as height and lit by the moon.
 - Roads crossing a level change are stone stairs with curbs. Low ground is darker and cooler,
   high ground brighter. Every wall has contact shade at its foot.
 - To check a spot: `KZ_WALLS=1` dots the real walls red over the picture (native), and
@@ -28,15 +29,22 @@ The world is drawn into a target, then laid on the screen through one shader:
 - a filmic shoulder for the brights;
 - a colour grade per world (`look`): shadows' tint, highlights' gain, saturation, contrast,
   bloom threshold;
+- shafts of moonlight slanting through the air (High);
 - tilt-shift, heat haze (`post::heat`), chromatic aberration that punches on heavy hits
   (`post::punch`), film grain and the vignette.
 
-## Characters (`litsprite.rs`)
+## Characters (`litsprite.rs`, `herolight.rs`)
 
-Sprites get volume from their own outline. One step towards the light outside the sprite
-means a rim of light; one step away outside means a core shadow. The crowd is lit by the
-moon, and the hero by the moon plus the strongest lamp near them (`Lights::rim_at`, which
-also takes the lamp's colour).
+Sprites get volume from their own outline. Near the edge facing the light (but inside the
+art's outline) a rim of light; along the far side a core shadow. The crowd is lit by the
+moon (`litsprite.rs`).
+
+The hero is a rig of many parts, so it is first drawn whole into an off-screen image at
+screen resolution, then that image is lit (`herolight.rs`). That way the rim and shadow
+follow only the outer silhouette, never the seams between parts. It is lit from above,
+darker towards the feet, and takes the moon or the nearest lamp's softened colour
+(`Lights::rim_at`). It also gets the world's colour grade (`post::grade`), so it sits in the
+scene while staying sharp.
 
 ## What fights leave (`worldfx.rs`)
 
@@ -56,7 +64,7 @@ The graphics setting is Auto, Low, Medium or High (`Profile::graphics`, Settings
 | --- | --- |
 | Low | Grade and vignette only. Half the grass and motes, no mist, flat sprites. |
 | Medium | Adds bloom, grain and lit sprites. |
-| High | Adds the wide bloom, tilt-shift, heat haze and aberration. |
+| High | Adds the wide bloom, tilt-shift, heat haze, aberration, light shafts and ground relief. |
 
 Auto starts High and steps down after three seconds under ~45 fps; it never steps back up in a
 session. Dev: `KZ_GFX=1..3` forces a level (native).

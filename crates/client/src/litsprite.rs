@@ -50,8 +50,10 @@ uniform vec4 Shade;
 void main() {
     vec4 t = texture2D(Texture, uv);
     vec2 l = vec2(mix(Light.x, -Light.x, mirror), Light.y) * Step;
-    // Solid towards the light? (two steps: a soft rim, about a unit wide)
-    float lit = 1.0 - 0.5 * (texture2D(Texture, uv + l * 0.9).a + texture2D(Texture, uv + l * 1.8).a);
+    // Near the edge facing the light (outside within a unit or two), but not the outermost
+    // sliver, which is the art's own outline: light, not a coloured border.
+    float lit = 1.0 - 0.5 * (texture2D(Texture, uv + l * 1.1).a + texture2D(Texture, uv + l * 2.0).a);
+    lit *= clamp(texture2D(Texture, uv + l * 0.4).a * 1.4 - 0.2, 0.0, 1.0);
     // Solid away from it? (wider: the core shadow falls across the far side)
     float dark = 1.0 - 0.5 * (texture2D(Texture, uv - l * 1.6).a + texture2D(Texture, uv - l * 3.4).a);
     vec3 c = t.rgb * color.rgb;
@@ -104,7 +106,7 @@ pub struct Light {
 }
 
 /// The moon's light on everything (cool, from the upper left).
-pub const MOON: Light = Light { dir: Vec2::new(-0.8, -0.6), rim: Color { r: 0.62, g: 0.74, b: 1.0, a: 0.32 }, shade: Color { r: 0.62, g: 0.6, b: 0.78, a: 0.42 } };
+pub const MOON: Light = Light { dir: Vec2::new(-0.8, -0.6), rim: Color { r: 0.7, g: 0.8, b: 1.0, a: 0.24 }, shade: Color { r: 0.66, g: 0.64, b: 0.8, a: 0.38 } };
 
 /// Sets the light for the next draws (call with the material in use).
 pub fn set_light(mat: &Material, l: &Light) {

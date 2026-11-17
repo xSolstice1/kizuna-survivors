@@ -549,42 +549,14 @@ fn draw_scaled(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color,
     extra(Slot::Ring, fore_near, an.hand, 0.9, false, 0.0);
 }
 
-thread_local! {
-    /// While `draw_lit` runs: the lit-sprite material, so each part gets its own step.
-    static LIT: std::cell::RefCell<Option<Material>> = const { std::cell::RefCell::new(None) };
-}
-
-/// `draw`, lit with volume (crate::litsprite): a rim towards `light`, a core shadow away.
-/// Draws flat when the material isn't available.
-pub fn draw_lit(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color, light: &crate::litsprite::Light) {
-    let Some(mat) = crate::litsprite::material() else {
-        return draw(def, st, feet, left, tint);
-    };
-    gl_use_material(&mat);
-    crate::litsprite::set_light(&mat, light);
-    LIT.with(|l| *l.borrow_mut() = Some(mat));
-    draw(def, st, feet, left, tint);
-    LIT.with(|l| *l.borrow_mut() = None);
-    gl_use_default_material();
-}
-
 /// A texture on the source-pixel rect `r`, mapped through `m`.
 fn draw_quad(tex: &Texture2D, m: Affine2, r: Rect, tint: Color) {
     let c = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
-    // Lit: the part's size in world units sets the rim's step; a mirrored part mirrors it.
-    let mirror = LIT.with(|l| {
-        l.borrow().as_ref().map(|mat| {
-            let (sx, sy) = (m.matrix2.x_axis.length() * r.w, m.matrix2.y_axis.length() * r.h);
-            mat.set_uniform("Step", vec2(1.0 / sx.max(0.1), 1.0 / sy.max(0.1)));
-            if m.matrix2.determinant() < 0.0 { 1.0 } else { 0.0 }
-        })
-    });
-    let z = mirror.unwrap_or(0.0);
     let vertices = c
         .iter()
         .map(|&(u, v)| {
             let p = m.transform_point2(vec2(r.x + r.w * u, r.y + r.h * v));
-            Vertex::new(p.x, p.y, z, u, v, tint)
+            Vertex::new(p.x, p.y, 0.0, u, v, tint)
         })
         .collect();
     draw_mesh(&Mesh { vertices, indices: vec![0, 1, 2, 0, 2, 3], texture: Some(tex.clone()) });

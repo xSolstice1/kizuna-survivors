@@ -11,6 +11,7 @@ mod chest_ui;
 mod cloud;
 mod devmenu;
 mod foliage;
+mod herolight;
 mod kit;
 mod light;
 mod litsprite;

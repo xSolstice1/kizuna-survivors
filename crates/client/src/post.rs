@@ -54,17 +54,19 @@ struct Look {
     vignette: f32,
     /// How bright a pixel must be to bloom (bright worlds, snow, need more).
     threshold: f32,
+    /// Shafts of light through the air (colour, a = strength; 0 = none).
+    shafts: Color,
 }
 
 fn look(stage: StageId) -> Look {
-    let l = |lift: [f32; 3], gain: [f32; 3], saturation, contrast, bloom, vignette| Look { lift: Vec3::from(lift), gain: Vec3::from(gain), saturation, contrast, bloom, vignette, threshold: 0.70 };
+    let l = |lift: [f32; 3], gain: [f32; 3], saturation, contrast, bloom, vignette| Look { lift: Vec3::from(lift), gain: Vec3::from(gain), saturation, contrast, bloom, vignette, threshold: 0.70, shafts: Color::new(0.55, 0.66, 0.9, 0.07) };
     match stage {
         // Moonlit forest: cool blue-green shadows, warm lantern highlights.
         StageId::ShrineValley => l([0.010, 0.022, 0.040], [1.04, 1.01, 0.95], 1.08, 1.06, 0.55, 0.42),
         // Neon street: magenta-violet shadows, punchy colour.
-        StageId::Shotengai => l([0.030, 0.006, 0.045], [1.03, 0.98, 1.03], 1.14, 1.07, 0.70, 0.45),
+        StageId::Shotengai => Look { shafts: Color::new(0.8, 0.5, 0.9, 0.03), ..l([0.030, 0.006, 0.045], [1.03, 0.98, 1.03], 1.14, 1.07, 0.70, 0.45) },
         // Burning wood: ember-warm throughout.
-        StageId::EmberLeaf => l([0.035, 0.012, 0.004], [1.06, 0.98, 0.88], 1.10, 1.07, 0.60, 0.45),
+        StageId::EmberLeaf => Look { shafts: Color::new(1.0, 0.62, 0.38, 0.06), ..l([0.035, 0.012, 0.004], [1.06, 0.98, 0.88], 1.10, 1.07, 0.60, 0.45) },
         // Snow citadel: cold, clean, a little desaturated.
         StageId::PaleCitadel => Look { threshold: 0.9, ..l([0.004, 0.014, 0.040], [0.97, 0.99, 1.03], 0.94, 1.05, 0.35, 0.36) },
         // Rain city: teal shadows, sodium-orange lamps.
@@ -72,6 +74,13 @@ fn look(stage: StageId) -> Look {
         // Shattered sky: violet.
         StageId::Shatterline => l([0.026, 0.004, 0.050], [1.02, 0.97, 1.05], 1.06, 1.06, 0.60, 0.44),
     }
+}
+
+/// A world's grade for things drawn after the lens (the hero): lift, gain, saturation,
+/// contrast.
+pub fn grade(stage: StageId) -> (Vec3, Vec3, f32, f32) {
+    let l = look(stage);
+    (l.lift, l.gain, l.saturation, l.contrast)
 }
 
 const PASS_VERTEX: &str = r#"#version 100
@@ -162,6 +171,9 @@ uniform vec4 Look;
 // x time, y grain, z tilt-shift, w aberration
 uniform vec4 Fx;
 uniform vec2 Res;
+uniform vec4 Shaft;
+float hash1(float n) { return fract(sin(n) * 43758.5453); }
+float vn1(float x) { float i = floor(x); float f = fract(x); f = f * f * (3.0 - 2.0 * f); return mix(hash1(i), hash1(i + 1.0), f); }
 // A filmic shoulder: the picture is already display-ready, so below the knee nothing changes;
 // above it, brights (bloom's overflow) roll smoothly into white instead of clipping.
 vec3 shoulder(vec3 x) {
@@ -187,6 +199,16 @@ void main() {
     vec3 b = texture2D(Bloom1, p).rgb * 0.45 + texture2D(Bloom2, p).rgb * 0.55;
     b = b / (1.0 + 1.5 * b);
     c += b * Look.z * (1.0 - 0.6 * dot(c, vec3(0.333)));
+    // Shafts of moonlight slanting through the air from the upper left, drifting slowly,
+    // strongest towards the moon's side of the view.
+    if (Shaft.a > 0.0) {
+        vec2 sp = vec2(uv.x * Res.x / Res.y, uv.y);
+        float across = dot(sp, vec2(0.6, -0.8));
+        float beam = vn1(across * 6.0 + Fx.x * 0.04) * 0.6 + vn1(across * 15.0 - Fx.x * 0.07) * 0.4;
+        beam = beam * beam * beam;
+        float near = 1.0 - clamp(dot(sp, vec2(0.8, 0.6)) * 0.55, 0.0, 0.85);
+        c += Shaft.rgb * beam * near * Shaft.a * 2.2;
+    }
     c = shoulder(c);
     // Grade: tint the darks, scale the brights, then saturation and contrast.
     c = c * Gain + Lift * (1.0 - c);
@@ -364,6 +386,7 @@ pub fn present(world: &Texture2D, cam: &Camera2D, stage: StageId, time: f64, glo
                     UniformDesc::new("Look", UniformType::Float4),
                     UniformDesc::new("Fx", UniformType::Float4),
                     f2("Res"),
+                    UniformDesc::new("Shaft", UniformType::Float4),
                 ],
                 ["Bloom1", "Bloom2", "Soft", "Heat"].iter().map(|s| s.to_string()).collect(),
             );
@@ -448,6 +471,8 @@ pub fn present(world: &Texture2D, cam: &Camera2D, stage: StageId, time: f64, glo
         let ab = if q == Quality::High { 0.012 + 0.05 * punch } else { 0.0 };
         comp.set_uniform("Fx", vec4((time % 1000.0) as f32, if q > Quality::Low { 0.022 } else { 0.0 }, tilt, ab));
         comp.set_uniform("Res", vec2(screen_width(), screen_height()));
+        let sh = if q == Quality::High { lk.shafts } else { Color::new(0.0, 0.0, 0.0, 0.0) };
+        comp.set_uniform("Shaft", vec4(sh.r, sh.g, sh.b, sh.a));
         comp.set_texture("Bloom1", b1);
         comp.set_texture("Bloom2", b2);
         comp.set_texture("Soft", soft);
