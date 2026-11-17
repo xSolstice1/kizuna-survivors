@@ -340,3 +340,143 @@ pub fn draw_hannya(c: Vec2, r: f32, time: f64, vfx: &crate::vfx::Vfx) {
     }
     gl_use_default_material();
 }
+
+/// Chitin along a ribbon: plated segments (`Segments` of them) with dark seams, a glossy
+/// highlight down the spine, darker flanks.
+const CHITIN: &str = r#"#version 100
+precision mediump float;
+varying lowp vec4 color;
+varying highp vec2 uv;
+uniform float Segments;
+uniform vec3 Shell;
+uniform vec3 Gloss;
+void main() {
+    float across = abs(uv.x * 2.0 - 1.0);
+    float seg = fract(uv.y * Segments);
+    // Each plate rounded across and along; a dark seam between plates.
+    float plate = 1.0 - across * across;
+    float seam = smoothstep(0.0, 0.12, seg) * (1.0 - smoothstep(0.86, 1.0, seg));
+    vec3 c = Shell * (0.45 + 0.55 * plate) * (0.35 + 0.65 * seam);
+    // The plate's front edge catches light; a glossy line down the spine.
+    c += Gloss * (1.0 - smoothstep(0.0, 0.25, seg)) * 0.35 * plate;
+    c += Gloss * pow(1.0 - across, 6.0) * 0.6 * seam;
+    float a = 1.0 - smoothstep(0.86, 1.0, across);
+    gl_FragColor = vec4(c * color.rgb, a * color.a);
+}
+"#;
+
+thread_local! {
+    static CHITIN_MAT: std::cell::OnceCell<Option<Material>> = const { std::cell::OnceCell::new() };
+    static MUKADE: RefCell<Option<(Vec<Vec2>, f64)>> = const { RefCell::new(None) };
+}
+
+fn chitin() -> Option<Material> {
+    CHITIN_MAT.with(|m| {
+        m.get_or_init(|| {
+            let u = |n: &str, t| UniformDesc::new(n, t);
+            load_material(
+                ShaderSource::Glsl { vertex: VERTEX, fragment: CHITIN },
+                MaterialParams {
+                    pipeline_params: PipelineParams {
+                        color_blend: Some(BlendState::new(Equation::Add, BlendFactor::Value(BlendValue::SourceAlpha), BlendFactor::OneMinusValue(BlendValue::SourceAlpha))),
+                        alpha_blend: Some(BlendState::new(Equation::Add, BlendFactor::One, BlendFactor::OneMinusValue(BlendValue::SourceAlpha))),
+                        ..Default::default()
+                    },
+                    uniforms: vec![u("Segments", UniformType::Float1), u("Shell", UniformType::Float3), u("Gloss", UniformType::Float3)],
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| {
+                warn!("chitin material: {e:?}");
+            })
+            .ok()
+        })
+        .clone()
+    })
+}
+
+/// Mukade (Toya): the great centipede tail arcing over his back, an armoured body with
+/// scuttling legs and its head at the tip, following through as he moves; crimson tendrils
+/// writhing at his back. `root` is where it grows from, `back` -1/1 the side behind him.
+pub fn draw_mukade(root: Vec2, back: f32, time: f64, vfx: &crate::vfx::Vfx, head: &Texture2D) {
+    use std::f32::consts::PI;
+    let t = time as f32;
+    const N: usize = 16;
+    // Rest: an arch over his back, a wave running along it.
+    let rest: Vec<Vec2> = (0..N)
+        .map(|s| {
+            let u = s as f32 / (N - 1) as f32;
+            let ang = PI * (0.12 + 0.88 * u);
+            let wave = (t * 4.0 - u * 6.0).sin() * 4.0;
+            vec2(root.x + back * (ang.cos() * -36.0 - 8.0) + back * wave * 0.3, root.y - ang.sin() * 50.0 + u * 12.0 + wave * 0.6)
+        })
+        .collect();
+    let body = MUKADE.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.as_ref().is_none_or(|(_, last)| time - last > 0.5) {
+            *m = Some((rest.clone(), time));
+        }
+        let (pts, last) = m.as_mut().unwrap();
+        let dt = ((time - *last) as f32).clamp(0.0, 0.05);
+        *last = time;
+        pts[0] = rest[0];
+        for j in 1..N {
+            let stiff = 30.0 - 22.0 * j as f32 / N as f32;
+            let pj = pts[j];
+            pts[j] = pj + (rest[j] - pj) * (1.0 - (-dt * stiff).exp());
+        }
+        pts.clone()
+    });
+    // Crimson tendrils writhing behind him (light, so they glow).
+    if let Some(light) = fur(true) {
+        gl_use_material(&light);
+        light.set_uniform("Time", t);
+        light.set_uniform("Base", vec3(0.5, 0.0, 0.05));
+        light.set_uniform("Mid", vec3(0.9, 0.1, 0.15));
+        light.set_uniform("Tip", vec3(1.0, 0.45, 0.4));
+        for k in 0..5 {
+            let kf = k as f32;
+            let a0 = -std::f32::consts::FRAC_PI_2 + back * (0.4 + 0.25 * kf) + (t * 2.5 + kf * 1.7).sin() * 0.3;
+            let pts: Vec<Vec2> = (0..9)
+                .map(|i| {
+                    let u = i as f32 / 8.0;
+                    let a = a0 + (t * 4.0 + kf * 2.0 - u * 5.0).sin() * 0.5 * u;
+                    root + vec2(a.cos(), a.sin()) * (u * 30.0) + vec2(0.0, 4.0)
+                })
+                .collect();
+            draw_mesh(&ribbon(&pts, |u| 6.0 * (1.0 - u * 0.8), Color::new(1.0, 1.0, 1.0, 0.6)));
+        }
+        gl_use_default_material();
+    }
+    // Legs: a pair per plate, scuttling in a wave down the body.
+    for (s, w) in body.windows(2).enumerate().skip(1) {
+        let (a, b) = (w[0], w[1]);
+        let d = (b - a).normalize_or(vec2(0.0, -1.0));
+        let side = vec2(-d.y, d.x);
+        let u = s as f32 / (N - 1) as f32;
+        let size = 13.0 * (1.0 - u * 0.4);
+        let step = (t * 14.0 - s as f32 * 0.9).sin();
+        for sgn in [-1.0f32, 1.0] {
+            let knee = a + side * sgn * size * 0.75 + d * step * 2.0 * sgn;
+            let foot = knee + side * sgn * size * 0.3 + d * (3.0 + step * 2.5);
+            crate::vfx::shape::line(a.x, a.y, knee.x, knee.y, 1.9, Color::new(0.2, 0.03, 0.04, 1.0));
+            crate::vfx::shape::line(knee.x, knee.y, foot.x, foot.y, 1.5, Color::new(0.85, 0.3, 0.16, 1.0));
+        }
+    }
+    if let Some(mat) = chitin() {
+        gl_use_material(&mat);
+        mat.set_uniform("Segments", (N - 1) as f32);
+        mat.set_uniform("Shell", vec3(0.42, 0.06, 0.08));
+        mat.set_uniform("Gloss", vec3(1.0, 0.5, 0.42));
+        // Narrow where it grows from his back, full along the body, a little slimmer at the
+        // neck.
+        draw_mesh(&ribbon(&body, |u| 18.0 * (0.5 + 0.5 * (u * 4.0).min(1.0)) * (1.0 - u * 0.2), WHITE));
+        gl_use_default_material();
+    }
+    // The head at the tip, facing along the body, with glowing eyes.
+    let (a, b) = (body[N - 2], body[N - 1]);
+    let d = b - a;
+    let size = 24.0;
+    draw_texture_ex(head, b.x - size / 2.0, b.y - size / 2.0, WHITE, DrawTextureParams { dest_size: Some(vec2(size, size)), rotation: d.y.atan2(d.x) + std::f32::consts::FRAC_PI_2, ..Default::default() });
+    vfx.additive(|| vfx.draw("glow", b, 26.0, 0.0, Color::new(1.0, 0.15, 0.2, 0.3 + 0.1 * (t * 6.0).sin())));
+}

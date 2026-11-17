@@ -2713,12 +2713,18 @@ fn draw_spine_burst(c: Vec2, r: f32, k: f32) {
 
 /// Toya's crimson tendrils (base form) and the great centipede tail (Rampage).
 fn draw_tendrils_and_tail(world: &World, t: f32, mukade: bool) {
-    use std::f32::consts::{FRAC_PI_2, PI};
+    use std::f32::consts::FRAC_PI_2;
     let p = world.player.pos;
     let root = vec2(p.x, p.y - 8.0);
     let back = if world.player.facing.x < 0.0 { 1.0 } else { -1.0 };
     let (n, len, width) = if mukade { (6, 38.0, 14.0) } else { (4, 24.0, 10.0) };
     vfx_kit(|v| {
+        if mukade {
+            // The great centipede: an armoured, physical body (crate::forms).
+            v.additive(|| v.draw("glow", vec2(p.x, p.y - 20.0), 110.0, 0.0, Color::new(0.6, 0.0, 0.08, 0.18 + 0.06 * (t * 6.0).sin())));
+            crate::forms::draw_mukade(root, back, t as f64, v, v.tex("centipede_head"));
+            return;
+        }
         for k in 0..n {
             let kf = k as f32;
             let base_a = -FRAC_PI_2 + back * (0.5 + 0.35 * kf / n as f32) + if k % 2 == 0 { 0.25 } else { -0.25 };
@@ -2726,28 +2732,6 @@ fn draw_tendrils_and_tail(world: &World, t: f32, mukade: bool) {
             let a = base_a + sway + back * 0.4;
             let tip = root + vec2(a.cos(), a.sin()) * len;
             v.draw_wh("tendril", (root + tip) * 0.5, vec2(width, len * 1.1), a + FRAC_PI_2, WHITE);
-        }
-        if mukade {
-            // The great centipede tail: armoured segments arcing over his back, head at the tip.
-            let segs = 12;
-            let pts: Vec<Vec2> = (0..segs)
-                .map(|s| {
-                    let u = s as f32 / (segs - 1) as f32;
-                    let ang = PI * (0.15 + 0.85 * u);
-                    let wave = (t * 4.0 - u * 6.0).sin() * 4.0;
-                    vec2(root.x + back * (ang.cos() * -34.0 - 6.0) + back * wave * 0.3, root.y - ang.sin() * 46.0 + u * 10.0 + wave * 0.5)
-                })
-                .collect();
-            v.additive(|| v.draw("glow", vec2(p.x, p.y - 20.0), 130.0, 0.0, Color::new(0.7, 0.0, 0.1, 0.25 + 0.1 * (t * 6.0).sin())));
-            for s in (0..segs).rev() {
-                let u = s as f32 / (segs - 1) as f32;
-                let next = if s + 1 < segs { pts[s + 1] } else { pts[s] + (pts[s] - pts[s - 1]) };
-                let d = next - pts[s];
-                let size = 20.0 * (1.0 - u * 0.45);
-                let (name, sz) = if s == segs - 1 { ("centipede_head", size * 1.3) } else { ("segment", size) };
-                let pulse = ((t * 6.0 - u * 8.0).sin() * 0.5 + 0.5).powi(3);
-                v.draw_wh(name, pts[s], vec2(sz, sz), d.y.atan2(d.x) + FRAC_PI_2, Color::new(1.0, 0.85 + 0.15 * pulse, 0.85 + 0.15 * pulse, 1.0));
-            }
         }
     });
 }
