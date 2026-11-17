@@ -15,14 +15,17 @@ use crate::vfx::shape;
 use crate::vfx::with as vfx_kit;
 use crate::voice;
 
-/// World pixels → screen pixels (integer for crisp pixel art). Small screens (phones in
-/// landscape) zoom out to 1x so the horde stays visible.
+/// World units → screen pixels. Small screens (phones in landscape) zoom out to 1x so the
+/// horde stays visible; from 720 px up the view is 360 units tall whatever the screen, so a
+/// big monitor shows the same fight larger instead of more of it with tiny characters (up
+/// to 3x; the art is high-resolution, so it stays sharp).
 pub fn world_scale() -> f32 {
     // screen_height() is in CSS pixels (macroquad scales to the device's density itself).
-    if screen_height() < 560.0 {
+    let h = screen_height();
+    if h < 560.0 {
         1.0
     } else {
-        2.0
+        (h / 360.0).clamp(2.0, 3.0)
     }
 }
 
@@ -1097,6 +1100,7 @@ fn enemy_pose(world: &World, i: usize, h: f32, big: bool, tf: f32) -> (f32, f32,
     let slow = if big { 0.55 } else { 1.0 };
     let lean = if moving { (v.x / speed) * if big { 0.04 } else { 0.09 } } else { 0.0 };
     let (lift, mut sx, mut sy, rot);
+    use sim::content::enemy_def;
     match motion(e.kind[i]) {
         Motion::Walk => {
             let ph = tf * 2.3 * slow * (speed / 45.0).clamp(0.7, 1.6) + seed;
@@ -1130,10 +1134,36 @@ fn enemy_pose(world: &World, i: usize, h: f32, big: bool, tf: f32) -> (f32, f32,
             rot = lean * 1.3 + (tf * 1.3 * slow + seed * 1.7).sin() * 0.07;
         }
     }
-    // A hit squashes the sprite for an instant.
+    let mut rot = rot;
+    let mut lift = lift;
+    // A hit: squash hard for an instant, then spring back (5 frames).
     if e.flash[i] > 0 {
-        sx *= 1.14;
-        sy *= 0.88;
+        let k = e.flash[i] as f32 / 5.0;
+        sx *= 1.0 + 0.2 * k;
+        sy *= 1.0 - 0.18 * k;
+    }
+    // Knocked back: thrown off balance, leaning back along the shove and lifted a touch.
+    let shove = e.push[i];
+    let force = (shove.length() / 140.0).min(1.0);
+    if force > 0.05 {
+        rot += shove.x.signum() * 0.32 * force * if big { 0.35 } else { 1.0 };
+        lift += h * 0.06 * force;
+    }
+    // Stunned: a dizzy wobble.
+    if e.stagger[i] > 0.0 {
+        rot += (tf * 22.0 + seed).sin() * 0.12 * e.stagger[i].min(1.0);
+    }
+    // Winding up an attack: crouch, lean back from where it's about to go, tremble.
+    let windup = match enemy_def(e.kind[i]).ai {
+        sim::content::Ai::Charger { .. } if e.ai_state[i] == 1 => Some(e.ai_dir[i]),
+        sim::content::Ai::Boss if e.ai_busy[i] > 0.7 => Some(e.ai_aux[i]),
+        sim::content::Ai::Dash if e.ai_busy[i] > 0.5 => Some(e.ai_dir[i]),
+        _ => None,
+    };
+    if let Some(d) = windup {
+        sx *= 1.12;
+        sy *= 0.86;
+        rot += -d.x.signum() * 0.14 + (tf * 40.0 + seed).sin() * 0.04;
     }
     (lift, sx, sy, rot)
 }

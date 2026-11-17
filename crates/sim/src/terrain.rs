@@ -251,6 +251,64 @@ const FINE: f32 = 8.0;
 /// crowd and the flow field) still wall the whole rim cell.
 const RIM: f32 = 6.0;
 
+/// A flight of stairs: where a road's centre line crosses a level change. `top` and `bottom`
+/// are its ends on the centre line (world units), `width` the road's.
+#[derive(Clone, Copy, Debug)]
+pub struct Stair {
+    pub top: Vec2,
+    pub bottom: Vec2,
+    pub width: f32,
+}
+
+/// Every flight of stairs with a centre line touching `min`..`max`. A drop facing south is
+/// climbed over its rock face (`FACE_CELLS` long, down to the south); any other drop over
+/// a cell and a half, centred on the edge.
+pub fn stairs(stage: StageId, min: Vec2, max: Vec2) -> Vec<Stair> {
+    let mut out = Vec::new();
+    if !enabled(stage) {
+        return out;
+    }
+    let (c0, c1) = (cell_of(min), cell_of(max));
+    let width = (ROAD_HALF * 2 + 1) as f32 * CELL;
+    // North-south roads (salt 11: centre column k * ROAD_EVERY + wobble(row)), then
+    // east-west ones (salt 23), each walked one cell at a time.
+    for (vertical, off) in [(true, 11u32), (false, 23u32)] {
+        let (a0, a1, t0, t1) = if vertical { (c0.0, c1.0, c0.1 - 3, c1.1 + 3) } else { (c0.1, c1.1, c0.0 - 3, c1.0 + 3) };
+        let k0 = ((a0 - 12) as f32 / ROAD_EVERY as f32).floor() as i32;
+        let k1 = ((a1 + 12) as f32 / ROAD_EVERY as f32).ceil() as i32;
+        for k in k0..=k1 {
+            let at = |t: i32| k * ROAD_EVERY + wobble(stage, k, t, off);
+            let level = |t: i32| {
+                let c = at(t);
+                if vertical { level_raw(stage, c, t) } else { level_raw(stage, t, c) }
+            };
+            for t in t0..t1 {
+                let (la, lb) = (level(t), level(t + 1));
+                if la == lb {
+                    continue;
+                }
+                // The edge between cells t and t + 1, on the centre line.
+                let c = (at(t) + at(t + 1)) as f32 * 0.5 + 0.5;
+                let e = (t + 1) as f32;
+                let p = |along: f32| if vertical { Vec2::new(c * CELL, along * CELL) } else { Vec2::new(along * CELL, c * CELL) };
+                let (top, bottom) = if vertical && la > lb {
+                    // Higher ground to the north: down the rock face to the south.
+                    (p(e), p(e + FACE_CELLS as f32))
+                } else if la > lb {
+                    (p(e - 0.75), p(e + 0.75))
+                } else {
+                    (p(e + 0.75), p(e - 0.75))
+                };
+                let mid = (top + bottom) * 0.5;
+                if mid.x >= min.x - CELL * 2.0 && mid.x <= max.x + CELL * 2.0 && mid.y >= min.y - CELL * 2.0 && mid.y <= max.y + CELL * 2.0 {
+                    out.push(Stair { top, bottom, width });
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The smooth walls' rule (`Terrain::wall_field`) at `p`, given whether its cell is open (a
 /// road or the start clearing) and the height field `h`: positive inside a cliff.
 fn wall_field_with(p: Vec2, open: bool, h: impl Fn(Vec2) -> f32) -> f32 {
@@ -707,6 +765,22 @@ mod tests {
     use super::*;
 
     const W1: StageId = StageId::ShrineValley;
+
+    /// Every flight of stairs lies on road cells that the sim lets you climb (RAMP or ROAD).
+    #[test]
+    fn stairs_sit_on_the_roads_that_climb() {
+        for st in [W1, StageId::EmberLeaf, StageId::PaleCitadel, StageId::Rainward, StageId::Shatterline] {
+            let all = stairs(st, Vec2::new(-800.0, -800.0), Vec2::new(800.0, 800.0));
+            assert!(all.len() > 3, "{st:?}: {} stairs", all.len());
+            for s in &all {
+                for k in 0..=4 {
+                    let p = s.top + (s.bottom - s.top) * (k as f32 / 4.0);
+                    let (cx, cy) = cell_of(p);
+                    assert!(cell_raw(st, cx, cy) & ROAD != 0, "{st:?}: stairs {s:?} off the road at {p:?}");
+                }
+            }
+        }
+    }
 
     /// What the client draws as wall is exactly what the player collides with.
     #[test]

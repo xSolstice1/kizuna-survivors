@@ -15,8 +15,12 @@ One rule: **rock is wall, ground is open, stairs lead between levels.**
   height. A drop facing south shows its rock face (the wall). Any other drop has a lit lip
   and casts the platform's shadow on the lower ground; the sim's wall there is a thin lip
   (`RIM`, 6 units), so the top is walkable right up to where it falls away.
-- Stairs are the sim's own ramp cells (`WallGrid::ramp`): lit treads, dark risers and stone
-  rails, across the slope.
+- Stairs are built objects: `sim::terrain::stairs` finds every point where a road's centre
+  line crosses a level change (tested to lie on climbable road), and `Baker::draw_stairs`
+  draws a straight flight there. It has pale stone treads lit at the nose, darker each step
+  down, and risers that read as faces when the flight comes towards the viewer and as
+  shadow lines otherwise. Side walls have lit tops, and a shadow falls at the foot. Where a
+  road only runs along an edge, it's a sloped ramp, shaded down the slope.
 - On High the ground has relief: its texture is read as height and lit by the moon.
 - Low ground is darker and cooler, high ground brighter.
 - To check a spot: `KZ_WALLS=1` dots the real walls red over the picture (native), and

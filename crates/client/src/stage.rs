@@ -248,6 +248,7 @@ impl StageArt {
             let view = Rect::new(x0, y0, sw, sh);
             b.update(cam.target, view);
             b.draw(view);
+            b.draw_stairs(view);
         }
         let (tx0, ty0) = ((x0 / TILE).floor() as i32, (y0 / TILE).floor() as i32);
         let (prop_glows, decal_glow) = world_glows(stage);
