@@ -3,6 +3,7 @@
     python3 tools/ai/restyle.py plan            # list the batches and the cost
     python3 tools/ai/restyle.py run [--only w1] # generate, then write art/hd/*.png in place
     python3 tools/ai/restyle.py apply           # re-run only the write-back from saved raws
+    python3 tools/ai/restyle.py hires           # sprites and bosses at 2x density, from the raws
 
 The image model keeps an edit aligned with its input, so each old sprite is scaled up onto a
 flat key colour (2x2 per call for sprites, one per call for ground tiles) with chibi Ren as the
@@ -236,7 +237,10 @@ def seamless(im):
     return Image.fromarray((a * m + rolled * (1 - m)).clip(0, 255).astype(np.uint8), a.shape[2] == 4 and "RGBA" or "RGB")
 
 
-def apply(b):
+def apply(b, scale=1):
+    """Writes a batch's raw back into art/hd. `scale` 2 writes at twice the art's density (8
+    texels per unit instead of 4; the client reads the density from the size, see
+    sprites::decode_hd), with exactly the same placement."""
     raw = RAW / f"{b['id']}.png"
     if not raw.exists():
         return
@@ -250,11 +254,12 @@ def apply(b):
             # Decals are scattered single overlays, not a repeating ground: leave their edges.
             (new if "decal" in f else seamless(new)).convert("RGBA").save(HD / f, optimize=True)
             continue
+        size2 = (old.width * scale, old.height * scale)
         if opaque(old):
             # Full-rect sprites (signs, paper): the rect itself, under the old outline.
             crop = rgb_all[y:y + h, x:x + w].astype(np.uint8)
-            im = Image.fromarray(crop).resize(old.size, Image.LANCZOS).convert("RGBA")
-            im.putalpha(old.getchannel("A"))
+            im = Image.fromarray(crop).resize(size2, Image.LANCZOS).convert("RGBA")
+            im.putalpha(old.getchannel("A").resize(size2, Image.LANCZOS))
             bleed(im).save(HD / f, optimize=True)
             continue
         rgb, alpha = key_alpha(rgb_all[cy:cy + size, cx:cx + size], b["bg"])
@@ -272,19 +277,21 @@ def apply(b):
         # the canvas allows), bottom-centred, so the feet and footprint don't move.
         piece = np.dstack([rgb, alpha * 255]).clip(0, 255).astype(np.uint8)[nb[1]:nb[3], nb[0]:nb[2]]
         pw, ph = nb[2] - nb[0], nb[3] - nb[1]
+        ob = [v * scale for v in ob]
+        W = old.width * scale
         ow, oh = ob[2] - ob[0], ob[3] - ob[1]
         k = oh / ph
-        if pw * k > old.width:
-            k = old.width / pw
+        if pw * k > W:
+            k = W / pw
         tw, th = max(1, round(pw * k)), max(1, round(ph * k))
         im = Image.fromarray(piece, "RGBA").resize((tw, th), Image.LANCZOS)
         px = int(round((ob[0] + ob[2]) / 2 - tw / 2))
-        px = min(max(px, 0), old.width - tw)
-        oa = np.asarray(old)[..., 3] > 25
+        px = min(max(px, 0), W - tw)
+        oa = np.asarray(old.resize(size2, Image.NEAREST))[..., 3] > 25
 
         def placed(img):
-            c = Image.new("RGBA", old.size)
-            c.alpha_composite(img, (px, ob[3] - th))
+            c = Image.new("RGBA", size2)
+            c.alpha_composite(img, (px, int(ob[3]) - th))
             return c
 
         # The model sometimes mirrors a sprite; keep whichever way matches the old facing.
@@ -324,7 +331,7 @@ def harmonize():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["plan", "run", "apply", "harmonize"])
+    ap.add_argument("cmd", choices=["plan", "run", "apply", "harmonize", "hires"])
     ap.add_argument("--only", default="")
     ap.add_argument("--model", default="nano", choices=["nano", "pro"], help="model for sprite sheets and tiles (bosses always use pro)")
     ap.add_argument("--tag", default="", help="suffix for raw outputs, to compare runs")
@@ -338,6 +345,22 @@ def main():
     if a.tag:
         global RAW
         RAW = RAW / a.tag
+    if a.cmd == "hires":
+        # Every sprite and boss at twice the density, from the saved raws (no calls). Run it
+        # from the 4x art (it reads each sprite's placement from art/hd at HEAD), then the
+        # fixes over them.
+        # The batches as they were run (plan.json), so each raw meets its own files.
+        batches = [b for b in json.loads((RAW / "plan.json").read_text()) if b["kind"] in ("sprites", "boss")]
+        for raw in sorted(RAW.glob("fix_*.png")):
+            if raw.stem.endswith("_in"):
+                continue
+            f = raw.stem[4:].replace("_", "/", 1) + ".png"
+            if (HD / f).exists() and not opaque(load(f)):
+                batches.append({"id": raw.stem, "kind": "boss" if pathlib.Path(f).stem in BIG else "sprites", "bg": pick_bg(load(f)), "files": [f], "model": PRO})
+        for b in batches:
+            apply(b, scale=2)
+        print("hires: applied", len(batches), "batches")
+        return
     batches = [b for b in plan() if a.only in b["id"]]
     if a.files:
         def one(f):
