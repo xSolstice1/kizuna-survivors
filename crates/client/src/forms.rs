@@ -283,3 +283,60 @@ pub fn draw_fox(hips: Vec2, facing: f32, strikes: &[(Vec2, Vec2)], time: f64, vf
         }
     });
 }
+
+/// Hannya (Shun): a scorched ground with turning crimson cracks and a thin ring at the aura's
+/// reach `r`, a huge hannya mask looming behind him, and tongues of crimson flame and dark
+/// smoke rising round him (ribbons through the fur shader, so they flow and taper). `c` is
+/// his centre (world units).
+pub fn draw_hannya(c: Vec2, r: f32, time: f64, vfx: &crate::vfx::Vfx) {
+    let t = time as f32;
+    let pulse = 0.5 + 0.5 * (t * 5.0).sin();
+    // Scorched ground, darker at the heart.
+    vfx.draw_wh("glow", c + vec2(0.0, 8.0), vec2(r * 2.3, r * 1.4), 0.0, Color::new(0.08, 0.0, 0.02, 0.55));
+    vfx.additive(|| {
+        for k in 0..6 {
+            let a = k as f32 * 1.047 + t * 0.15;
+            vfx.draw_wh("crack", c + vec2(a.cos(), a.sin() * 0.55) * r * 0.45 + vec2(0.0, 8.0), vec2(r * 0.7, r * 0.35), a, Color::new(1.0, 0.15, 0.2, 0.22 + 0.1 * pulse));
+        }
+        vfx.draw_wh("ring", c + vec2(0.0, 8.0), vec2(r * 2.2, r * 1.3), 0.0, Color::new(1.0, 0.2, 0.25, 0.35));
+        // The demon behind him: a red glow and the mask, breathing.
+        let m = c + vec2(0.0, -34.0 - 2.0 * pulse);
+        vfx.draw("glow", m, 80.0, 0.0, Color::new(0.6, 0.0, 0.08, 0.3 + 0.1 * pulse));
+        vfx.draw("hannya", m, 62.0 + 4.0 * pulse, 0.0, Color::new(1.0, 0.45, 0.45, 0.32 + 0.08 * pulse));
+    });
+    crate::post::heat(c, 34.0, 0.6);
+    let (Some(paint), Some(light)) = (fur(false), fur(true)) else { return };
+    // Flame tongues rising round him, each a short chain waving as it climbs.
+    let tongue = |k: usize, lift: f32| -> Vec<Vec2> {
+        let kf = k as f32;
+        let ph = (t * 0.9 + kf * 0.173).fract();
+        let ang = kf * 2.39 + 0.4;
+        let base = c + vec2(ang.cos() * (8.0 + (k % 3) as f32 * 7.0), 10.0 + ang.sin() * 5.0);
+        (0..9)
+            .map(|i| {
+                let u = i as f32 / 8.0;
+                let wave = (t * 6.0 + kf * 1.9 - u * 4.0).sin() * 5.0 * u;
+                base + vec2(wave, -u * (24.0 + 10.0 * (1.0 - ph)) - lift)
+            })
+            .collect()
+    };
+    // Dark smoke behind the flames.
+    gl_use_material(&paint);
+    paint.set_uniform("Time", t);
+    paint.set_uniform("Base", vec3(0.12, 0.0, 0.02));
+    paint.set_uniform("Mid", vec3(0.2, 0.02, 0.05));
+    paint.set_uniform("Tip", vec3(0.3, 0.08, 0.1));
+    for k in 0..6 {
+        draw_mesh(&ribbon(&tongue(k + 11, 6.0), |u| 10.0 * (1.0 - u * 0.6), Color::new(1.0, 1.0, 1.0, 0.45)));
+    }
+    gl_use_default_material();
+    gl_use_material(&light);
+    light.set_uniform("Time", t);
+    light.set_uniform("Base", vec3(0.7, 0.02, 0.06));
+    light.set_uniform("Mid", vec3(1.0, 0.18, 0.15));
+    light.set_uniform("Tip", vec3(1.0, 0.6, 0.45));
+    for k in 0..9 {
+        draw_mesh(&ribbon(&tongue(k, 0.0), |u| 7.0 * (1.0 - u * 0.7) * (0.6 + 0.4 * (u * std::f32::consts::PI).sin()), Color::new(1.0, 1.0, 1.0, 0.7)));
+    }
+    gl_use_default_material();
+}

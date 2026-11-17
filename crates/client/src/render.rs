@@ -2617,21 +2617,10 @@ fn draw_hannya_aura(world: &World, t: f32) {
     let c = vec2(p.x, p.y - 6.0);
     let pulse = 0.5 + 0.5 * (t * 7.0).sin();
     let r = sim::content::HANNYA_AURA_RADIUS;
+    let _ = pulse;
     vfx_kit(|v| {
-        v.draw("glow", c, r * 2.8, 0.0, Color::new(0.15, 0.0, 0.03, 0.5));
-        v.additive(|| {
-            v.draw("glow", c, r * 2.4, 0.0, Color::new(0.7, 0.0, 0.1, 0.3 + 0.15 * pulse));
-            v.draw("ring", c, r * 2.2 * (0.95 + 0.05 * pulse), 0.0, Color::new(1.0, 0.2, 0.25, 0.7));
-            // Crimson flames rising around him.
-            for k in 0..7 {
-                let kf = k as f32;
-                let ph = (t * 1.4 + kf * 0.31).fract();
-                let an = kf * 2.39;
-                let rr = 10.0 + (k % 4) as f32 * 9.0;
-                let q = vec2(p.x + an.cos() * rr, p.y - 4.0 + an.sin() * rr * 0.5 - ph * 30.0);
-                v.draw("hellfire", q, 26.0 * (1.0 - ph * 0.5), 0.0, Color::new(1.0, 0.4, 0.4, 0.8 * (1.0 - ph)));
-            }
-        });
+        // The demon unbound: scorched ground, the mask looming, crimson flame (crate::forms).
+        crate::forms::draw_hannya(c, r, t as f64, v);
         // Hannya's Wrath charging: a ring of dread collapsing inward, the mask burning above.
         if world.player.form <= sim::content::HANNYA_FINALE_CHARGE {
             let k = 1.0 - world.player.form / sim::content::HANNYA_FINALE_CHARGE;
