@@ -22,6 +22,12 @@ use crate::voice;
 pub fn world_scale() -> f32 {
     // screen_height() is in CSS pixels (macroquad scales to the device's density itself).
     let h = screen_height();
+    // Dev: `KZ_ZOOM=0.5` pulls the camera back (native), to judge a layout.
+    if cfg!(not(target_arch = "wasm32")) {
+        if let Some(z) = std::env::var("KZ_ZOOM").ok().and_then(|v| v.parse::<f32>().ok()) {
+            return 2.0 * z;
+        }
+    }
     if h < 560.0 {
         1.0
     } else {

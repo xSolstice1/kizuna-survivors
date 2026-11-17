@@ -7,6 +7,13 @@ Everything here is code and shaders: no generated art. Light and shadow have the
 
 One rule: **rock is wall, ground is open, stairs lead between levels.**
 
+The layout is logical (`sim::terrain`): every road crossing is the centre of a flat terrace
+(low, middle or high ground), with edges halfway between crossings: straight in cities,
+gently winding in the wild. Roads are level across their width, so the road joining two
+terraces climbs their shared edge square on, at its middle. Each terrace has one way up
+per side, where its road comes in, and nowhere else. Tests: `roads_are_level_across`,
+`every_way_up_is_mid_edge`.
+
 - The terrain baker (`terrain_bake.rs`) writes the sim's own wall field into the right half of
   each chunk's mask (`sim::terrain::WallGrid`: the exact field the player collides with,
   `Terrain::wall_field`). The shader draws rock wherever it's positive, so what looks like a
@@ -15,17 +22,17 @@ One rule: **rock is wall, ground is open, stairs lead between levels.**
   height. A drop facing south shows its rock face (the wall). Any other drop has a lit lip
   and casts the platform's shadow on the lower ground; the sim's wall there is a thin lip
   (`RIM`, 6 units), so the top is walkable right up to where it falls away.
-- Stairs are built objects: `sim::terrain::stairs` finds every point where a road's centre
-  line crosses a level change (tested to lie on climbable road), and `Baker::draw_stairs`
-  draws a straight flight there. It has pale stone treads lit at the nose, darker each step
-  down, and risers that read as faces when the flight comes towards the viewer and as
-  shadow lines otherwise. Side walls have lit tops, and a shadow falls at the foot. Where a
-  road only runs along an edge, it's a sloped ramp, shaded down the slope.
+- Each way up is drawn by `Baker::draw_stairs` from `sim::terrain::stairs`. A climb going
+  down towards the viewer (south) is a flight of stairs cut into the rock face: pale treads
+  lit at the nose, darker each step down, risers, side walls, and a shadow at the foot. A
+  climb any other way is the road sloping, a soft crest light and shade feathered into the
+  road, with no frame.
 - On High the ground has relief: its texture is read as height and lit by the moon.
 - Low ground is darker and cooler, high ground brighter.
 - To check a spot: `KZ_WALLS=1` dots the real walls red over the picture (native), and
-  `KZ_PERF_AT=x,y` stands the hero there (`cargo run -p sim --example find_ramps` prints a ramp
-  and a wall near each world's start).
+  `KZ_PERF_AT=x,y` stands the hero there (`cargo run -p sim --example find_ramps` prints
+  ramps and walls near each world's start). `KZ_ZOOM=0.5` pulls the camera back to judge a
+  layout.
 
 ## The lens (`post.rs`)
 

@@ -545,42 +545,54 @@ impl Baker {
             }
             let d = (bottom - top) / len;
             let side = vec2(-d.y, d.x);
-            let (hw, wall) = (st.width * 0.5 - 6.0, 5.0);
-            // Risers face the viewer when the flight comes down to the south.
-            let facing = d.y.max(0.0);
-            let n = ((len / 7.5).round() as i32).max(2);
-            let seg = len / n as f32;
-            let rf = 0.14 + 0.3 * facing;
             let at = |a: f32, w: f32| top + d * a + side * w;
             let span = |a0: f32, a1: f32, w0: f32, w1: f32| [at(a0, w0), at(a0, w1), at(a1, w1), at(a1, w0)];
             let (light, shade) = (|a: f32| Color::new(1.0, 0.97, 0.9, a), |a: f32| Color::new(0.0, 0.0, 0.0, a));
-            for i in 0..n {
-                let (s0, s1) = (i as f32 * seg, (i + 1) as f32 * seg);
-                let nose = s1 - rf * seg;
-                let k = 1.0 - 0.3 * (i as f32 / n as f32);
-                // Tread: pale stone, a little darker each step down, its nose lit.
-                quad(&mut tv, &mut ti, span(s0, nose, -hw, hw), 128.0, [tone(k); 4]);
-                quad(&mut lv, &mut li, span(s0, nose, -hw, hw), 1.0, [light(0.2 * k); 4]);
-                quad(&mut lv, &mut li, span(nose - 0.22 * seg, nose, -hw, hw), 1.0, [light(0.18), light(0.18), light(0.42 * k), light(0.42 * k)]);
-                // Riser: a dark band (a face seen from the south), or a sharp shadow line.
-                let ra = if facing > 0.3 { 0.5 } else { 0.62 };
-                quad(&mut tv, &mut ti, span(nose, s1, -hw, hw), 128.0, [tone(k); 4]);
-                quad(&mut sv, &mut si, span(nose, s1, -hw, hw), 1.0, [shade(ra * 0.8), shade(ra * 0.8), shade(ra), shade(ra)]);
-                // The treads darken towards the walls (they shade them).
-                for sgn in [-1.0f32, 1.0] {
-                    let (a, b) = (sgn * hw, sgn * (hw - 4.0));
-                    quad(&mut sv, &mut si, span(s0, s1, a, b), 1.0, [shade(0.3), shade(0.0), shade(0.0), shade(0.3)]);
+            // Down to the south (the climb cut into a rock face we can see): stairs. Any
+            // other way the drop's face is out of sight, so the climb is a ramp: the road
+            // sloping, lit at its crest, darker towards its foot, between low kerbs.
+            let stairs = d.y > 0.7;
+            let (hw, wall) = if stairs { (st.width * 0.5 - 5.0, 5.0) } else { (st.width * 0.5 - 3.0, 3.0) };
+            if stairs {
+                let n = ((len / 6.5).round() as i32).max(3);
+                let seg = len / n as f32;
+                let rf = 0.42;
+                for i in 0..n {
+                    let (s0, s1) = (i as f32 * seg, (i + 1) as f32 * seg);
+                    let nose = s1 - rf * seg;
+                    let k = 1.0 - 0.3 * (i as f32 / n as f32);
+                    // Tread: pale stone, darker each step down, its nose lit.
+                    quad(&mut tv, &mut ti, span(s0, s1, -hw, hw), 128.0, [tone(k); 4]);
+                    quad(&mut lv, &mut li, span(s0, nose, -hw, hw), 1.0, [light(0.2 * k); 4]);
+                    quad(&mut lv, &mut li, span(nose - 0.2 * seg, nose, -hw, hw), 1.0, [light(0.15), light(0.15), light(0.4 * k), light(0.4 * k)]);
+                    // Riser: the step's face, shaded down to the next tread.
+                    quad(&mut sv, &mut si, span(nose, s1, -hw, hw), 1.0, [shade(0.38), shade(0.38), shade(0.55), shade(0.55)]);
+                    for sgn in [-1.0f32, 1.0] {
+                        let (a, b) = (sgn * hw, sgn * (hw - 4.0));
+                        quad(&mut sv, &mut si, span(s0, s1, a, b), 1.0, [shade(0.3), shade(0.0), shade(0.0), shade(0.3)]);
+                    }
                 }
+            } else {
+                // Ramp: just the road sloping, no frame: lit at the crest, darkening down the
+                // slope, every edge feathered into the road around it.
+                let ramp = st.width * 0.5;
+                for (w0, w1, a0, a1) in [(-ramp, -ramp + 8.0, 0.0, 1.0), (-ramp + 8.0, ramp - 8.0, 1.0, 1.0), (ramp - 8.0, ramp, 1.0, 0.0)] {
+                    let q = span(-2.0, 4.0, w0, w1);
+                    quad(&mut lv, &mut li, q, 1.0, [light(0.16 * a0), light(0.16 * a1), light(0.0), light(0.0)]);
+                    // Shade swelling down the slope and fading out again at its foot.
+                    let mid = len * 0.6;
+                    quad(&mut sv, &mut si, span(3.0, mid, w0, w1), 1.0, [shade(0.0), shade(0.0), shade(0.16 * a1), shade(0.16 * a0)]);
+                    quad(&mut sv, &mut si, span(mid, len + 8.0, w0, w1), 1.0, [shade(0.16 * a0), shade(0.16 * a1), shade(0.0), shade(0.0)]);
+                }
+                continue;
             }
             // Side walls: rock, a lit top edge on the inside, a dark outer edge.
             for sgn in [-1.0f32, 1.0] {
                 let (a, b) = (sgn * hw, sgn * (hw + wall));
                 quad(&mut cv, &mut ci, span(-2.0, len + 2.0, a, b), 64.0, [tone(1.05); 4]);
-                quad(&mut lv, &mut li, span(-2.0, len + 2.0, a, a + sgn * 1.5), 1.0, [light(0.45); 4]);
-                quad(&mut sv, &mut si, span(-2.0, len + 2.0, b, b + sgn * 1.4), 1.0, [shade(0.6); 4]);
+                quad(&mut lv, &mut li, span(-2.0, len + 2.0, a, a + sgn * 1.2), 1.0, [light(0.4); 4]);
+                quad(&mut sv, &mut si, span(-2.0, len + 2.0, b, b + sgn * 1.2), 1.0, [shade(0.55); 4]);
             }
-            // Wall caps at the top of the flight.
-            quad(&mut sv, &mut si, span(-2.0, -0.5, -hw - wall, hw + wall), 1.0, [shade(0.35); 4]);
             // The foot: a shadow falling away from the last step.
             let (dark, clear) = (Color::new(0.0, 0.0, 0.0, 0.32), Color::new(0.0, 0.0, 0.0, 0.0));
             quad(&mut sv, &mut si, span(len, len + 9.0, -hw - wall, hw + wall), 1.0, [dark, dark, clear, clear]);
