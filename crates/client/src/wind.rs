@@ -1,4 +1,4 @@
-//! One wind for the whole world: grass, branches and drifting motes all bend to the same
+//! One wind for the whole world: grass and drifting motes all bend to the same
 //! gusts, so a gust is seen rolling across the scene instead of each thing swaying alone.
 
 use macroquad::prelude::*;

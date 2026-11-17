@@ -67,7 +67,7 @@ marks that glow hot for a moment, then fade.
 
 ## Weather and wind
 
-`wind.rs` is one wind for grass, branches and motes. Rainward's lamps reflect as streaks on
+`wind.rs` is one wind for grass and motes. Rainward's lamps reflect as streaks on
 the wet street (the light map), and rain ripples the ground (`ambient.rs`).
 
 ## Quality

@@ -1,5 +1,5 @@
-//! Stage art: tiled ground, scattered props with glows, weather and foreground branches (the
-//! vignette is the lens's, `post.rs`).
+//! Stage art: tiled ground, scattered props with glows and weather (the vignette is the
+//! lens's, `post.rs`).
 //! The prologue (Neon Shotengai) has its own tiles; each campaign world has four ground
 //! tiles and four props (A tall light, B medium, C wide, D small) in `art/src/wN/`.
 //! The prop layout lives in `sim::stage` (it is also used for collision).
@@ -26,9 +26,8 @@ pub struct StageArt {
     glow: Texture2D,
     /// Black with a clear centre: the downpour's limited sight.
     dark: Texture2D,
-    /// The current world's grass (loaded on first use) and the foreground branches.
+    /// The current world's grass (loaded on first use).
     grass: std::cell::RefCell<Option<(StageId, Option<crate::foliage::Grass>)>>,
-    branches: crate::foliage::Branches,
 }
 
 fn rgb(hex: u32, a: f32) -> Color {
@@ -166,7 +165,7 @@ impl StageArt {
         let glow = radial(64, [255, 255, 255], |d| (1.0 - d).max(0.0).powi(2));
         let dark = radial(128, [2, 3, 8], |d| ((d - 0.22) / 0.4).clamp(0.0, 1.0) * 0.86);
         let cards = (1..=5).map(|w| crate::terrain_bake::ground_texture(&format!("w{w}/terrain/ground_a"), 1.0)).collect();
-        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, glow, dark, grass: std::cell::RefCell::new(None), branches: crate::foliage::Branches::load() }
+        StageArt { tex, worlds, baker: std::cell::RefCell::new(None), cards, glow, dark, grass: std::cell::RefCell::new(None) }
     }
 
     fn get(&self, name: &str) -> &Texture2D {
@@ -344,10 +343,6 @@ impl StageArt {
         }
     }
 
-    /// The world's foreground branches (screen space), `cam` the camera's world position.
-    pub fn draw_branches(&self, stage: StageId, cam: Vec2, time: f64) {
-        self.branches.draw(stage, cam, time);
-    }
 
     /// Rainward 13's downpour: sight shrinks to a pool around the player, rain streaks
     /// across the screen, and lightning flashes it white. `centre` is in screen pixels.

@@ -646,9 +646,6 @@ async fn main() {
             let pp = cam.world_to_screen(vec2(world.player.pos.x, world.player.pos.y));
             stage_art.draw_downpour(pp, now, fx.flash);
         }
-        if !matches!(world.state, RunState::Dead | RunState::Won) {
-            stage_art.draw_branches(world.cfg.stage, cam.target, now);
-        }
         kit::begin_ui();
         if screen != Screen::Paused && !map_open {
             let t_h = get_time();
