@@ -235,7 +235,8 @@ impl StageArt {
     }
 
     /// Ground tiles, props and their glows (everything under the characters).
-    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, hero: Vec2, time: f64) {
+    /// `under` draws what lies on the ground beneath the props (scorch marks).
+    pub fn draw_ground(&self, stage: StageId, terrain: &sim::terrain::Terrain, cam: &Camera2D, hero: Vec2, time: f64, under: &dyn Fn()) {
         let (sw, sh) = (screen_width() / world_scale(), screen_height() / world_scale());
         let (x0, y0) = (cam.target.x - sw / 2.0, cam.target.y - sh / 2.0);
         if terrain.on {
@@ -272,6 +273,7 @@ impl StageArt {
 
         // Grass under the props, so their shadows fall across it.
         self.draw_grass(stage, terrain, Rect::new(x0, y0, sw, sh), hero, time);
+        under();
 
         // Props: up to two per chunk, never on the path (layout from the sim).
         let margin = 40.0;

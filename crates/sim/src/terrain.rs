@@ -246,6 +246,71 @@ pub struct Terrain {
 /// Step (units) of the smooth walls' look-around samples.
 const FINE: f32 = 8.0;
 
+/// The smooth walls' rule (`Terrain::wall_field`) at `p`, given whether its cell is open (a
+/// road or the start clearing) and the height field `h`: positive inside a cliff.
+fn wall_field_with(p: Vec2, open: bool, h: impl Fn(Vec2) -> f32) -> f32 {
+    if open {
+        return -1.0;
+    }
+    let here = h(p);
+    let face = (FACE_CELLS as f32 * CELL / FINE) as i32;
+    let north = (1..=face).map(|k| h(Vec2::new(p.x, p.y - k as f32 * FINE))).fold(f32::MIN, f32::max);
+    const D: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    let around = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (-D, -D), (D, -D)]
+        .iter()
+        .flat_map(|&(dx, dy)| (1..=(CELL / FINE) as i32).map(move |k| (dx * k as f32 * FINE, dy * k as f32 * FINE)))
+        .map(|(dx, dy)| h(Vec2::new(p.x + dx, p.y + dy)))
+        .fold(f32::MAX, f32::min);
+    [LOW_BELOW, HIGH_ABOVE].iter().map(|&t| (t - here).min(north - t).max((here - t).min(t - around))).fold(f32::MIN, f32::max)
+}
+
+/// The smooth walls over a block of the world, computed from scratch: exactly the field the
+/// player collides with (`Terrain::wall_field`), for drawing. The client paints rock where
+/// it's positive, so what looks like a wall is one and nothing else is.
+pub struct WallGrid {
+    origin: (i32, i32),
+    n: i32,
+    heights: Vec<f32>,
+    open: Vec<bool>,
+}
+
+impl WallGrid {
+    /// Covers `min`..`max` (world units).
+    pub fn new(stage: StageId, min: Vec2, max: Vec2) -> WallGrid {
+        // A border for the look-arounds (two cells north, one around) and interpolation.
+        let (x0, y0) = (cell_of(min).0 - 4, cell_of(min).1 - 4);
+        let n = ((max.x - min.x).max(max.y - min.y) / CELL).ceil() as i32 + 9;
+        let mut heights = Vec::with_capacity((n * n) as usize);
+        let mut open = Vec::with_capacity((n * n) as usize);
+        for j in 0..n {
+            for i in 0..n {
+                let (x, y) = (x0 + i, y0 + j);
+                heights.push(height_cells(stage, x as f32 + 0.5, y as f32 + 0.5));
+                open.push(is_road(stage, x, y) || clear(x, y));
+            }
+        }
+        WallGrid { origin: (x0, y0), n, heights, open }
+    }
+
+    /// The height field between cell centres (as `Terrain::height_at`).
+    fn height_at(&self, p: Vec2) -> f32 {
+        let (u, v) = (p.x / CELL - 0.5 - self.origin.0 as f32, p.y / CELL - 0.5 - self.origin.1 as f32);
+        let (i, j) = ((u.floor() as i32).clamp(0, self.n - 2), (v.floor() as i32).clamp(0, self.n - 2));
+        let (fx, fy) = (u - i as f32, v - j as f32);
+        let h = |i: i32, j: i32| self.heights[(j * self.n + i) as usize];
+        let top = h(i, j) + (h(i + 1, j) - h(i, j)) * fx;
+        let bot = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * fx;
+        top + (bot - top) * fy
+    }
+
+    /// The walls' field at `p`: positive inside a cliff, negative in the open.
+    pub fn field(&self, p: Vec2) -> f32 {
+        let (cx, cy) = cell_of(p);
+        let (i, j) = ((cx - self.origin.0).clamp(0, self.n - 1), (cy - self.origin.1).clamp(0, self.n - 1));
+        wall_field_with(p, self.open[(j * self.n + i) as usize], |q| self.height_at(q))
+    }
+}
+
 impl Terrain {
     pub fn new(stage: StageId) -> Self {
         let mut t = Terrain { stage, on: enabled(stage), origin: (0, 0), cells: Vec::new(), flow_origin: (0, 0), flow: Vec::new(), sight: Vec::new(), sight_goal: Vec2::ZERO, sight_row: FLOW, props_origin: (0, 0), props_n: 0, props: Vec::new(), heights: Vec::new() };
@@ -411,19 +476,7 @@ impl Terrain {
     /// north). Roads and the start clearing are open.
     fn wall_field(&self, p: Vec2) -> f32 {
         let (cx, cy) = cell_of(p);
-        if self.cell(cx, cy) & ROAD != 0 || clear(cx, cy) {
-            return -1.0;
-        }
-        let h = self.height_at(p);
-        let face = (FACE_CELLS as f32 * CELL / FINE) as i32;
-        let north = (1..=face).map(|k| self.height_at(Vec2::new(p.x, p.y - k as f32 * FINE))).fold(f32::MIN, f32::max);
-        const D: f32 = std::f32::consts::FRAC_1_SQRT_2;
-        let around = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (-D, -D), (D, -D)]
-            .iter()
-            .flat_map(|&(dx, dy)| (1..=(CELL / FINE) as i32).map(move |k| (dx * k as f32 * FINE, dy * k as f32 * FINE)))
-            .map(|(dx, dy)| self.height_at(Vec2::new(p.x + dx, p.y + dy)))
-            .fold(f32::MAX, f32::min);
-        [LOW_BELOW, HIGH_ABOVE].iter().map(|&t| (t - h).min(north - t).max((h - t).min(t - around))).fold(f32::MIN, f32::max)
+        wall_field_with(p, self.cell(cx, cy) & ROAD != 0 || clear(cx, cy), |q| self.height_at(q))
     }
 
     /// Pushes a circle out of the cliffs. The walls are smooth (the drawn contours, see
@@ -625,6 +678,25 @@ mod tests {
     use super::*;
 
     const W1: StageId = StageId::ShrineValley;
+
+    /// What the client draws as wall is exactly what the player collides with.
+    #[test]
+    fn drawn_walls_are_the_real_walls() {
+        for st in [W1, StageId::EmberLeaf, StageId::PaleCitadel, StageId::Rainward, StageId::Shatterline] {
+            let t = Terrain::new(st);
+            let g = WallGrid::new(st, Vec2::new(-600.0, -600.0), Vec2::new(600.0, 600.0));
+            let mut walls = 0;
+            for j in -75..75 {
+                for i in -75..75 {
+                    let p = Vec2::new(i as f32 * 8.0 + 1.3, j as f32 * 8.0 + 2.7);
+                    let (a, b) = (t.wall_field(p), g.field(p));
+                    assert!((a - b).abs() < 1e-5, "{st:?} at {p:?}: sim {a} drawn {b}");
+                    walls += (a > 0.0) as u32;
+                }
+            }
+            assert!(walls > 100, "{st:?} has walls to check");
+        }
+    }
 
     #[test]
     fn prologue_is_flat() {

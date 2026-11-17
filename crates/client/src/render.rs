@@ -623,6 +623,10 @@ pub struct Fx {
     /// Equipment drops: (pos, rarity, age).
     /// (world pos, rarity, age, label, label width) — label and width are cached at push.
     gear_drops: Vec<(Vec2, sim::gear::Rarity, f32, String, f32)>,
+    /// Fallen enemies burning away: (pos, kind, edge colour, age) (crate::worldfx).
+    dying: Vec<(Vec2, EnemyKind, Color, f32)>,
+    /// Scorch marks: (pos, radius, age).
+    scorches: Vec<(Vec2, f32, f32)>,
 }
 
 const MAX_NUMBERS: usize = 40;
@@ -724,6 +728,9 @@ impl Fx {
                         self.say(self.lines().night_lord_down);
                     }
                     self.spray(vec2(pos.x, pos.y), n, color);
+                    if self.dying.len() < crate::worldfx::MAX_DYING {
+                        self.dying.push((vec2(pos.x, pos.y), kind, Color::new(1.0, 0.55 + 0.35 * color.g, 0.25 + 0.3 * color.b, 1.0), 0.0));
+                    }
                 }
                 Event::PlayerHurt => {
                     self.shake = self.shake.max(0.18);
@@ -765,9 +772,13 @@ impl Fx {
                 }
                 Event::BossPhase { pos } => {
                     self.free_bursts.push((vec2(pos.x, pos.y), 90.0, 0.0, 1));
+                    self.scorch(vec2(pos.x, pos.y), 60.0);
                     self.shake = self.shake.max(0.35);
                 }
                 Event::Hazard { pos, radius, kind, friendly } => {
+                    if kind == 0 {
+                        self.scorch(vec2(pos.x, pos.y), radius * 0.9);
+                    }
                     let style = match kind {
                         0 => style::METEOR,
                         1 => style::SKYBOLT,
@@ -825,6 +836,7 @@ impl Fx {
                 }
                 Event::Impact { pos, radius } => {
                     self.impacts.push((vec2(pos.x, pos.y), radius, 0.0));
+                    self.scorch(vec2(pos.x, pos.y), radius * 0.8);
                     self.shake = self.shake.max(0.04);
                 }
                 Event::Burst { pos, radius, style } => {
@@ -949,8 +961,20 @@ impl Fx {
         self.hero_rig.update(rig, dt, pl.moving, vec2(pl.pos.x, pl.pos.y), pl.facing.x < 0.0);
     }
 
+    /// A scorch mark on the ground (the oldest goes when there are too many).
+    fn scorch(&mut self, p: Vec2, r: f32) {
+        if self.scorches.len() >= crate::worldfx::MAX_SCORCHES {
+            self.scorches.remove(0);
+        }
+        self.scorches.push((p, r.clamp(10.0, 90.0), 0.0));
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.flash = (self.flash - dt * 4.0).max(0.0);
+        self.dying.iter_mut().for_each(|d| d.3 += dt);
+        self.dying.retain(|d| d.3 < crate::worldfx::DISSOLVE);
+        self.scorches.iter_mut().for_each(|d| d.2 += dt);
+        self.scorches.retain(|d| d.2 < crate::worldfx::SCORCH);
         for g in &mut self.gear_drops {
             g.2 += dt;
         }
@@ -1546,7 +1570,22 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     });
     let p = world.player.pos;
     let view = view_rect(cam);
-    stage.draw_ground(world.cfg.stage, &world.terrain, cam, vec2(p.x, p.y + 6.0), time);
+    stage.draw_ground(world.cfg.stage, &world.terrain, cam, vec2(p.x, p.y + 6.0), time, &|| crate::worldfx::draw_scorches(&fx.scorches, view, a.vfx.tex("glow")));
+    // Dev: `KZ_WALLS` dots the sim's real walls (red) over the picture, to check they match.
+    if cfg!(not(target_arch = "wasm32")) && std::env::var("KZ_WALLS").is_ok() {
+        let g = sim::terrain::WallGrid::new(world.cfg.stage, sim::Vec2::new(view.x, view.y), sim::Vec2::new(view.x + view.w, view.y + view.h));
+        let (mut y, step) = (view.y - view.y.rem_euclid(6.0), 6.0);
+        while y < view.y + view.h {
+            let mut x = view.x - view.x.rem_euclid(6.0);
+            while x < view.x + view.w {
+                if g.field(sim::Vec2::new(x, y)) > 0.0 {
+                    draw_rectangle(x - 1.0, y - 1.0, 2.0, 2.0, Color::new(1.0, 0.0, 0.0, 0.9));
+                }
+                x += step;
+            }
+            y += step;
+        }
+    }
 
     // The rigged hero, drawn at the end of this fn (after the world target), at full resolution.
     let mut hires_player: Option<(std::rc::Rc<crate::rig::RigDef>, Vec2, bool, Color)> = None;
@@ -1751,7 +1790,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     casts.flush(cam);
     shadows.flush();
     outlines.flush();
-    sprites.flush();
+    // The crowd, lit with volume by the moon (crate::litsprite).
+    crate::litsprite::draw_batch(&mut sprites.0, &crate::litsprite::MOON);
+    sprites.0.clear();
+    crate::worldfx::draw_dying(&fx.dying, view, &|k| a.enemy_tex(k).clone());
     for (x, top, rarity, alpha) in cues {
         draw_rarity_cue(x, top, rarity, alpha);
     }
@@ -1765,6 +1807,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let mut l = l.borrow_mut();
         crate::light::sources::gather(world, &mut l, view, time);
         crate::ambient::lights(world.cfg.stage, view, time, &mut l);
+        crate::worldfx::scorch_lights(&fx.scorches, &mut l);
         l.apply(cam, view, a.vfx.tex("glow"), &|f| a.vfx.additive(f));
     });
     crate::ambient::draw(world.cfg.stage, view, time, &a.vfx);
@@ -1953,7 +1996,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         if target.is_some() {
             hires_player = Some((rig.clone().unwrap(), feet, flip, tint));
         } else {
-            crate::rig::draw(rig.as_deref().unwrap(), &fx.hero_rig, feet, flip, tint);
+            let light = crate::light::LIGHTS.with(|l| l.borrow().rim_at(feet));
+            crate::rig::draw_lit(rig.as_deref().unwrap(), &fx.hero_rig, feet, flip, tint, &light);
         }
     } else {
         draw_texture_ex(tex, x, y, tint, params);
@@ -2324,7 +2368,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         if let Some((rig, feet, left, tint)) = hires_player.take() {
             let direct = Camera2D { target: cam.target, zoom: cam.zoom, offset: cam.offset, rotation: cam.rotation, render_target: None, viewport: cam.viewport };
             set_camera(&direct);
-            crate::rig::draw(&rig, &fx.hero_rig, feet, left, tint);
+            let light = crate::light::LIGHTS.with(|l| l.borrow().rim_at(feet));
+            crate::rig::draw_lit(&rig, &fx.hero_rig, feet, left, tint, &light);
             set_default_camera();
         }
     }

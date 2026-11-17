@@ -39,13 +39,15 @@ impl Grass {
     /// Draws every tuft in `view`. `hero` parts the grass; `time` drives the wind.
     pub fn draw(&self, stage: StageId, view: Rect, hero: Vec2, time: f64) {
         let t = time as f32;
+        // Low quality: half the grass.
+        let density = if crate::post::quality() == crate::post::Quality::Low { self.density * 0.5 } else { self.density };
         let mut batches: Vec<(Vec<Vertex>, Vec<u16>)> = vec![(Vec::new(), Vec::new()); self.tex.len()];
         let (cx0, cy0) = ((view.x / CELL).floor() as i32 - 1, (view.y / CELL).floor() as i32 - 1);
         let (cx1, cy1) = (((view.x + view.w) / CELL).ceil() as i32 + 1, ((view.y + view.h) / CELL).ceil() as i32 + 1);
         for cy in cy0..=cy1 {
             for cx in cx0..=cx1 {
                 let h = sim::stage::hash(cx, cy, 0x6A55);
-                if (h & 0xFFFF) as f32 / 65535.0 > self.density {
+                if (h & 0xFFFF) as f32 / 65535.0 > density {
                     continue;
                 }
                 let j = |s: u32| ((h >> s) & 0xFF) as f32 / 255.0;
@@ -69,8 +71,8 @@ impl Grass {
                 let hgt = self.height * (0.75 + 0.5 * j(4));
                 let w = hgt * tx.width() / tx.height();
                 // Wind: slow gusts rolling across the field, and a quicker flutter per tuft.
-                let gust = (t * 0.9 - p.x * 0.012 - p.y * 0.006).sin() * 0.5 + 0.5;
-                let mut bend = (gust * gust * 0.22 + 0.04 * (t * 3.1 + j(12) * 6.0).sin()) * hgt;
+                let gust = crate::wind::gust(p, t);
+                let mut bend = (gust * 0.24 * crate::wind::DIR.x.signum() + 0.04 * (t * 3.1 + j(12) * 6.0).sin()) * hgt;
                 // The hero parts the grass: tops lean away, more the closer.
                 let d = p - hero;
                 let near = (1.0 - d.length() / PART).max(0.0);
@@ -143,7 +145,9 @@ impl Branches {
             let shown = if w < h * 0.75 { 0.85 } else { 0.62 };
             let x = if right { sw - w * shown } else { -w * (1.0 - shown) } + drift.x;
             let y = if bottom { sh - h * 0.6 } else { -h * 0.4 } + drift.y;
-            let sway = (t * 0.7 + k as f32 * 1.3).sin() * 0.035 + (t * 1.9 + k as f32).sin() * 0.01;
+            // Swaying in the world's wind: harder in a gust.
+            let g = crate::wind::gust(cam, t);
+            let sway = (t * 0.7 + k as f32 * 1.3).sin() * (0.02 + 0.03 * g) + (t * 1.9 + k as f32).sin() * 0.01 + g * 0.02;
             let pivot = vec2(if right { sw } else { 0.0 }, if bottom { sh } else { 0.0 });
             draw_texture_ex(
                 tex,

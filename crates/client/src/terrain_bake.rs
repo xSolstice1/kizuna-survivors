@@ -88,6 +88,8 @@ const float RIM = 16.0;
 
 float sm(float t) { t = clamp(t, 0.0, 1.0); return t * t * (3.0 - 2.0 * t); }
 vec4 M(vec2 d) { return texture2D(Texture, uv + d * MaskScale); }
+// The sim's wall field (the mask's right half): above 0.5 inside a wall.
+float Wl(vec2 d) { return texture2D(Texture, uv + vec2(0.5, 0.0) + d * MaskScale).r; }
 
 // Hex tiling: each ground texture is read three times, at random offsets fixed to the
 // vertices of a triangle grid, and blended by (sharpened) barycentric weights, so the repeat
@@ -168,43 +170,38 @@ void main() {
     c *= 1.0 - 0.18 * sm(1.0 - abs(r - 0.5) * 2.0);
     c = mix(c, trail * (0.92 + 0.16 * pr), r);
 
-    // Walls, the same everywhere: rock is wall, ground is open, stairs lead between levels.
-    // An edge whose drop faces south shows its rock face below it (the faces loop). Any other
-    // edge is walled on its higher side for one sim cell (RIM units): drawn as a rocky rim
-    // with a lit lip at the drop and a dark crevice where the open ground begins. Roads cross
-    // them as stairs. The lower side gets contact shade at the wall's foot.
+    // Walls exactly where the sim has them: rock is wall, ground is open, stairs lead between
+    // levels. `ws` is the signed distance (units) to the walls' outline, positive inside.
+    float wv = Wl(vec2(0.0)) - 0.5;
+    vec2 wgr = vec2(Wl(vec2(4.0, 0.0)) - Wl(vec2(-4.0, 0.0)), Wl(vec2(0.0, 4.0)) - Wl(vec2(0.0, -4.0))) / 8.0;
+    float ws = wv / max(length(wgr), 1e-4);
+    float wall = sm(ws / 1.2 + 0.5);
+    float drop = min(abs(sl), abs(sh));
+    // Contact shade on the open ground all round every wall.
+    c *= 1.0 - (1.0 - sm(-ws / 9.0)) * 0.36 * (1.0 - wall) * (1.0 - r);
+    // A wall that isn't a south rock face (a drop to the north, east or west, walled on its
+    // high side): a rocky rim, lit at the drop, outlined dark where the open ground begins.
     vec3 rockCap = texture2D(CliffTex, w / 64.0 + vec2(0.0, 0.3)).rgb;
+    vec3 cap = mix(c, rockCap * (0.9 + 0.2 * pr), 0.6);
+    cap *= 1.0 + 0.4 * (1.0 - sm(drop / 2.5));
+    cap *= 1.0 - 0.45 * (1.0 - sm(ws / 2.2)) * sm((drop - 3.0) / 2.0);
+    c = mix(c, cap, wall);
     for (int i = 0; i < 2; i++) {
         float s = i == 0 ? sl : sh;
-        vec2 gr = i == 0 ? gl : gh;
-        vec2 g = normalize(gr + 1e-6);
+        vec2 g = normalize((i == 0 ? gl : gh) + 1e-6);
         float south = sm((-g.y - 0.35) / 0.4);
         float lit = sm((dot(-g, MOON) - 0.2) / 0.5);
-        float open = 1.0 - r;
-        // The rim band: 0 < s < RIM on the higher side (a little ragged, like rock).
-        float edge = RIM + (wob - 0.5) * 3.0;
-        float band = step(0.0, s) * (1.0 - sm((s - edge + 1.0) / 2.0)) * (1.0 - south);
+        // Stairs where a road climbs past such a rim: treads, dark risers, curbs.
+        float band = step(0.0, s) * (1.0 - sm((s - RIM + 1.0) / 2.0)) * (1.0 - south) * r;
         if (band > 0.0) {
-            vec3 cap = mix(c, rockCap * (0.9 + 0.2 * pr), 0.55) * (1.0 + 0.18 * lit);
-            // Bevel: bright lip at the drop, a dark crevice line at the inner edge.
-            cap *= 1.0 + 0.45 * (1.0 - sm(s / 2.5));
-            cap *= 1.0 - 0.45 * sm((s - edge + 3.5) / 2.0) * (1.0 - sm((s - edge + 0.5) / 1.5));
-            // Stairs where a road crosses the rim: treads with dark risers, across the slope.
             float st = fract(s / 4.0);
-            vec3 stone = mix(trail, rockCap, 0.35);
-            vec3 stairs = stone * (0.75 + 0.25 * sm(s / RIM)) * (1.0 - 0.5 * sm((st - 0.68) / 0.1));
+            vec3 stairs = mix(trail, rockCap, 0.35) * (0.75 + 0.25 * sm(s / RIM)) * (1.0 - 0.5 * sm((st - 0.68) / 0.1));
             stairs *= 1.0 + 0.35 * (1.0 - sm(st / 0.1));
-            // Curbs along the stairs' sides.
             stairs *= 1.0 - 0.35 * (1.0 - sm(abs(r - 0.55) / 0.2));
-            c = mix(c, mix(cap, stairs, r), band);
+            c = mix(c, stairs, band);
         }
-        // Contact shade on the lower side, crisp at the wall's foot, then broad.
-        float below = step(s, 0.0);
-        float ao = below * ((1.0 - sm(-s / 7.0)) * 0.40 + (1.0 - sm(-s / 26.0)) * 0.14);
-        c *= 1.0 - ao * (1.0 - 0.6 * r) * (1.0 - south);
         // South edges: a lit lip along the top of the face.
-        float lipS = step(0.0, s) * (1.0 - sm(s / 2.5)) * south * open;
-        c *= 1.0 + lipS * (0.35 + 0.15 * lit);
+        c *= 1.0 + step(0.0, s) * (1.0 - sm(s / 2.5)) * south * (1.0 - r) * (0.35 + 0.15 * lit);
     }
 
     // Rock faces below edges with higher ground to the north: the higher edge first, the
@@ -227,8 +224,10 @@ void main() {
             vec3 stairs = mix(trail, rock, 0.3) * (0.98 - 0.3 * v) * (1.0 - 0.5 * sm((st - 0.62) / 0.12));
             stairs *= 1.0 + 0.35 * (1.0 - sm(st / 0.1));
             stairs *= 1.0 - 0.35 * (1.0 - sm(abs(r - 0.55) / 0.2));
-            c = mix(rock, stairs, onRoad);
-            faced = 1.0;
+            // Only where it really is wall (or stairs): a face never covers open ground.
+            float here = max(wall, onRoad);
+            c = mix(c, mix(rock, stairs, onRoad), here);
+            faced = max(faced, here);
         } else if (faced < 0.5) {
             // The face's foot: a crisp contact line, then its shadow.
             float k = (d - FACE) / SHADOW;
@@ -354,7 +353,7 @@ impl Baker {
                 // The marble terrace (w3) and the sidewalk slabs (w4) are regular grids.
                 let grid_high = matches!(stage, StageId::PaleCitadel | StageId::Rainward);
                 m.set_uniform("Hex", vec4(1.0, 1.0, if grid_high { 0.0 } else { 1.0 }, 1.0));
-                m.set_uniform("MaskScale", vec2(1.0 / (G as f32 * STEP), 1.0 / (G as f32 * STEP)));
+                m.set_uniform("MaskScale", vec2(1.0 / (2.0 * G as f32 * STEP), 1.0 / (G as f32 * STEP)));
                 Some(m)
             }
             Err(e) => {
@@ -388,21 +387,27 @@ impl Baker {
     fn mask(&self, key: (i32, i32)) -> Texture2D {
         let o = vec2(key.0 as f32 * CHUNK - MARGIN, key.1 as f32 * CHUNK - MARGIN);
         let enc = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-        let mut px = vec![255u8; G * G * 4];
+        // Two halves side by side: the fields (left) and the sim's own walls (right, red), so
+        // rock is drawn exactly where the player is stopped and nowhere else.
+        let span = G as f32 * STEP;
+        let walls = sim::terrain::WallGrid::new(self.stage, sim::Vec2::new(o.x, o.y), sim::Vec2::new(o.x + span, o.y + span));
+        let mut px = vec![255u8; 2 * G * G * 4];
         for j in 0..G {
             for i in 0..G {
                 let p = o + vec2((i as f32 + 0.5) * STEP, (j as f32 + 0.5) * STEP);
                 let q = sim::Vec2::new(p.x, p.y);
-                let k = (j * G + i) * 4;
+                let k = (j * 2 * G + i) * 4;
                 let h = height(self.stage, q);
                 px[k] = enc((h - LOW_BELOW) * K + 0.5);
                 let (dv, dh) = road_distances(self.stage, q);
                 px[k + 1] = enc(dv / 4.0);
                 px[k + 2] = enc((h - HIGH_ABOVE) * K + 0.5);
                 px[k + 3] = enc(dh / 4.0);
+                let kw = k + G * 4;
+                px[kw] = enc(walls.field(q) * K + 0.5);
             }
         }
-        let t = Texture2D::from_rgba8(G as u16, G as u16, &px);
+        let t = Texture2D::from_rgba8((2 * G) as u16, G as u16, &px);
         t.set_filter(FilterMode::Linear);
         t
     }

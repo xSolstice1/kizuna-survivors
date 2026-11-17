@@ -13,6 +13,7 @@ mod devmenu;
 mod foliage;
 mod kit;
 mod light;
+mod litsprite;
 mod menu;
 mod platform;
 mod post;
@@ -29,6 +30,8 @@ mod tutorial;
 mod ui;
 mod vfx;
 mod voice;
+mod wind;
+mod worldfx;
 
 use render::{Assets, Fx};
 
@@ -248,7 +251,9 @@ async fn main() {
         let in_run = screen == Screen::Playing && !matches!(world.state, RunState::Dead | RunState::Won) && !world.paused();
         // Graphics quality: the saved choice, and Auto's watch on the frame rate (not in the
         // dev harness, which measures one quality on purpose).
-        post::set_setting(profile.graphics);
+        // Dev: `KZ_GFX=1..3` forces Low / Medium / High.
+        let forced = if cfg!(not(target_arch = "wasm32")) { std::env::var("KZ_GFX").ok().and_then(|v| v.parse().ok()) } else { None };
+        post::set_setting(forced.unwrap_or(profile.graphics));
         post::frame(dt, in_run && perf.is_none());
         touch.update(in_run && !map_open && tip.is_none());
         let portrait = screen_height() > screen_width();

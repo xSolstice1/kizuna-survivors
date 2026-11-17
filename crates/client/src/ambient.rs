@@ -68,17 +68,21 @@ fn motes(stage: StageId, view: Rect, time: f64, mut f: impl FnMut(Vec2, f32, f32
         return;
     }
     let t = time as f32;
+    // Low quality: half the motes.
+    let per_cell = if crate::post::quality() == crate::post::Quality::Low { k.per_cell.div_ceil(2) } else { k.per_cell };
     let (cx0, cy0) = (((view.x - CELL) / CELL).floor() as i32, ((view.y - CELL) / CELL).floor() as i32);
     let (cx1, cy1) = (((view.x + view.w + CELL) / CELL).floor() as i32, ((view.y + view.h + CELL) / CELL).floor() as i32);
     for cy in cy0..=cy1 {
         for cx in cx0..=cx1 {
-            for i in 0..k.per_cell {
+            for i in 0..per_cell {
                 let h = hash(cx, cy, 0xA11 + i);
                 let (u, v, ph) = (unit(h), unit(h >> 8 ^ 0x5bd1), unit(h >> 16 ^ 0x2c3a) * std::f32::consts::TAU);
                 // Drift and wander, wrapped inside the cell so the field never thins out.
                 let base = vec2(u, v) * CELL + k.drift * t;
                 let w = vec2((t * 0.37 + ph).sin(), (t * 0.29 + ph * 1.7).cos()) * k.wander;
                 let local = vec2(base.x.rem_euclid(CELL), base.y.rem_euclid(CELL)) + w;
+                // Gusts carry them downwind.
+                let local = local + crate::wind::DIR * crate::wind::gust(vec2(cx as f32, cy as f32) * CELL + local, t) * 14.0;
                 let p = vec2(cx as f32 * CELL, cy as f32 * CELL) + local;
                 if p.x < view.x - 20.0 || p.x > view.x + view.w + 20.0 || p.y < view.y - 20.0 || p.y > view.y + view.h + 20.0 {
                     continue;
@@ -210,6 +214,9 @@ fn mist_texture() -> Texture2D {
 pub fn draw_ground_fx(stage: StageId, view: Rect, time: f64, vfx: &Vfx) {
     if stage == StageId::Rainward {
         ripples(view, time, vfx);
+    }
+    if crate::post::quality() == crate::post::Quality::Low {
+        return; // no mist on Low
     }
     let (c, drift) = mist(stage);
     let tex = mist_texture();

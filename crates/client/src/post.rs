@@ -182,7 +182,11 @@ void main() {
     float t = sm((abs(uv.y - 0.5) - 0.2) / 0.3) * Fx.z;
     c = mix(c, texture2D(Soft, p).rgb, t);
     // Bloom, tight and wide.
-    c += (texture2D(Bloom1, p).rgb * 0.45 + texture2D(Bloom2, p).rgb * 0.55) * Look.z;
+    // Bounded (a screen full of spells glows, it doesn't white out), and weaker where the
+    // picture is already bright.
+    vec3 b = texture2D(Bloom1, p).rgb * 0.45 + texture2D(Bloom2, p).rgb * 0.55;
+    b = b / (1.0 + 1.5 * b);
+    c += b * Look.z * (1.0 - 0.6 * dot(c, vec3(0.333)));
     c = shoulder(c);
     // Grade: tint the darks, scale the brights, then saturation and contrast.
     c = c * Gain + Lift * (1.0 - c);
