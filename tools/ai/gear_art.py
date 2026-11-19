@@ -5,6 +5,7 @@
     python3 -I tools/ai/gear_art.py wear ren [--tier 0] [--only a0]   # outfit edits (nano)
     python3 -I tools/ai/gear_art.py slice ren             # cut the edits into worn pieces
     python3 tools/ai/gear_art.py hero <name>              # a new rigged hero: wear + slice (~$1.20)
+                                                          # (or free: tools/ai/gear_fit.py hero <name>)
 
 Icons: art/hd/gear/<slot>/<base>_<tier>.png (256 palette PNGs), descriptions in gear_data.py.
 
