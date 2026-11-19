@@ -581,6 +581,10 @@ pub struct Fx {
     pub moves: crate::moves::MoveFx,
     /// The rigged hero's springs and walk/idle blend (see crate::rig).
     pub hero_rig: crate::rig::RigState,
+    /// The hero turns to face a punch for a moment: (seconds left, facing left).
+    punch_face: (f32, bool),
+    /// Punches that landed together, thrown one after another: (seconds until, aim up).
+    punch_queue: Vec<(f32, f32)>,
     numbers: Vec<DamageNumber>,
     particles: Vec<Particle>,
     /// Expanding barrier rings: (centre, age).
@@ -724,6 +728,14 @@ impl Fx {
         let boss_arrived = events.iter().any(|e| matches!(e, Event::BossSpawned(_) | Event::NightLordSpawned(_)));
         for ev in events {
             self.moves.absorb(ev);
+            if let Event::Punch { dir, .. } = *ev {
+                // Thrown with the arm (several at once become a combo, one after another); the
+                // hero faces it for a moment.
+                let up = (-dir.y).clamp(-1.0, 1.0).asin().to_degrees();
+                let at = self.punch_queue.last().map_or(0.0, |q| q.0 + 0.11);
+                self.punch_queue.push((at, up));
+                self.punch_face = (0.35 + at, dir.x < 0.0);
+            }
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
                 // show, ordinary hits one in six (one in fourteen once the screen is busy).
@@ -1009,7 +1021,8 @@ impl Fx {
     /// Advances the rigged hero (once per frame, before drawing).
     pub fn animate(&mut self, rig: &crate::rig::RigDef, world: &World, dt: f32) {
         let pl = &world.player;
-        self.hero_rig.update(rig, dt, pl.moving, vec2(pl.pos.x, pl.pos.y), pl.facing.x < 0.0);
+        let left = self.hero_left(pl.facing);
+        self.hero_rig.update(rig, dt, pl.moving, vec2(pl.pos.x, pl.pos.y), left);
     }
 
     /// A scorch mark on the ground (the oldest goes when there are too many).
@@ -1020,8 +1033,25 @@ impl Fx {
         self.scorches.push((p, r.clamp(10.0, 90.0), 0.0));
     }
 
+    /// Whether the hero is drawn facing left (facing a punch for a moment).
+    pub fn hero_left(&self, facing: sim::Vec2) -> bool {
+        if self.punch_face.0 > 0.0 {
+            self.punch_face.1
+        } else {
+            facing.x < 0.0
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.moves.update(dt);
+        self.punch_face.0 = (self.punch_face.0 - dt).max(0.0);
+        for q in &mut self.punch_queue {
+            q.0 -= dt;
+        }
+        while self.punch_queue.first().is_some_and(|q| q.0 <= 0.0) {
+            let (_, up) = self.punch_queue.remove(0);
+            self.hero_rig.punch(up);
+        }
         self.flash = (self.flash - dt * 4.0).max(0.0);
         self.dying.iter_mut().for_each(|d| d.3 += dt);
         self.dying.retain(|d| d.3 < crate::worldfx::DISSOLVE);
@@ -2073,7 +2103,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // each lamp nearby, like everything else's.
     let feet = vec2(p.x, p.y + 6.0);
     match &rig {
-        Some(r) => crate::light::LIGHTS.with(|l| l.borrow_mut().rig_shadow(r, &fx.hero_rig, feet, pl.facing.x < 0.0, 1.0, cam)),
+        Some(r) => crate::light::LIGHTS.with(|l| l.borrow_mut().rig_shadow(r, &fx.hero_rig, feet, fx.hero_left(pl.facing), 1.0, cam)),
         None => {
             let mut cast = crate::light::Shadows::new();
             cast.push(tex, feet, size.x, size.y, pl.facing.x < 0.0, 1.0);
@@ -2081,7 +2111,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         }
     }
     let shun = world.cfg.hero == HeroId::Shun;
-    let flip = pl.facing.x < 0.0;
+    let flip = fx.hero_left(pl.facing);
     // Shun's blade sits behind him at rest; mid-swing it's drawn in front.
     let swinging = fx.swing.0 > 0.0;
     if shun && !swinging {

@@ -300,7 +300,15 @@ pub struct RigState {
     phase: f32,
     pose: Pose,
     hurt: f32,
+    /// A punch in progress per arm (near, far): seconds left, and the aim (degrees up from
+    /// level); which arm throws the next one.
+    punch: [(f32, f32); 2],
+    next_arm: usize,
 }
+
+/// A punch: out fast (the first `PUNCH_OUT` of it), held a beat, then back.
+const PUNCH_TIME: f32 = 0.26;
+const PUNCH_OUT: f32 = 0.22;
 
 impl Default for RigState {
     fn default() -> Self {
@@ -326,6 +334,8 @@ impl Default for RigState {
             phase: 0.0,
             pose: Pose::idle(0.0),
             hurt: 0.0,
+            punch: [(0.0, 0.0); 2],
+            next_arm: 0,
         }
     }
 }
@@ -346,10 +356,35 @@ impl RigState {
         self.hurt = 0.15;
     }
 
+    /// Throw a punch with the next arm, `up` degrees above level (negative: down). The body
+    /// lunges into it.
+    pub fn punch(&mut self, up: f32) {
+        let i = self.next_arm;
+        self.next_arm = 1 - i;
+        self.punch[i] = (PUNCH_TIME, up.clamp(-60.0, 70.0));
+        self.flinch.v -= 70.0;
+        self.jolt.v -= 0.25;
+        self.head.v -= 40.0;
+    }
+
+    /// How far each arm is thrown out (0..1), and its aim.
+    fn punch_reach(&self, i: usize) -> (f32, f32) {
+        let (left, up) = self.punch[i];
+        if left <= 0.0 {
+            return (0.0, up);
+        }
+        let k = 1.0 - left / PUNCH_TIME;
+        let e = if k < PUNCH_OUT { (k / PUNCH_OUT).powf(0.6) } else { 1.0 - ((k - PUNCH_OUT) / (1.0 - PUNCH_OUT)).powi(2) };
+        (e.clamp(0.0, 1.0), up)
+    }
+
     /// Advance by `dt` seconds. `player` is the hero's world position; `left` = facing left.
     pub fn update(&mut self, def: &RigDef, dt: f32, moving: bool, player: Vec2, left: bool) {
         let dt = dt.clamp(0.0, 0.1);
         self.hurt = (self.hurt - dt).max(0.0);
+        for p in &mut self.punch {
+            p.0 = (p.0 - dt).max(0.0);
+        }
         // The player's own speed along the facing direction (source px/s), so starting,
         // stopping and turning swing the hair. Teleports are ignored.
         if let Some(prev) = self.player_prev {
@@ -486,10 +521,19 @@ fn draw_scaled(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color,
     let sq = q.squash + st.jolt.x;
     let body = world * rot(def.feet, q.lean + st.flinch.x, vec2(0.0, q.bob), vec2(1.0 + sq * 0.6, 1.0 - sq));
     let head = body * rot(p(HEAD), st.head.x, vec2(0.0, st.head_dy.x), Vec2::ONE);
-    let upper_near = body * turn(p(ARM_NEAR_UPPER), st.upper[0].x);
-    let upper_far = body * turn(p(ARM_FAR_UPPER), st.upper[1].x);
-    let fore_near = upper_near * turn(p(ARM_NEAR_FORE), st.fore[0].x);
-    let fore_far = upper_far * turn(p(ARM_FAR_FORE), st.fore[1].x);
+    // A punch swings the arm up to level with its aim (from hanging down, -90 is straight
+    // forward; a punch down the screen still reads as thrown forward, a little lower) and
+    // straightens the forearm.
+    let arm = |i: usize| {
+        let (e, up) = st.punch_reach(i);
+        let reach = -(90.0 + (up * 0.5).clamp(-30.0, 35.0));
+        (st.upper[i].x + (reach - st.upper[i].x) * e, st.fore[i].x * (1.0 - e))
+    };
+    let ((un, fnr), (uf, ff)) = (arm(0), arm(1));
+    let upper_near = body * turn(p(ARM_NEAR_UPPER), un);
+    let upper_far = body * turn(p(ARM_FAR_UPPER), uf);
+    let fore_near = upper_near * turn(p(ARM_NEAR_FORE), fnr);
+    let fore_far = upper_far * turn(p(ARM_FAR_FORE), ff);
     let leg = |i: usize, deg: f32, lift: f32| world * rot(p(i), deg, vec2(0.0, q.bob * 0.35), vec2(1.0, 1.0 - lift));
     let rigid = |_: f32, _: f32| 0.0;
 
