@@ -575,6 +575,8 @@ struct Particle {
 /// Purely visual state derived from sim events.
 #[derive(Default)]
 pub struct Fx {
+    /// The movement key's effects (crate::moves).
+    pub moves: crate::moves::MoveFx,
     /// The rigged hero's springs and walk/idle blend (see crate::rig).
     pub hero_rig: crate::rig::RigState,
     numbers: Vec<DamageNumber>,
@@ -647,6 +649,7 @@ impl Fx {
     }
 
     pub fn clear(&mut self) {
+        self.moves.clear();
         self.numbers.clear();
         self.particles.clear();
         self.rings.clear();
@@ -718,6 +721,7 @@ impl Fx {
         let mut round_banner = None;
         let boss_arrived = events.iter().any(|e| matches!(e, Event::BossSpawned(_) | Event::NightLordSpawned(_)));
         for ev in events {
+            self.moves.absorb(ev);
             match *ev {
                 // Numbers are sampled so crowds don't bury the screen: crits and big hits always
                 // show, ordinary hits one in six (one in fourteen once the screen is busy).
@@ -1005,6 +1009,7 @@ impl Fx {
     }
 
     pub fn update(&mut self, dt: f32) {
+        self.moves.update(dt);
         self.flash = (self.flash - dt * 4.0).max(0.0);
         self.dying.iter_mut().for_each(|d| d.3 += dt);
         self.dying.retain(|d| d.3 < crate::worldfx::DISSOLVE);
@@ -1923,6 +1928,9 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
             draw_texture_ex(&a.toya_mukade[0], (pos.x - 12.0).round(), (pos.y - 26.0).round(), Color::new(0.9, 0.1, 0.15, 0.35 * k), DrawTextureParams { dest_size: Some(crate::sprites::nat(&a.toya_mukade[0])), flip_x: *left, ..Default::default() });
         }
     }
+    // The movement key: what moves left on the ground, and moves in flight.
+    crate::moves::draw_ground(world, a, t);
+    crate::moves::draw_air(world, &fx.moves, a, t);
     // Shadow Step afterimages (explode shortly) and streaks.
     for (c, left) in &world.afterimages {
         let k = left / 0.35;
@@ -2002,6 +2010,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     // Centred on the player, feet 6 units below the position (24x32 sprites: -12, -26).
     let size = crate::sprites::nat(tex);
     let form = fox || hannya || mukade || domain || divine;
+    // A leaping move lifts the hero off the ground (the shadow stays).
+    let leap = crate::moves::lift(world);
     let (x, y, params) = if form {
         // Transformed forms are one sprite: walk it in code, in step with the rig's gait
         // (feet strike twice a stride: squash and settle; between them it rises), with a sway
@@ -2016,10 +2026,10 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         let sx = 1.0 + walk * 0.06 * land - 0.006 * breath;
         let rot = walk * (0.07 * sn + 0.04 * pl.facing.x);
         let dest = vec2(size.x * sx, size.y * sy);
-        let feet = vec2(p.x + walk * 0.8 * sn, p.y + 6.0 - lift);
+        let feet = vec2(p.x + walk * 0.8 * sn, p.y + 6.0 - lift - leap);
         (feet.x - dest.x / 2.0, feet.y - dest.y, DrawTextureParams { dest_size: Some(dest), flip_x: pl.facing.x < 0.0, rotation: rot, pivot: Some(feet), ..Default::default() })
     } else {
-        ((p.x - size.x / 2.0).round(), (p.y + 6.0 - size.y).round(), DrawTextureParams { dest_size: Some(size), flip_x: pl.facing.x < 0.0, ..Default::default() })
+        ((p.x - size.x / 2.0).round(), (p.y + 6.0 - size.y - leap).round(), DrawTextureParams { dest_size: Some(size), flip_x: pl.facing.x < 0.0, ..Default::default() })
     };
     if form {
         // Flaring outline: the sprite tinted (gold foxfire / crimson-black dread / star-blue), offset around.
@@ -2056,7 +2066,7 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     if rigged {
         // Not rounded to whole units: the rig moves smoothly between pixels. With a world
         // target it is drawn after the target is on screen, at full device resolution.
-        let feet = vec2(p.x, p.y + 6.0);
+        let feet = vec2(p.x, p.y + 6.0 - leap);
         if target.is_some() {
             hires_player = Some((rig.clone().unwrap(), feet, flip, tint));
         } else {

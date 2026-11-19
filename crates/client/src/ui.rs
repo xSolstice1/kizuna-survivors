@@ -305,7 +305,7 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
             let room = if touch { 210.0 } else { 210.0 - keycap(298.0 + ox, 78.0 + oy, full, glow) - 6.0 };
             kit::text(&label, 94.0 + ox, 90.0 + oy, kit::fit(&label, room, 14.0), if full { ready } else { FAINT });
             if full && !touch {
-                let prompt = format!("Press SPACE: {}", hero.special_name);
+                let prompt = format!("Press R: {}", hero.special_name);
                 let py = screen_height() - kit::MARGIN - ROUND_STRIP_H - 34.0;
                 let pw = kit::measure(&prompt, 20).width.min(w - 2.0 * kit::MARGIN - 24.0) + 24.0;
                 kit::rounded(w / 2.0 - pw / 2.0, py - 20.0, pw, 28.0, 14.0, Color::new(0.06, 0.05, 0.11, 0.7));
@@ -432,6 +432,8 @@ pub enum HudPart {
     Health,
     Loadout,
     Special,
+    /// The movement key's ring round the portrait (the MOVE button on touch).
+    Move,
     Timer,
     Minimap,
     Stats,
@@ -445,9 +447,11 @@ pub fn hud_rect(part: HudPart, world: &World, touch: bool) -> Rect {
     match part {
         HudPart::Xp => Rect::new(kit::MARGIN, kit::MARGIN, w - 2.0 * kit::MARGIN, 10.0),
         HudPart::Health => Rect::new(92.0 + ox, 38.0 + oy, 206.0, 16.0),
-        // The meter bar with its name and SPACE keycap; on touch, the SPECIAL button.
+        // The meter bar with its name and R keycap; on touch, the SPECIAL button.
         HudPart::Special if touch => crate::touch::special_rect(),
         HudPart::Special => Rect::new(92.0 + ox, 62.0 + oy, 210.0, 34.0),
+        HudPart::Move if touch => crate::touch::dash_rect(),
+        HudPart::Move => Rect::new(14.0 + ox, 27.0 + oy, 72.0, 72.0),
         HudPart::Loadout => {
             let hero = hero_def(world.cfg.hero);
             let weapons = hero.weapon_slots as f32 * 40.0 + 8.0 + 34.0;
@@ -474,14 +478,14 @@ fn weapon_pip(kind: sim::content::WeaponKind, x: f32, y: f32, s: f32) {
     element_pip(kind.element(), x + s - 7.0, y + 7.0, 4.5);
 }
 
-/// A SPACE key badge ending at `right`; dim while charging, pulsing gold when ready. Returns its width.
+/// An R key badge ending at `right`; dim while charging, pulsing gold when ready. Returns its width.
 fn keycap(right: f32, y: f32, ready: bool, glow: f32) -> f32 {
-    let kw = kit::measure("SPACE", 11).width + 12.0;
+    let kw = kit::measure("R", 11).width + 16.0;
     let x = right - kw;
     let edge = if ready { Color::new(1.0, 0.85, 0.45, glow) } else { Color::new(1.0, 1.0, 1.0, 0.3) };
     kit::rounded(x, y, kw, 17.0, 4.0, Color::new(0.1, 0.08, 0.16, 0.95));
     kit::rounded_outline(x, y, kw, 17.0, 4.0, 1.5, edge);
-    kit::text("SPACE", x + 6.0, y + 13.0, 11.0, if ready { edge } else { DIM });
+    kit::text("R", x + 8.0, y + 13.0, 11.0, if ready { edge } else { DIM });
     kw
 }
 

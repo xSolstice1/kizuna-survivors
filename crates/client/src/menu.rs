@@ -413,7 +413,7 @@ pub fn main_menu(profile: &Profile, assets: &Assets, art: &crate::stage::StageAr
     draw_circle_lines(cx2, cy2, 6.5, 1.2, Color::new(1.0, 1.0, 1.0, 0.45));
     kit::text("c", cx2 - 3.2, cy2 + 3.6, 11.0, Color::new(1.0, 1.0, 1.0, 0.45));
     kit::text(owner, w - kit::MARGIN - ow, h - kit::MARGIN, 13.0, Color::new(1.0, 1.0, 1.0, 0.45));
-    let hint = "WASD / arrows to move   ·   Space: special   ·   Esc to pause";
+    let hint = "WASD / arrows to move   ·   Space: dash   ·   R: special   ·   Esc to pause";
     kit::text_fit_centered(hint, w / 2.0, h - kit::MARGIN, w - 300.0, 13.0, Color::new(1.0, 1.0, 1.0, 0.4));
     action
 }

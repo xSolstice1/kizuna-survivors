@@ -17,6 +17,7 @@ mod kit;
 mod light;
 mod litsprite;
 mod menu;
+mod moves;
 mod platform;
 mod post;
 mod render;
@@ -145,6 +146,7 @@ async fn main() {
     let mut special_queued = false;
     // The movement key, aimed (None = the way the hero moves or faces).
     let mut dash_queued: Option<sim::Vec2> = None;
+    let mut dev_dash = 0u64;
     let mut overlay_focus = 0usize;
     let mut overlay_was_open = false;
     let mut cards_focus = 0usize;
@@ -562,15 +564,21 @@ async fn main() {
                 let a = world.time * 0.8;
                 input.move_dir = sim::Vec2::new(a.cos(), a.sin());
             }
-            special_queued |= is_key_pressed(KeyCode::Space) || touch.special;
+            special_queued |= is_key_pressed(KeyCode::R) || touch.special;
             input.special = special_queued;
-            // Movement key: Shift goes the way you're moving; right-click goes at the cursor
+            // Movement key: Space (or Shift) goes the way you're moving; right-click goes at the cursor
             // (the hero is at the screen's centre); on touch, the joystick's way.
-            if is_key_pressed(KeyCode::LeftShift) || is_key_pressed(KeyCode::RightShift) || touch.dash {
+            if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::LeftShift) || is_key_pressed(KeyCode::RightShift) || touch.dash {
                 dash_queued = Some(input.move_dir);
             } else if is_mouse_button_pressed(MouseButton::Right) {
                 let (mx, my) = mouse_position();
                 dash_queued = Some(sim::Vec2::new(mx - screen_width() / 2.0, my - screen_height() / 2.0));
+            }
+            dev_dash += 1;
+            if perf.is_some() && std::env::var("KZ_DASH").is_ok() && dev_dash % 14 == 0 {
+                // Dev: fire the movement key every 50 steps, turning its aim.
+                let a = world.tick as f32 * 0.037;
+                dash_queued = Some(sim::Vec2::new(a.cos(), a.sin()));
             }
             if let Some(aim) = dash_queued {
                 input.dash = true;
@@ -609,7 +617,7 @@ async fn main() {
             fx.track_trail(&world, dt);
         } else {
             acc = 0.0;
-            // Space on a menu (e.g. dismissing a chest) must not fire Purify afterwards.
+            // Space on a menu (e.g. dismissing a chest) must not fire a move afterwards.
             special_queued = false;
             dash_queued = None;
         }
@@ -729,6 +737,7 @@ async fn main() {
                 Step::Health => hud(HudPart::Health),
                 Step::Loadout => hud(HudPart::Loadout),
                 Step::Special | Step::SpecialReady => hud(HudPart::Special),
+                Step::Move => hud(HudPart::Move),
                 Step::Timer => hud(HudPart::Timer),
                 Step::Map => hud(HudPart::Minimap),
                 Step::Sen => hud(HudPart::Stats),

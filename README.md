@@ -130,7 +130,8 @@ floor power-ups, a data-driven minimap, and a fully synthesised soundtrack.
 | | Keyboard / mouse | Touch |
 |---|---|---|
 | Move | WASD / arrow keys | Floating joystick (left side) |
-| Special | Space | **SPECIAL** button |
+| Movement skill (each hero's own) | Space or Shift (the way you move), right-click (at the cursor) | **MOVE** button |
+| Special | R | **SPECIAL** button |
 | Choose a card / continue (level-up, shrine, chest) | ←/→ or A/D, Enter/Space (or 1–3); Esc walks away from a shrine or cancels a skill replacement | Tap a card |
 | Pause | Esc | Pause button |
 | Map | M / Tab | Tap the minimap |

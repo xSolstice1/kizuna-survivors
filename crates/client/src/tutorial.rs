@@ -20,11 +20,13 @@ pub enum Step {
     Chest,
     Shrine,
     Boss,
+    /// Added after the others (bits are saved): the movement key.
+    Move,
 }
 
 /// The first `TOUR` steps play back to back when the first run starts; the rest wait for their moment.
-const ALL: [Step; 12] = [Step::Hero, Step::Xp, Step::Health, Step::Loadout, Step::Special, Step::Timer, Step::Map, Step::Sen, Step::SpecialReady, Step::Chest, Step::Shrine, Step::Boss];
-const TOUR: usize = 8;
+const ALL: [Step; 13] = [Step::Hero, Step::Move, Step::Xp, Step::Health, Step::Loadout, Step::Special, Step::Timer, Step::Map, Step::Sen, Step::SpecialReady, Step::Chest, Step::Shrine, Step::Boss];
+const TOUR: usize = 9;
 
 impl Step {
     pub fn bit(self) -> u32 {
@@ -63,7 +65,11 @@ fn caption(step: Step, world: &World, touch: bool) -> (&'static str, String) {
         Step::Xp => ("Experience", "Fallen foes drop spirit gems. Walk over them to fill this bar; every level up lets you pick a new skill.".into()),
         Step::Health => ("Health", "Otherworlders hurt on contact. If this runs out, the night is over.".into()),
         Step::Loadout => ("Weapons and passives", "Your skills live here. Level ups add new ones or power up the ones you have.".into()),
-        Step::Special => ("Special move", format!("Fills as you fight. When it glows, {} to unleash {special}.", if touch { "tap SPECIAL" } else { "press SPACE" })),
+        Step::Special => ("Special move", format!("Fills as you fight. When it glows, {} to unleash {special}.", if touch { "tap SPECIAL" } else { "press R" })),
+        Step::Move => {
+            let m = sim::content::move_def(hero_def(world.cfg.hero).movement);
+            ("Your move", format!("{}: {}. {}", m.name, m.text.to_lowercase(), pick("Space dashes the way you're moving, right-click towards the cursor. The ring round your portrait refills it.", "Tap MOVE to go the way you're dragging. The ring shows it refilling.")))
+        }
         Step::Timer => {
             let st = world.stage();
             let at = st.final_at as u32;
@@ -71,7 +77,7 @@ fn caption(step: Step, world: &World, touch: bool) -> (&'static str, String) {
         }
         Step::Map => ("Map", pick("Chests, shrines and bosses nearby show here. Press M or Tab for the full map.", "Chests, shrines and bosses nearby show here. Tap it for the full map.")),
         Step::Sen => ("Kills and Sen", "You keep your Sen after every night, won or lost. Spend it in the Shrine Shop on permanent upgrades.".into()),
-        Step::SpecialReady => ("Special ready!", format!("Your meter is full. {} to unleash {special} and clear the crowd.", if touch { "Tap SPECIAL" } else { "Press SPACE" })),
+        Step::SpecialReady => ("Special ready!", format!("Your meter is full. {} to unleash {special} and clear the crowd.", if touch { "Tap SPECIAL" } else { "Press R" })),
         Step::Chest => ("A chest", "Walk into it to open it: free skill upgrades inside.".into()),
         Step::Shrine => ("A roadside shrine", "Step in to receive a blessing. Every blessing comes with a price, so you may also walk away.".into()),
         Step::Boss => ("A boss", "Its health bar sits here. Bosses hit hard: keep moving and let your weapons work.".into()),
