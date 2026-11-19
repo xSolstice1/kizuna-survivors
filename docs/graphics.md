@@ -60,6 +60,16 @@ darker towards the feet, and takes the moon or the nearest lamp's softened colou
 (`Lights::rim_at`). It also gets the world's colour grade (`post::grade`), so it sits in the
 scene while staying sharp.
 
+## Transformations (`forms.rs`)
+
+Set pieces drawn in code and shaders, painted the way the game's flames are (soft layers, no
+outlines): Riku's nine tails of foxfire (the sim's lashing tails), Shun's painted hellfire and
+demon mask, Toya's lacquered centipede, Ren's silk sashes, Kuon's nebula sky, and Daichi's
+Daidara giant: hewn stone (Voronoi facets, each tilted its own way, molten seams between some),
+burning eyes, a straw rope at its waist, boulder arms, and fists that rise and slam down where
+the sim's blows land. The giant's shaders are highp: Voronoi hashing breaks into a grid at
+mediump.
+
 ## What fights leave (`worldfx.rs`)
 
 Fallen enemies burn away along a noise pattern with a glowing edge. Blasts leave scorch

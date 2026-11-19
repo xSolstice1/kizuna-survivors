@@ -200,7 +200,24 @@ writes `art/hd/rig/<hero>/*.png` and `art/rig/<hero>/game.json`. Then:
 - No code to add: the build finds every `art/rig/<key>/game.json` (the folder named by the
   hero's `HeroId` key) and the game uses the rig, its front view and its face for that hero.
 
-### 5b. Gear (nano, ~$1.20)
+### 5b. Gear (free: `gear_fit.py`)
+
+    python3 -I tools/ai/gear_fit.py hero <hero>
+
+fits every worn piece onto the new hero from Toya's, with no image generation: one smooth warp
+(a thin-plate spline through the same body points on both: neck, waist, shoulders, elbows,
+hands, hips, ankles, soles, the torso's sides) for the torso and legs, bone-to-bone for each
+arm, hats placed by the head's outline. Hats and gloves are laid over the hero; clothes replace
+what they cover, any gap filled with the nearest gear colour. For it to look right, **design
+the hero in Toya's pose**: arms hanging clear of the body, nothing held over the clothes, hair
+off the shoulders (Daichi was made this way, `art/prompts/daichi_hero.txt`). Check outfits with
+`gear_fit.py preview <hero> <piece ...>`.
+
+`fit <src> <dst>` fits from any hero. On a hero that already has its own pieces, what every one
+of them left unchanged (a flame in the hand, a weapon, hair over the shoulders) counts as not
+clothes and is kept.
+
+The paid way (each hero's own outfit edits, ~$1.20) is still there:
 
     python3 tools/ai/gear_art.py hero <hero>
 

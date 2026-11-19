@@ -611,4 +611,12 @@ mod tests {
         r.player.hp = r.player.max_hp * 0.4;
         assert!(!r.unbroken(), "Daichi's alone");
     }
+
+    #[test]
+    fn shop_upgrades_cut_the_cooldown_and_add_a_charge() {
+        let meta = crate::meta::Bonus { move_cd: 0.24, move_charges: 1, ..Default::default() };
+        let w = World::new(WorldConfig { hero: HeroId::Haru, meta, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+        assert_eq!(w.dash.max_charges, 2);
+        assert!((w.move_cooldown() - move_def(MoveKind::IaidoRush).cooldown * 0.76).abs() < 1e-3);
+    }
 }

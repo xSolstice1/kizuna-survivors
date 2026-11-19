@@ -449,6 +449,8 @@ fn powerup_icon(assets: &Assets, p: PowerUp) -> &Texture2D {
         PowerUp::Greed => &assets.coin,
         PowerUp::Revival => &assets.shrine,
         PowerUp::AutoSpecial => assets.icon_named("persistence"),
+        PowerUp::Footwork => assets.icon_named("swiftness"),
+        PowerUp::SecondStep => assets.icon_named("haste"),
     }
 }
 
@@ -465,7 +467,7 @@ pub fn shop(profile: &mut Profile, assets: &Assets, cursor: &mut usize, time: f6
     centered("Offer Sen for blessings that last every night.", 98.0, 20.0, DIM);
     sen_badge(assets, profile.sen);
 
-    let cols = 6;
+    let cols = 7;
     let (cw, ch, gap) = (140.0, 120.0, 14.0);
     let x0 = (w - (cols as f32 * cw + (cols as f32 - 1.0) * gap)) / 2.0;
     let y0 = 126.0;

@@ -80,9 +80,12 @@ pub enum PowerUp {
     Greed,
     Revival,
     AutoSpecial,
+    /// The movement key: shorter cooldown, and one more charge.
+    Footwork,
+    SecondStep,
 }
 
-pub const ALL_POWERUPS: [PowerUp; 12] = [
+pub const ALL_POWERUPS: [PowerUp; 14] = [
     PowerUp::Might,
     PowerUp::Armor,
     PowerUp::MaxHp,
@@ -95,6 +98,8 @@ pub const ALL_POWERUPS: [PowerUp; 12] = [
     PowerUp::Greed,
     PowerUp::Revival,
     PowerUp::AutoSpecial,
+    PowerUp::Footwork,
+    PowerUp::SecondStep,
 ];
 
 impl PowerUp {
@@ -115,6 +120,8 @@ impl PowerUp {
             PowerUp::Greed => "Greed",
             PowerUp::Revival => "Revival",
             PowerUp::AutoSpecial => "Auto Special",
+            PowerUp::Footwork => "Footwork",
+            PowerUp::SecondStep => "Second Step",
         }
     }
     /// Save-file key (stable; never rename).
@@ -132,6 +139,8 @@ impl PowerUp {
             PowerUp::Greed => "greed",
             PowerUp::Revival => "revival",
             PowerUp::AutoSpecial => "auto_special",
+            PowerUp::Footwork => "footwork",
+            PowerUp::SecondStep => "second_step",
         }
     }
     pub fn max_rank(self) -> u8 {
@@ -139,7 +148,8 @@ impl PowerUp {
             PowerUp::Might | PowerUp::Recovery | PowerUp::Growth | PowerUp::Greed => 5,
             PowerUp::Armor | PowerUp::MaxHp => 3,
             PowerUp::Cooldown | PowerUp::Area | PowerUp::MoveSpeed | PowerUp::Magnet => 2,
-            PowerUp::Revival | PowerUp::AutoSpecial => 1,
+            PowerUp::Footwork => 3,
+            PowerUp::Revival | PowerUp::AutoSpecial | PowerUp::SecondStep => 1,
         }
     }
     fn base_cost(self) -> u32 {
@@ -150,6 +160,8 @@ impl PowerUp {
             PowerUp::Growth | PowerUp::Greed => 120,
             PowerUp::Revival => 1000,
             PowerUp::AutoSpecial => 800,
+            PowerUp::Footwork => 180,
+            PowerUp::SecondStep => 900,
         }
     }
     /// What one rank gives.
@@ -168,6 +180,8 @@ impl PowerUp {
             PowerUp::Greed => b.greed = 0.10,
             PowerUp::Revival => b.revivals = 1,
             PowerUp::AutoSpecial => {}
+            PowerUp::Footwork => b.move_cd = 0.08,
+            PowerUp::SecondStep => b.move_charges = 1,
         }
         b
     }
@@ -184,6 +198,8 @@ impl PowerUp {
             PowerUp::Growth => "+3% experience per rank.",
             PowerUp::Greed => "+10% Sen per rank.",
             PowerUp::Revival => "Get back up once per run with half health.",
+            PowerUp::Footwork => "-8% movement cooldown per rank.",
+            PowerUp::SecondStep => "One more charge of your movement: use it twice in a row.",
             PowerUp::AutoSpecial => "Your special fires by itself when you're below 40% health and surrounded. Toggle it in the pause menu or with U.",
         }
     }

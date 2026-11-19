@@ -8147,6 +8147,8 @@ mod tests {
             // BALANCE_AFK_AFTER=secs: play normally, then stop moving (a "semi-AFK" player).
             let afk_after: f32 = std::env::var("BALANCE_AFK_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(f32::INFINITY);
             let trace = std::env::var("BALANCE_TRACE").is_ok_and(|v| v == "1");
+            // BALANCE_DASH=1: the bot also uses the movement key to break out of crowds.
+            let dash = std::env::var("BALANCE_DASH").is_ok_and(|v| v == "1");
             let gear = match std::env::var("BALANCE_GEAR").ok().and_then(|g| g.split_once(':').map(|(n, r)| (n.parse::<usize>().ok(), r.to_string()))) {
                 Some((Some(n), r)) => {
                     let rarity = [Rarity::Common, Rarity::Uncommon, Rarity::Rare, Rarity::Epic, Rarity::Legendary, Rarity::Mythic]
@@ -8201,7 +8203,7 @@ mod tests {
                 if w.shrine_offer.is_some() {
                     w.choose_shrine(Some(0));
                 }
-                let input = if afk || w.time >= afk_after { Input::default() } else { w.bot_input() };
+                let input = if afk || w.time >= afk_after { Input::default() } else if dash { w.bot_input_dashing() } else { w.bot_input() };
                 w.step(input);
                 heat_sum += w.heat.level as f64;
                 heat_n += 1;

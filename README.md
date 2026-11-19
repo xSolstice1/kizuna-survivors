@@ -15,7 +15,8 @@ Runs in any modern browser on desktop and mobile (touch joystick, fullscreen, la
 
 ## The game
 
-You move; your weapons fire on their own. Collect spirit gems to level up, choose new weapons
+You move; your weapons fire on their own. Every hero also has a **movement skill** of their
+own on Space (aimed, with charges and a cooldown, untouchable while it runs). Collect spirit gems to level up, choose new weapons
 and passives, open chests, accept a roadside shrine's blessing (it always comes with a price),
 fill your special meter — and survive until the final boss rises.
 
@@ -45,14 +46,18 @@ element effect: burn, soak, chain, stagger, knockback, slow, mark or drain.
 ### Heroes
 
 Each hero is an original character, rigged and animated (walk, idle, attacks), with a signature
-weapon, innate passive, weapon pool and a transforming **special move**. Every piece of gear they
+weapon, innate passive, weapon pool, a **movement skill** and a transforming **special move**. Every piece of gear they
 wear shows on them, on any hero, with no per-hero work.
 
-- **Ren Amane** — shrine maiden. Ofuda, yin-yang orbs, purification seals; *Divine Purification*. Affinity: Light.
-- **Riku Kazamine** — fox-masked shinobi. Foxfire orbs, familiars, shuriken, clones; *Ninefold Foxfire* (nine fox tails behind him, spirit tails lashing out). Affinity: Fire.
-- **Shun Yamikiri** — spirit ferryman with a great cleaver; *Hannya Unbound* (a demon mask looming behind him). Affinity: Darkness.
-- **Toya Hyakuashi** — cursed youth with crimson tendrils; *Hundred-Leg Rampage* (a great armoured centipede arcing over his back). Affinity: Earth.
-- **Kuon Hoshimi** — star-reading onmyōji who bends space; *Domain: Endless Firmament*. Affinity: Ice.
+- **Ren Amane** — shrine maiden. Ofuda, yin-yang orbs, purification seals; *Purifying Step* (a glide leaving a line of ofuda that cuts and stops fireballs); *Divine Purification* (silk sashes, a golden seal). Affinity: Light.
+- **Riku Kazamine** — fox-masked shinobi. Foxfire orbs, familiars, shuriken, clones; *Fox Blink* (leaves a fox decoy that bursts); *Ninefold Foxfire* (nine tails of living flame that are the attack). Affinity: Fire.
+- **Shun Yamikiri** — spirit ferryman with a great cleaver; *Veil Crossing* (steps behind the strongest enemy near, a sure critical); *Hannya Unbound* (painted hellfire and a demon mask looming behind him). Affinity: Darkness.
+- **Toya Hyakuashi** — cursed youth with crimson tendrils; *Tendril Pull* (dragged ahead, cutting and slowing what's in the way); *Hundred-Leg Rampage* (a lacquered centipede rearing over him). Affinity: Earth.
+- **Kuon Hoshimi** — star-reading onmyōji who bends space; *Star Shift* (swaps places with a star marker); *Domain: Endless Firmament* (a nebula sky). Affinity: Ice.
+- **Daichi Iwakura** — a mountain youth who broke his village's sacred rope. Shackle Fist punches; *Unbroken Will* (stronger and faster below half health); *Severed Chain* (a chain grapple that latches onto walls and big enemies, two charges); *Daidara Awakening* (a giant of stone and ember rises behind him, its fists slamming the crowds). Affinity: Earth.
+
+The heroes still in progress have their moves too: Kaede's *Lightning Flash*, Mika's *Starlight
+Leap*, Haru's *Iaido Rush*, Nanami's *Flask Jump* and Yuzu's *Encore Slide*.
 
 A hero deals +10% with skills of their own element, and their special move deals it too.
 
@@ -122,7 +127,7 @@ More heroes are on the way. Heroes unlock by clearing worlds with a specific her
 - **Graphics setting** (Auto / Low / Medium / High). Auto starts high and steps down by itself
   if the frame rate drops, so phones stay smooth.
 
-Also: a Shrine Shop of permanent upgrades, weapon **Awakenings**, a Collection, detailed Stats,
+Also: a Shrine Shop of permanent upgrades (including Footwork and Second Step for the movement skill), weapon **Awakenings**, a Collection, detailed Stats,
 floor power-ups, a data-driven minimap, and a fully synthesised soundtrack.
 
 ## Controls
@@ -181,7 +186,7 @@ art/hd          high-resolution art (sprites, terrain, icons, gear)
 art/rig         rigged heroes (parts, poses, worn gear)
 art/src         the pixel-art layouts the HD art sits on (.px; sizes and hitboxes)
 tools/ai        art generation and processing scripts
-docs/           lighting, graphics, art pipeline and cloud saves
+docs/           lighting, graphics, movement skills, art pipeline and cloud saves
 assets/fonts    Nunito (SIL Open Font License)
 web/            index.html, JS plugins (save storage, fullscreen), PWA manifest, service worker and icons
 scripts/        build scripts
