@@ -1,0 +1,11 @@
+Game art of an ORIGINAL hero (a young man) for a 2D top-down anime survivors-like game set in Japanese folklore.
+
+Image 1 is the finished art of another hero from the same game (a young man): it is the reference for STYLE, PROPORTIONS and POSE only. Do not draw him; draw a completely different person. Image 2 is a second style reference (a girl from the same game). Do not draw her.
+
+Match the style exactly: chibi proportions about 2 heads tall (big head, short body), the same confident dark navy outline with varied line weight, glossy cel shading with smooth gradients and bright specular highlights (like a polished vinyl figure), large detailed anime eyes with highlights, hair drawn as clean locks with shine, cloth with simple folds.
+
+Character: Daichi Iwakura, 17, a fierce, determined mountain-village youth who refuses to be caged. Shaggy dark slate-grey hair, short at the back (it must NOT fall over the shoulders), one ash-white streak at the front, a few loose strands on the forehead. Intense amber-gold eyes, a determined frown, a small scar across the bridge of his nose. A short sleeveless dark indigo haori-style vest over a fitted charcoal undershirt with short sleeves; bare muscular forearms wrapped in pale bandages from wrist to elbow; a frayed thick straw sacred rope (shimenawa) tied as his belt with a small white paper zigzag tassel; dark grey hakama trousers tied at the shins with cloth wraps; straw sandals. On his RIGHT wrist a heavy broken black iron shackle with a few dangling links of chain. Small ember-orange accents (a cord, the shackle's glowing crack).
+
+Pose: exactly like image 1. Standing, full body, three-quarter view turned to the RIGHT, both arms hanging relaxed and clearly SEPARATE from the body with visible gaps between the arms and the torso, empty hands (fists loosely closed), nothing held in front of the clothes, legs straight with a small gap between them.
+
+One single figure, centred. Background: perfectly flat solid pure green (#00FF00), no floor, no shadow, no text. The figure must not touch the image edges.

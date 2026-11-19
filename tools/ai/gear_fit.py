@@ -54,6 +54,9 @@ class Hero:
         self.k = TEXELS_PER_UNIT * self.game["units_per_px"]
         wp = ROOT / "art" / "rig" / name / "wear.json"
         self.wear = json.loads(wp.read_text()) if wp.exists() else {"anchors": {}, "pieces": {}}
+        # The hero's own pieces before fitting adds any (what `keep` learns from).
+        self.own = list(self.wear["pieces"])
+        self._keep = {}
 
     def find_waist(self):
         if self.cut.get("waist_y"):
@@ -99,15 +102,15 @@ class Hero:
 
     def keep(self, slot, part):
         """This part's pixels that are not clothes for `slot`: what every one of the hero's
-        existing pieces for the slot left as it was (hair over the shoulders, a flame in the
-        hand, a weapon, a scarf). Cached in art/rig/<hero>/keep_<slot>.<part>.png. A hero with
-        no pieces yet keeps nothing (design it with clear arms and shoulders)."""
-        path = ROOT / "art" / "rig" / self.name / f"keep_{slot}.{part}.png"
-        if path.exists():
-            return np.asarray(Image.open(path)) > 127
+        own pieces for the slot (as they were before any fitting) left as it was: hair over the
+        shoulders, a flame in the hand, a weapon, a scarf. A hero with no pieces of its own
+        keeps nothing (design it with clear arms and shoulders)."""
+        key = (slot, part)
+        if key in self._keep:
+            return self._keep[key]
         base = self.parts[part][0]
         same, n = np.zeros((1024, 1024), np.int32), 0
-        for piece in self.wear["pieces"]:
+        for piece in self.own:
             if not piece.startswith(slot + "_") or not piece[-1].isdigit():
                 continue
             got = self.patch_canvas(piece, part)
@@ -118,7 +121,8 @@ class Hero:
             same += (st == 0) | ((st == 2) & (d < 0.07) & (base[..., 3] > 0.5))
             n += 1
         if n == 0:
-            return np.zeros((1024, 1024), bool)
+            self._keep[key] = np.zeros((1024, 1024), bool)
+            return self._keep[key]
         k = (same >= 0.85 * n) & self.mask[part]
         # Specks are noise (a fold that happened to match); keep only solid areas.
         k = ndimage.binary_opening(k, iterations=2)
@@ -127,7 +131,7 @@ class Hero:
             areas = ndimage.sum(np.ones_like(lab), lab, range(1, m + 1))
             k = np.isin(lab, [i + 1 for i, a in enumerate(areas) if a >= 150])
         k = ndimage.binary_dilation(k, iterations=1) & self.mask[part]
-        Image.fromarray((k * 255).astype(np.uint8)).save(path, optimize=True)
+        self._keep[key] = k
         return k
 
     def patch_canvas(self, piece, part):

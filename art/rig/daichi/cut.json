@@ -1,0 +1,27 @@
+{
+ "sources": {
+  "full": "art/ai/raw/daichi_hero_gemini-3-pro-image_2.png",
+  "nohair": "art/ai/raw/daichi_hero_gemini-3-pro-image_2.png",
+  "noarms": "art/ai/raw/daichi_L_noarms_gemini-nano-banana-2.1_0.png"
+ },
+ "hip_y": 850,
+ "hem_y": 850,
+ "neck": [530, 512],
+ "arm_split_x": 540,
+ "leg_split_x": 555,
+ "arm_hull": {
+  "near": [[400, 550], [360, 580], [340, 650], [335, 700]],
+  "far": [[675, 550], [712, 585], [735, 650], [745, 700]]
+ },
+ "pivots": {
+  "hair_back": [530, 120],
+  "arm_far_upper": [680, 565],
+  "arm_far_fore": [718, 700],
+  "leg_far": [620, 855],
+  "leg_near": [480, 855],
+  "torso": [540, 850],
+  "head": [530, 512],
+  "arm_near_upper": [400, 565],
+  "arm_near_fore": [362, 690]
+ }
+}
