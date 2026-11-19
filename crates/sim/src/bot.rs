@@ -73,11 +73,11 @@ impl World {
         }
         let flee = flee.normalize_or_zero();
         if danger {
-            return Input { move_dir: flee, special: self.player.special >= 1.0 && closest < 60.0 * 60.0 };
+            return Input { move_dir: flee, special: self.player.special >= 1.0 && closest < 60.0 * 60.0, ..Default::default() };
         }
         let special = self.player.special >= 1.0 && closest < 60.0 * 60.0;
         if closest < 40.0 * 40.0 {
-            return Input { move_dir: flee, special };
+            return Input { move_dir: flee, special, ..Default::default() };
         }
         let gem = self
             .gems
@@ -85,6 +85,19 @@ impl World {
             .iter()
             .min_by(|a, b| (**a - p).length_sq().partial_cmp(&(**b - p).length_sq()).unwrap())
             .map_or(Vec2::ZERO, |g| (*g - p).normalize_or_zero());
-        Input { move_dir: flee * 0.6 + gem, special }
+        Input { move_dir: flee * 0.6 + gem, special, ..Default::default() }
+    }
+
+    /// `bot_input`, also using the movement key to break out when something is about to touch
+    /// the player (aimed the way it flees). For balance runs.
+    pub fn bot_input_dashing(&self) -> Input {
+        let mut i = self.bot_input();
+        let p = self.player.pos;
+        let close = self.enemies.pos.iter().filter(|e| (**e - p).length_sq() < 34.0 * 34.0).count();
+        if close >= 2 && i.move_dir.length_sq() > 1e-4 {
+            i.dash = true;
+            i.aim = i.move_dir;
+        }
+        i
     }
 }

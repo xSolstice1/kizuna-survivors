@@ -20,6 +20,8 @@ pub struct TouchControls {
     stick: Option<(u64, Vec2, Vec2)>,
     /// Pressed this frame.
     pub special: bool,
+    /// The movement key, pressed this frame.
+    pub dash: bool,
     pub pause: bool,
     /// Touch ids already handled as a press. A quick tap can begin and end between two
     /// frames, so macroquad only ever reports it as Ended; an unseen id counts as a press.
@@ -31,6 +33,12 @@ pub fn special_rect() -> Rect {
     Rect::new(w - 170.0, h - 170.0, 130.0, 130.0)
 }
 
+/// The movement button, beside Special.
+pub fn dash_rect() -> Rect {
+    let (w, h) = (screen_width(), screen_height());
+    Rect::new(w - 280.0, h - 120.0, 96.0, 96.0)
+}
+
 fn pause_rect() -> Rect {
     Rect::new(324.0, 26.0, 48.0, 48.0)
 }
@@ -39,6 +47,7 @@ impl TouchControls {
     /// Reads this frame's touches. `playing` = a run is active (controls only work then).
     pub fn update(&mut self, playing: bool) {
         self.special = false;
+        self.dash = false;
         self.pause = false;
         for t in touches() {
             self.active = true;
@@ -50,6 +59,8 @@ impl TouchControls {
                 if playing {
                     if special_rect().contains(pos) {
                         self.special = true;
+                    } else if dash_rect().contains(pos) {
+                        self.dash = true;
                     } else if pause_rect().contains(pos) {
                         self.pause = true;
                     } else if !ended && self.stick.is_none() && pos.x < screen_width() * 0.6 {
@@ -90,7 +101,7 @@ impl TouchControls {
     }
 
     /// Draws the on-screen controls (virtual UI coordinates).
-    pub fn draw(&self, special: f32, special_ready: bool, form_left: Option<f32>) {
+    pub fn draw(&self, special: f32, special_ready: bool, form_left: Option<f32>, move_ready: f32, charges: u8, max_charges: u8) {
         if !self.active {
             return;
         }
@@ -130,6 +141,29 @@ impl TouchControls {
         let label = if form_left.is_some() { "ACTIVE" } else if special_ready { "SPECIAL" } else { "charging" };
         let d = kit::measure(label, 18);
         kit::text(label, c.x - d.width / 2.0, c.y + 6.0, 18.0, if special_ready { kit::GOLD } else { kit::FAINT });
+        // Movement button: its recharge as a ring, a pip per charge.
+        let r = dash_rect();
+        let c = r.center();
+        let rad = r.w / 2.0;
+        let ready = charges > 0;
+        draw_circle(c.x, c.y, rad, Color::new(0.08, 0.06, 0.14, 0.7));
+        if move_ready < 1.0 {
+            let segs = 36;
+            for k in 0..((segs as f32 * move_ready) as usize) {
+                let a0 = -std::f32::consts::FRAC_PI_2 + k as f32 / segs as f32 * std::f32::consts::TAU;
+                let a1 = a0 + std::f32::consts::TAU / segs as f32;
+                draw_line(c.x + a0.cos() * (rad - 4.0), c.y + a0.sin() * (rad - 4.0), c.x + a1.cos() * (rad - 4.0), c.y + a1.sin() * (rad - 4.0), 5.0, Color::new(0.55, 0.85, 1.0, 0.9));
+            }
+        }
+        draw_circle_lines(c.x, c.y, rad, 2.0, Color::new(0.55, 0.85, 1.0, if ready { 0.9 } else { 0.35 }));
+        let d = kit::measure("MOVE", 16);
+        kit::text("MOVE", c.x - d.width / 2.0, c.y + 6.0, 16.0, if ready { kit::INK } else { kit::FAINT });
+        if max_charges > 1 {
+            for k in 0..max_charges {
+                let x = c.x + (k as f32 - (max_charges - 1) as f32 / 2.0) * 12.0;
+                draw_circle(x, c.y + rad - 14.0, 4.0, if k < charges { Color::new(0.55, 0.85, 1.0, 1.0) } else { Color::new(1.0, 1.0, 1.0, 0.2) });
+            }
+        }
         // Pause button.
         let p = pause_rect();
         kit::rounded(p.x, p.y, p.w, p.h, 10.0, Color::new(0.08, 0.06, 0.14, 0.85));

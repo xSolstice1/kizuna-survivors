@@ -143,6 +143,8 @@ async fn main() {
     let mut chest_anim: Option<chest_ui::ChestAnim> = None;
     // Space is latched until the sim next steps; at high refresh rates many frames take no step.
     let mut special_queued = false;
+    // The movement key, aimed (None = the way the hero moves or faces).
+    let mut dash_queued: Option<sim::Vec2> = None;
     let mut overlay_focus = 0usize;
     let mut overlay_was_open = false;
     let mut cards_focus = 0usize;
@@ -562,6 +564,18 @@ async fn main() {
             }
             special_queued |= is_key_pressed(KeyCode::Space) || touch.special;
             input.special = special_queued;
+            // Movement key: Shift goes the way you're moving; right-click goes at the cursor
+            // (the hero is at the screen's centre); on touch, the joystick's way.
+            if is_key_pressed(KeyCode::LeftShift) || is_key_pressed(KeyCode::RightShift) || touch.dash {
+                dash_queued = Some(input.move_dir);
+            } else if is_mouse_button_pressed(MouseButton::Right) {
+                let (mx, my) = mouse_position();
+                dash_queued = Some(sim::Vec2::new(mx - screen_width() / 2.0, my - screen_height() / 2.0));
+            }
+            if let Some(aim) = dash_queued {
+                input.dash = true;
+                input.aim = aim;
+            }
             let scale = render::world_scale();
             world.view_half = sim::Vec2::new(screen_width() / scale / 2.0, screen_height() / scale / 2.0);
             let t0 = get_time();
@@ -576,6 +590,8 @@ async fn main() {
                 // Delivered exactly once, even if the sim steps several times this frame.
                 input.special = false;
                 special_queued = false;
+                input.dash = false;
+                dash_queued = None;
                 acc -= DT;
                 steps += 1;
             }
@@ -595,6 +611,7 @@ async fn main() {
             acc = 0.0;
             // Space on a menu (e.g. dismissing a chest) must not fire Purify afterwards.
             special_queued = false;
+            dash_queued = None;
         }
 
         // --- Render ---
@@ -686,7 +703,7 @@ async fn main() {
         }
         if in_run && !map_open && screen == Screen::Playing {
             let form = world.form_kind().map(|k| world.player.form / k.duration());
-            touch.draw(world.player.special, world.player.special >= 1.0, form);
+            touch.draw(world.player.special, world.player.special >= 1.0, form, world.move_ready(), world.dash.charges, world.dash.max_charges);
         }
 
         if let (Some((text, left)), false) = (&fx.banner, world.paused()) {

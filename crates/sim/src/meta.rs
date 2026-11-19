@@ -35,6 +35,9 @@ pub struct Bonus {
     pub luck: f32,
     /// More and rarer equipment drops.
     pub gear_find: f32,
+    /// Movement key: cooldown cut (fraction) and extra charges.
+    pub move_cd: f32,
+    pub move_charges: u8,
 }
 
 impl Bonus {
@@ -57,6 +60,8 @@ impl Bonus {
             special_charge: self.special_charge + o.special_charge,
             luck: self.luck + o.luck,
             gear_find: self.gear_find + o.gear_find,
+            move_cd: self.move_cd + o.move_cd,
+            move_charges: self.move_charges + o.move_charges,
         }
     }
 }

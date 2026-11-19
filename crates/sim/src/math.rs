@@ -29,6 +29,15 @@ impl Vec2 {
             Self::ZERO
         }
     }
+    /// Unit length, or `d` if this is (nearly) zero.
+    pub fn normalize_or(self, d: Vec2) -> Self {
+        let l = self.length();
+        if l > 1e-6 {
+            self * (1.0 / l)
+        } else {
+            d
+        }
+    }
     pub fn from_angle(a: f32) -> Self {
         Self::new(a.cos(), a.sin())
     }

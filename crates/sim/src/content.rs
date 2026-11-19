@@ -738,6 +738,62 @@ pub enum SpecialKind {
     Divine,
 }
 
+/// The movement key: every hero's own way to cross the field (one key, aimed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoveKind {
+    /// Ren: a glide leaving a line of ofuda that cuts what crosses it and stops fireballs.
+    PurifyingStep,
+    /// Kaede: a lightning teleport; the bolt chains through what it passes.
+    LightningFlash,
+    /// Mika: a hop that lands in a burst of stars and pulls in the drops round her.
+    StarlightLeap,
+    /// Haru: a dash cut; what he passed is slashed a beat later.
+    IaidoRush,
+    /// Nanami: a flask under her feet; she rides the blast, burning ground where she left.
+    FlaskJump,
+    /// Yuzu: a slide leaving notes that speed and guard her while she's on them.
+    EncoreSlide,
+    /// Riku: a blink leaving a fox decoy that draws enemies, then bursts.
+    FoxBlink,
+    /// Shun: through the veil to just behind the strongest enemy near; it takes a sure crit.
+    VeilCrossing,
+    /// Toya: tendrils grab the ground ahead and drag him; what's in the way bleeds (slowed).
+    TendrilPull,
+    /// Kuon: swaps places with his star marker (or blinks and plants one); slows his old spot.
+    StarShift,
+}
+
+pub struct MoveDef {
+    pub name: &'static str,
+    pub text: &'static str,
+    /// Distance (world units) and travel time (0 = a teleport).
+    pub range: f32,
+    pub time: f32,
+    pub cooldown: f32,
+    pub charges: u8,
+    /// Damage at Might 1 (what each move does to enemies; see the move).
+    pub damage: f32,
+    /// Hops (drawn in an arc).
+    pub leap: bool,
+}
+
+pub fn move_def(k: MoveKind) -> MoveDef {
+    use MoveKind::*;
+    let d = |name, text, range, time, cooldown, damage, leap| MoveDef { name, text, range, time, cooldown, charges: 1, damage, leap };
+    match k {
+        PurifyingStep => d("Purifying Step", "Glide, leaving a line of ofuda that cuts enemies and stops fireballs", 72.0, 0.22, 6.0, 18.0, false),
+        LightningFlash => d("Lightning Flash", "Teleport in a flash; the bolt chains through enemies on the way", 92.0, 0.0, 5.0, 42.0, false),
+        StarlightLeap => d("Starlight Leap", "Leap and land in a burst of stars, pulling in nearby drops", 84.0, 0.34, 6.0, 46.0, true),
+        IaidoRush => d("Iaido Rush", "Dash through; everything you passed is cut a beat later", 88.0, 0.15, 5.5, 64.0, false),
+        FlaskJump => d("Flask Jump", "Ride a flask blast away, leaving burning ground behind", 88.0, 0.32, 6.5, 36.0, true),
+        EncoreSlide => d("Encore Slide", "Slide, leaving notes that speed you up and guard you while you stand on them", 78.0, 0.24, 6.0, 0.0, false),
+        FoxBlink => d("Fox Blink", "Blink away, leaving a fox decoy that draws enemies and bursts", 84.0, 0.0, 5.0, 40.0, false),
+        VeilCrossing => d("Veil Crossing", "Step through the veil behind the strongest enemy near; it takes a sure critical", 140.0, 0.0, 6.0, 50.0, false),
+        TendrilPull => d("Tendril Pull", "Tendrils drag you ahead; enemies in the way are cut and slowed", 90.0, 0.2, 5.5, 34.0, false),
+        StarShift => d("Star Shift", "Swap places with your star marker (or blink and plant one); your old spot slows enemies", 90.0, 0.0, 6.0, 20.0, false),
+    }
+}
+
 impl SpecialKind {
     /// Length of a transformation special (0 for instant ones).
     pub fn duration(self) -> f32 {
@@ -799,6 +855,8 @@ pub struct HeroDef {
     pub special: SpecialKind,
     pub special_name: &'static str,
     pub element: Element,
+    /// The movement key.
+    pub movement: MoveKind,
 }
 
 pub fn hero_def(id: HeroId) -> HeroDef {
@@ -843,7 +901,19 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Mika => Element::Water,
         HeroId::Haru => Element::Wind,
     };
-    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name, element }
+    let movement = match id {
+        HeroId::Ren => MoveKind::PurifyingStep,
+        HeroId::Kaede => MoveKind::LightningFlash,
+        HeroId::Mika => MoveKind::StarlightLeap,
+        HeroId::Haru => MoveKind::IaidoRush,
+        HeroId::Nanami => MoveKind::FlaskJump,
+        HeroId::Yuzu => MoveKind::EncoreSlide,
+        HeroId::Riku => MoveKind::FoxBlink,
+        HeroId::Shun => MoveKind::VeilCrossing,
+        HeroId::Toya => MoveKind::TendrilPull,
+        HeroId::Kuon => MoveKind::StarShift,
+    };
+    HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name, element, movement }
 }
 
 impl HeroDef {

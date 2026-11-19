@@ -213,6 +213,28 @@ fn dim_screen(a: f32) {
 }
 
 /// Hero head in a round frame (the top of the idle sprite).
+/// The movement key round the portrait: its recharge as an arc, a pip per charge, a flash
+/// when one comes back.
+fn move_ring(world: &World, cx: f32, cy: f32, r: f32, t: f32) {
+    let ready = world.move_ready();
+    let col = Color::new(0.55, 0.85, 1.0, 1.0);
+    let segs = 40;
+    let shown = if world.dash.charges > 0 && ready >= 1.0 { segs } else { (segs as f32 * ready) as usize };
+    let glow = if world.dash.charges > 0 { 0.85 + 0.15 * (t * 3.0).sin() } else { 0.55 };
+    for k in 0..shown {
+        let a0 = -std::f32::consts::FRAC_PI_2 + k as f32 / segs as f32 * std::f32::consts::TAU;
+        let a1 = a0 + std::f32::consts::TAU / segs as f32;
+        draw_line(cx + a0.cos() * r, cy + a0.sin() * r, cx + a1.cos() * r, cy + a1.sin() * r, 3.0, Color::new(col.r * glow, col.g * glow, col.b * glow, 0.9));
+    }
+    if world.dash.max_charges > 1 {
+        for k in 0..world.dash.max_charges {
+            let a = -std::f32::consts::FRAC_PI_2 - 0.5 + k as f32 * 0.25;
+            let c = if k < world.dash.charges { col } else { Color::new(1.0, 1.0, 1.0, 0.25) };
+            draw_circle(cx + a.cos() * (r + 1.0), cy + a.sin() * (r + 1.0), 3.5, c);
+        }
+    }
+}
+
 fn portrait(assets: &Assets, world: &World, cx: f32, cy: f32, r: f32) {
     let form = world.form_kind().is_some();
     draw_circle(cx, cy, r, Color::new(0.10, 0.08, 0.18, 1.0));
@@ -252,6 +274,7 @@ pub fn hud(world: &World, assets: &Assets, touch: bool) {
     // Hero card, top-left: portrait, HP, special meter.
     kit::panel(12.0 + ox, 24.0 + oy, 300.0, 78.0);
     portrait(assets, world, 50.0 + ox, 63.0 + oy, 30.0);
+    move_ring(world, 50.0 + ox, 63.0 + oy, 34.0, t);
     draw_circle(72.0 + ox, 88.0 + oy, 13.0, Color::new(0.08, 0.06, 0.14, 1.0));
     draw_circle_lines(72.0 + ox, 88.0 + oy, 13.0, 2.0, SKY);
     let lv = format!("{}", p.level);

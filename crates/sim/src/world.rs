@@ -94,10 +94,16 @@ impl Default for WorldConfig {
     }
 }
 
+mod movement;
+pub use movement::{Dash, DashRun, Trail, TrailKind, ENCORE_ARMOR};
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Input {
     /// Desired movement, any length (normalised internally).
     pub move_dir: Vec2,
+    /// The movement key was pressed this tick, aimed along `aim` (zero = the way the hero faces).
+    pub dash: bool,
+    pub aim: Vec2,
     /// Trigger the character's special move (ignored until the meter is full).
     pub special: bool,
 }
@@ -176,6 +182,9 @@ pub enum Event {
     Beam { from: Vec2, to: Vec2, style: u8 },
     /// Shadow Step: the player blinked from `from` to `to` (an afterimage stays at `from`).
     ShadowStep { from: Vec2, to: Vec2 },
+    /// The movement key: a move began (`from` -> `to`) / arrived.
+    Dash { kind: MoveKind, from: Vec2, to: Vec2 },
+    DashLand { kind: MoveKind, pos: Vec2 },
     AfterimageBlast { pos: Vec2, radius: f32 },
     /// Hannya's Wrath is charging / went off.
     FinaleCharge { pos: Vec2 },
@@ -751,6 +760,11 @@ pub struct World {
     finale_charging: bool,
     /// Shadow Step afterimages waiting to explode: (position, seconds left).
     pub afterimages: Vec<(Vec2, f32)>,
+    /// The movement key, and what its moves left on the ground.
+    pub dash: Dash,
+    pub trails: Vec<Trail>,
+    /// Seconds left of Yuzu's encore guard.
+    pub encore: f32,
     revivals_left: u8,
     /// Sen collected this run.
     pub sen: u32,
@@ -936,6 +950,9 @@ impl World {
             beam_rot: 0.0,
             finale_charging: false,
             afterimages: Vec::new(),
+            dash: Dash::new(hero.movement, bonus.move_charges),
+            trails: Vec::new(),
+            encore: 0.0,
             revivals_left: bonus.revivals,
             sen: 0,
             coins: Vec::new(),
@@ -1031,6 +1048,7 @@ impl World {
         self.director();
         self.update_mechanic();
         self.grid.rebuild(self.player.pos, &self.enemies.pos);
+        self.dash_actions(input);
         self.update_banners();
         // Needs the fresh grid (queries index into the enemy arrays).
         self.update_bosses();
@@ -1210,7 +1228,8 @@ impl World {
     // ───────────── Player ─────────────
 
     fn armor(&self) -> f32 {
-        self.passive_level(PassiveKind::Guard) as f32 + self.mods.armor + self.bonus.armor
+        let encore = if self.encore > 0.0 { ENCORE_ARMOR } else { 0.0 };
+        self.passive_level(PassiveKind::Guard) as f32 + self.mods.armor + self.bonus.armor + encore
     }
 
     /// Applies a hit to the player (after armor) and handles death / Revival.
@@ -1280,6 +1299,10 @@ impl World {
         self.heal_budget = (self.heal_budget + cap * DT).min(cap * HEAL_WINDOW);
         let regen = 0.25 * self.passive_level(PassiveKind::Recovery) as f32 + self.bonus.recovery;
         self.heal(regen * DT);
+        if self.update_dash() {
+            self.player.moving = true;
+            return;
+        }
         let d = input.move_dir.normalize_or_zero();
         self.player.moving = d != Vec2::ZERO;
         if self.player.moving {

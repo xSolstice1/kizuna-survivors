@@ -238,6 +238,17 @@ impl Audio {
                 Event::FoxFaded => Sfx::FoxFade,
                 Event::CloneSummoned { .. } | Event::ClonePopped { .. } => Sfx::Poof,
                 Event::CloneStrike { .. } => Sfx::Whoosh,
+                Event::Dash { kind, .. } => {
+                    use sim::content::MoveKind::*;
+                    match kind {
+                        LightningFlash => Sfx::Zap,
+                        FoxBlink | VeilCrossing | StarShift => Sfx::Warble,
+                        PurifyingStep => Sfx::Paper,
+                        IaidoRush => Sfx::IaiSfx,
+                        _ => Sfx::Whoosh,
+                    }
+                }
+                Event::DashLand { .. } => continue,
                 Event::HannyaAwakened { .. } => Sfx::Roar,
                 Event::Beam { .. } => Sfx::BeamSfx,
                 Event::ShadowStep { .. } => Sfx::Step,
