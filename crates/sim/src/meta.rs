@@ -202,6 +202,7 @@ pub fn unlock_text(h: HeroId) -> &'static str {
         HeroId::Nanami => "As Shun, take 3 shrine blessings in one night.",
         HeroId::Yuzu => "As Toya, reach level 60.",
         HeroId::Kuon => "As Toya, clear Rainward 13.",
+        HeroId::Daichi => "As Kuon, clear Ember Leaf Highlands.",
     }
 }
 
@@ -665,6 +666,7 @@ impl Profile {
                 HeroId::Nanami => as_hero == HeroId::Shun && w.shrines_taken.len() >= 3,
                 HeroId::Yuzu => as_hero == HeroId::Toya && w.player.level >= 60,
                 HeroId::Kuon => as_hero == HeroId::Toya && won && stage == StageId::Rainward,
+                HeroId::Daichi => as_hero == HeroId::Kuon && won && stage == StageId::EmberLeaf,
             };
             if earned && !self.is_unlocked(h) && crate::content::hero_def(h).finished {
                 self.unlocked.push(h);

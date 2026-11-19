@@ -209,7 +209,7 @@ impl Assets {
             .map(|h| match h {
                 // Rigged heroes: the front view for portraits, the armory and menus (in a run
                 // they use their rig, see `rig`).
-                HeroId::Riku | HeroId::Shun | HeroId::Toya | HeroId::Kuon | HeroId::Ren => {
+                HeroId::Riku | HeroId::Shun | HeroId::Toya | HeroId::Kuon | HeroId::Ren | HeroId::Daichi => {
                     let front = sprites::hi_art(&format!("{}_front", rig_name(*h).unwrap()));
                     [front.clone(), front.clone(), front]
                 }
@@ -274,6 +274,7 @@ impl Assets {
             ("lantern_vigil", sprites::hi_art("icons/lantern_vigil")),
             ("iai_flash", sprites::hi_art("icons/iai_flash")),
             ("crimson_tendrils", sprites::hi_art("icons/crimson_tendrils")),
+            ("shackle_fist", sprites::hi_art("icons/shackle_fist")),
             ("mukade_spines", sprites::hi_art("icons/mukade_spines")),
             ("devour", sprites::hi_art("icons/devour")),
             ("venom_fang", sprites::hi_art("icons/venom_fang")),
@@ -498,6 +499,7 @@ impl Assets {
                 WeaponKind::LanternVigil => "lantern_vigil",
                 WeaponKind::IaiFlash => "iai_flash",
                 WeaponKind::CrimsonTendrils => "crimson_tendrils",
+                WeaponKind::ShackleFist => "shackle_fist",
                 WeaponKind::MukadeSpines => "mukade_spines",
                 WeaponKind::Devour => "devour",
                 WeaponKind::VenomFang => "venom_fang",
@@ -532,7 +534,7 @@ impl Assets {
 /// Palette chars: H/h/L hair, C/c outfit, I eyes, R ribbon.
 fn hero_palette(h: HeroId) -> &'static [(char, &'static str)] {
     match h {
-        HeroId::Ren | HeroId::Riku | HeroId::Shun | HeroId::Toya | HeroId::Kuon => &[],
+        HeroId::Ren | HeroId::Riku | HeroId::Shun | HeroId::Toya | HeroId::Kuon | HeroId::Daichi => &[],
         HeroId::Kaede => &[('H', "#33334a"), ('h', "#1c1c2a"), ('L', "#5a5a7a"), ('C', "#2f5a3a"), ('c', "#1d3a25"), ('I', "#e84a4a"), ('R', "#c9a040")],
         HeroId::Mika => &[('H', "#ffd45a"), ('h', "#d49a2a"), ('L', "#fff0a0"), ('C', "#e88ac8"), ('c', "#b0609a"), ('I', "#4ac0ff"), ('R', "#ff5aa0")],
         HeroId::Haru => &[('H', "#c8cde0"), ('h', "#8890aa"), ('L', "#ffffff"), ('C', "#3a3a8a"), ('c', "#24245a"), ('I', "#6a7cff"), ('R', "#e83a3a")],
@@ -883,6 +885,7 @@ impl Fx {
                     match style {
                         style::METEOR => self.shake = self.shake.max(0.3),
                         style::QUAKE => self.shake = self.shake.max(0.2),
+                        style::DAIDARA => self.shake = self.shake.max(0.4),
                         style::SKYBOLT => self.shake = self.shake.max(0.06),
                         _ => {}
                     }
@@ -964,6 +967,15 @@ impl Fx {
                     self.shake = self.shake.max(0.7);
                 }
                 Event::Devour { pos, radius } => self.devours.push((vec2(pos.x, pos.y), radius, 0.0)),
+                Event::DaidaraAwakened { .. } => {
+                    self.announce("DAIDARA AWAKENING".into());
+                    self.say(self.lines().special);
+                    self.shake = self.shake.max(0.6);
+                }
+                Event::DaidaraStomp { pos, radius } => {
+                    self.bursts.push((vec2(pos.x, pos.y), radius * 0.6, 0.0, style::DAIDARA));
+                    self.shake = self.shake.max(1.0);
+                }
                 Event::MukadeAwakened { .. } => {
                     self.announce("HUNDRED-LEG RAMPAGE".into());
                     self.say(self.lines().special);
@@ -1555,6 +1567,7 @@ fn draw_bursts(bursts: &[(Vec2, f32, f32, u8)]) {
                     style::SKYBOLT => (rgb(0.7, 0.85, 1.0, 0.5), rgb(1.0, 1.0, 1.0, 1.0)),
                     style::COMET => (rgb(0.3, 0.6, 1.0, 0.55), rgb(0.85, 0.95, 1.0, 1.0)),
                     style::QUAKE => (rgb(1.0, 0.6, 0.2, 0.4), rgb(1.0, 0.85, 0.4, 1.0)),
+                    style::DAIDARA => (rgb(1.0, 0.45, 0.1, 0.45), rgb(1.0, 0.75, 0.35, 1.0)),
                     style::SPINE => (rgb(0.7, 0.05, 0.1, 0.45), rgb(0.9, 0.2, 0.25, 1.0)),
                     16 => (rgb(0.2, 0.35, 0.9, 0.45), rgb(0.75, 0.88, 1.0, 1.0)),
                     21 => (rgb(1.0, 0.6, 0.75, 0.45), rgb(1.0, 0.9, 0.95, 1.0)),
@@ -1589,6 +1602,11 @@ fn draw_bursts(bursts: &[(Vec2, f32, f32, u8)]) {
                         v.draw("burst", c, rr * 2.0, c.x, edge);
                     }
                     style::QUAKE => v.draw("crack", c, rr * 2.0, c.x, edge),
+                    style::DAIDARA => {
+                        // A giant's fist: the ground cracked open, molten, a ring of dust.
+                        v.draw_wh("crack", c, vec2(rr * 2.4, rr * 1.4), c.x, edge);
+                        v.draw("burst", c, rr * 1.6 * (1.0 - 0.5 * k), c.y, rgb(1.0, 0.7, 0.35, 0.7));
+                    }
                     style::FRENZY => {
                         // Thousand-Leg Burst: a crown of bone spikes radiating out.
                         for i in 0..14 {
@@ -1895,7 +1913,8 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
     let form = world.form_kind();
     let fox = form == Some(SpecialKind::NineTails);
     let hannya = form == Some(SpecialKind::Hannya);
-    let blink = form.is_none() && pl.iframes > 0.0 && ((time * 20.0) as i32) % 2 == 0;
+    // Blink after a hit, not while a move keeps the hero untouchable.
+    let blink = form.is_none() && pl.iframes > 0.3 && world.dash.active.is_none() && ((time * 20.0) as i32) % 2 == 0;
     let lit = crate::light::LIGHTS.with(|l| l.borrow_mut().eased_light(vec2(p.x, p.y), get_frame_time().min(0.1)));
     let tint = if blink { Color::new(lit.r, lit.g, lit.b, 0.35) } else { lit };
     let t = time as f32;
@@ -1903,6 +1922,11 @@ pub fn draw_world(world: &World, a: &Assets, stage: &crate::stage::StageArt, fx:
         // Nine-Tails: real tails behind him, the sweeping hits as foxfire lashes (crate::forms).
         let strikes: Vec<(Vec2, Vec2)> = world.fox_tails().iter().map(|(a, b)| (vec2(a.x, a.y), vec2(b.x, b.y))).collect();
         crate::forms::draw_fox(vec2(p.x, p.y - 2.0), if pl.facing.x < 0.0 { -1.0 } else { 1.0 }, &strikes, time, &a.vfx);
+    }
+    if form == Some(SpecialKind::Daidara) {
+        // The giant risen behind Daichi; its fists come down where the sim's blows land.
+        let slams: Vec<(Vec2, f32)> = world.blasts.iter().filter(|b| b.style == style::DAIDARA).map(|b| (vec2(b.pos.x, b.pos.y), 1.0 - b.delay / b.max_delay)).collect();
+        crate::forms::draw_daidara(vec2(p.x, p.y), sim::content::DAIDARA_DURATION - pl.form, pl.form, &slams, time, &a.vfx);
     }
     if hannya {
         draw_hannya_aura(world, t);
@@ -2582,6 +2606,7 @@ fn burst_life(st: u8) -> f32 {
         style::SKYBOLT => 0.3,
         style::COMET => 0.5,
         style::QUAKE => 0.5,
+        style::DAIDARA => 0.7,
         style::SEAL => 0.3,
         1 => 0.7,
         2 => 0.4,

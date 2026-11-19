@@ -157,7 +157,7 @@ fn shader(src: &'static str, light: bool) -> Option<Material> {
                     },
                 )
                 .map_err(|e| {
-                    warn!("form material: {e:?}");
+                    warn!("form material: {:?}", e);
                 })
                 .ok()
             };
@@ -643,4 +643,357 @@ pub fn draw_sky(c: Vec2, r: f32, time: f64, open: f32) {
     colours(&m, time as f32, vec3(0.02, 0.03, 0.1), vec3(0.36, 0.18, 0.66), vec3(0.3, 0.7, 1.0));
     draw_mesh(&quad(c, r, Color::new(1.0, 1.0, 1.0, open)));
     gl_use_default_material();
+}
+
+/// Stone along a ribbon (the giant's arms): weathered rock rounded across, molten cracks
+/// glowing `Tip` and pulsing, darker `Base` at the flanks, a lit `Mid` crest.
+const ROCK: &str = r#"#version 100
+precision mediump float;
+varying lowp vec4 color;
+varying highp vec2 uv;
+uniform float Time;
+uniform vec3 Base;
+uniform vec3 Mid;
+uniform vec3 Tip;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0)), f.x), f.y);
+}
+void main() {
+    float s = uv.x * 2.0 - 1.0;
+    float across = abs(s);
+    float rnd = sqrt(max(0.0, 1.0 - across * across));
+    float n = vnoise(uv * vec2(4.0, 10.0)) * 0.6 + vnoise(uv * vec2(9.0, 23.0)) * 0.4;
+    vec3 c = mix(Base, Mid, rnd * (0.55 + 0.45 * n));
+    c += Mid * 0.35 * exp(-(s + 0.35) * (s + 0.35) * 10.0);
+    float crack = 1.0 - smoothstep(0.0, 0.05, abs(vnoise(uv * vec2(3.0, 7.0) + 4.0) - 0.5));
+    float pulse = 0.7 + 0.3 * sin(Time * 3.0 + uv.y * 6.0);
+    c = mix(c, Tip * 1.2, crack * pulse * 0.9);
+    c += Tip * 0.5 * smoothstep(0.75, 1.0, across);
+    float a = 1.0 - smoothstep(0.88, 1.0, across);
+    gl_FragColor = vec4(c * color.rgb, a * color.a);
+}
+"#;
+
+/// The giant itself on a square (uv y down): head, broad shoulders and a chest tapering into
+/// the ground mist, as one signed-distance shape. Rock with molten seams, an ember rim, two
+/// burning eyes, a straw rope round its waist.
+const GIANT: &str = r#"#version 100
+precision highp float;
+varying lowp vec4 color;
+varying highp vec2 uv;
+uniform float Time;
+uniform vec3 Base;
+uniform vec3 Mid;
+uniform vec3 Tip;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0)), f.x), f.y);
+}
+vec2 hash2(vec2 p) { p = mod(p, 289.0); vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); q += dot(q, q.yzx + 33.33); return fract((q.xx + q.yz) * q.zy); }
+// Hewn stone: Voronoi facets, each tilted its own way, dark seams between them (some molten).
+// `d` the shape's distance (negative inside), `g` its gradient; returns the colour.
+vec3 stone(vec2 p, float d, vec2 g, float scale) {
+    vec2 x = p * scale;
+    vec2 ip = floor(x);
+    float f1 = 8.0, f2 = 8.0;
+    vec2 id = vec2(0.0);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 c = ip + vec2(float(i), float(j));
+            vec2 o = c + hash2(c) * 0.85;
+            float dd = length(x - o);
+            if (dd < f1) { f2 = f1; f1 = dd; id = c; } else if (dd < f2) { f2 = dd; }
+        }
+    }
+    // A dome over the whole body (round at the outline), plus each facet's tilt.
+    float dome = 1.0 - smoothstep(0.0, 0.4, -d);
+    vec2 out2 = normalize(g + 1e-5) * dome;
+    vec2 tilt = (hash2(id + 3.0) - 0.5) * 0.9;
+    vec3 n = normalize(vec3(out2 * 1.3 + tilt, 1.0));
+    float lit = clamp(dot(n, normalize(vec3(-0.55, -0.6, 0.6))), 0.0, 1.0);
+    vec3 c = mix(Base, Mid, lit) * (0.82 + 0.3 * hash2(id + 9.0).x);
+    // Specular on the facets facing the light.
+    c += Mid * 0.5 * pow(lit, 12.0);
+    float seam = 1.0 - smoothstep(0.0, 0.09, f2 - f1);
+    float molten = step(0.5, hash2(id + 17.0).x);
+    float pulse = 0.65 + 0.35 * sin(Time * 2.6 + p.y * 5.0 + id.x);
+    c = mix(c, Base * 0.35, seam * 0.85);
+    c += Tip * seam * molten * pulse * 1.4;
+    return c;
+}
+float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+float shape(vec2 p) {
+    float head = length((p - vec2(0.0, -0.56)) * vec2(1.0, 0.92)) - 0.2;
+    float t = clamp((p.y + 0.3) / 1.3, 0.0, 1.0);
+    float hw = mix(0.8, 0.5, t);
+    float body = max(abs(p.x) - hw, -0.28 - p.y);
+    float sh = min(length(p - vec2(-0.6, -0.2)) - 0.27, length(p - vec2(0.6, -0.2)) - 0.27);
+    float d = smin(body, sh, 0.18);
+    return smin(d, head, 0.08);
+}
+void main() {
+    vec2 p = uv * 2.0 - 1.0;
+    float d = shape(p);
+    if (d > 0.03) { gl_FragColor = vec4(0.0); return; }
+    // A normal from the shape: the rock rounds away at its edges, lit from the upper left.
+    vec2 e = vec2(0.01, 0.0);
+    vec2 g = vec2(shape(p + e.xy) - shape(p - e.xy), shape(p + e.yx) - shape(p - e.yx));
+    vec3 c = stone(p, d, g, 7.0);
+    // The sacred rope at its waist: twisted straw, a darker groove between strands.
+    float rope = 1.0 - smoothstep(0.045, 0.06, abs(p.y - 0.42 - 0.03 * p.x * p.x));
+    float twist = 0.5 + 0.5 * sin((p.x * 22.0 + p.y * 30.0));
+    c = mix(c, vec3(0.78, 0.66, 0.42) * (0.65 + 0.45 * twist), rope);
+    // Eyes burning in the head.
+    float eyes = min(length((p - vec2(-0.075, -0.58)) * vec2(1.0, 2.2)), length((p - vec2(0.075, -0.58)) * vec2(1.0, 2.2)));
+    c = mix(c, Tip * 2.4, 1.0 - smoothstep(0.02, 0.055, eyes));
+    // The ember rim along the outline, and the body fading into the mist below.
+    c += Tip * 0.7 * smoothstep(-0.05, 0.02, d);
+    float a = smoothstep(0.03, 0.0, d) * (1.0 - smoothstep(0.3, 0.85, p.y));
+    gl_FragColor = vec4(c * color.rgb, a * color.a);
+}
+"#;
+
+/// A giant fist on a square: a broad palm and four knuckles, rock and molten cracks.
+const FIST: &str = r#"#version 100
+precision highp float;
+varying lowp vec4 color;
+varying highp vec2 uv;
+uniform float Time;
+uniform vec3 Base;
+uniform vec3 Mid;
+uniform vec3 Tip;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0)), f.x), f.y);
+}
+vec2 hash2(vec2 p) { p = mod(p, 289.0); vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); q += dot(q, q.yzx + 33.33); return fract((q.xx + q.yz) * q.zy); }
+// Hewn stone: Voronoi facets, each tilted its own way, dark seams between them (some molten).
+// `d` the shape's distance (negative inside), `g` its gradient; returns the colour.
+vec3 stone(vec2 p, float d, vec2 g, float scale) {
+    vec2 x = p * scale;
+    vec2 ip = floor(x);
+    float f1 = 8.0, f2 = 8.0;
+    vec2 id = vec2(0.0);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 c = ip + vec2(float(i), float(j));
+            vec2 o = c + hash2(c) * 0.85;
+            float dd = length(x - o);
+            if (dd < f1) { f2 = f1; f1 = dd; id = c; } else if (dd < f2) { f2 = dd; }
+        }
+    }
+    // A dome over the whole body (round at the outline), plus each facet's tilt.
+    float dome = 1.0 - smoothstep(0.0, 0.4, -d);
+    vec2 out2 = normalize(g + 1e-5) * dome;
+    vec2 tilt = (hash2(id + 3.0) - 0.5) * 0.9;
+    vec3 n = normalize(vec3(out2 * 1.3 + tilt, 1.0));
+    float lit = clamp(dot(n, normalize(vec3(-0.55, -0.6, 0.6))), 0.0, 1.0);
+    vec3 c = mix(Base, Mid, lit) * (0.82 + 0.3 * hash2(id + 9.0).x);
+    // Specular on the facets facing the light.
+    c += Mid * 0.5 * pow(lit, 12.0);
+    float seam = 1.0 - smoothstep(0.0, 0.09, f2 - f1);
+    float molten = step(0.5, hash2(id + 17.0).x);
+    float pulse = 0.65 + 0.35 * sin(Time * 2.6 + p.y * 5.0 + id.x);
+    c = mix(c, Base * 0.35, seam * 0.85);
+    c += Tip * seam * molten * pulse * 1.4;
+    return c;
+}
+float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+float shape(vec2 p) {
+    float d = length((p - vec2(0.0, 0.12)) * vec2(1.0, 1.15)) - 0.55;
+    for (int i = 0; i < 4; i++) {
+        float x = -0.42 + 0.28 * float(i);
+        d = smin(d, length(p - vec2(x, 0.48)) - 0.17, 0.12);
+    }
+    return d;
+}
+void main() {
+    vec2 p = uv * 2.0 - 1.0;
+    float d = shape(p);
+    if (d > 0.03) { gl_FragColor = vec4(0.0); return; }
+    vec2 e = vec2(0.01, 0.0);
+    vec2 g = vec2(shape(p + e.xy) - shape(p - e.xy), shape(p + e.yx) - shape(p - e.yx));
+    vec3 c = stone(p, d, g, 4.5);
+    c += Tip * 0.6 * smoothstep(-0.05, 0.02, d);
+    float a = smoothstep(0.03, 0.0, d);
+    gl_FragColor = vec4(c * color.rgb, a * color.a);
+}
+"#;
+
+const BOULDER: &str = r#"#version 100
+precision highp float;
+varying lowp vec4 color;
+varying highp vec2 uv;
+uniform float Time;
+uniform vec3 Base;
+uniform vec3 Mid;
+uniform vec3 Tip;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0)), f.x), f.y);
+}
+vec2 hash2(vec2 p) { p = mod(p, 289.0); vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); q += dot(q, q.yzx + 33.33); return fract((q.xx + q.yz) * q.zy); }
+// Hewn stone: Voronoi facets, each tilted its own way, dark seams between them (some molten).
+// `d` the shape's distance (negative inside), `g` its gradient; returns the colour.
+vec3 stone(vec2 p, float d, vec2 g, float scale) {
+    vec2 x = p * scale;
+    vec2 ip = floor(x);
+    float f1 = 8.0, f2 = 8.0;
+    vec2 id = vec2(0.0);
+    for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+            vec2 c = ip + vec2(float(i), float(j));
+            vec2 o = c + hash2(c) * 0.85;
+            float dd = length(x - o);
+            if (dd < f1) { f2 = f1; f1 = dd; id = c; } else if (dd < f2) { f2 = dd; }
+        }
+    }
+    // A dome over the whole body (round at the outline), plus each facet's tilt.
+    float dome = 1.0 - smoothstep(0.0, 0.4, -d);
+    vec2 out2 = normalize(g + 1e-5) * dome;
+    vec2 tilt = (hash2(id + 3.0) - 0.5) * 0.9;
+    vec3 n = normalize(vec3(out2 * 1.3 + tilt, 1.0));
+    float lit = clamp(dot(n, normalize(vec3(-0.55, -0.6, 0.6))), 0.0, 1.0);
+    vec3 c = mix(Base, Mid, lit) * (0.82 + 0.3 * hash2(id + 9.0).x);
+    // Specular on the facets facing the light.
+    c += Mid * 0.5 * pow(lit, 12.0);
+    float seam = 1.0 - smoothstep(0.0, 0.09, f2 - f1);
+    float molten = step(0.5, hash2(id + 17.0).x);
+    float pulse = 0.65 + 0.35 * sin(Time * 2.6 + p.y * 5.0 + id.x);
+    c = mix(c, Base * 0.35, seam * 0.85);
+    c += Tip * seam * molten * pulse * 1.4;
+    return c;
+}
+float smin(float a, float b, float k) { float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
+float shape(vec2 p) {
+    return length(p * vec2(1.0, 1.12)) - 0.8;
+}
+void main() {
+    vec2 p = uv * 2.0 - 1.0;
+    float d = shape(p);
+    if (d > 0.03) { gl_FragColor = vec4(0.0); return; }
+    vec2 e = vec2(0.01, 0.0);
+    vec2 g = vec2(shape(p + e.xy) - shape(p - e.xy), shape(p + e.yx) - shape(p - e.yx));
+    vec3 c = stone(p, d, g, 3.2);
+    c += Tip * 0.6 * smoothstep(-0.05, 0.02, d);
+    float a = smoothstep(0.03, 0.0, d);
+    gl_FragColor = vec4(c * color.rgb, a * color.a);
+}
+"#;
+
+thread_local! {
+    static DAIDARA: RefCell<Option<([Vec2; 2], f64)>> = const { RefCell::new(None) };
+}
+
+/// Daidara Awakening (Daichi): a giant of stone and ember risen behind him, its fists the
+/// attack. `hero` his feet, `age` seconds since it rose, `slams` the fists coming down (where,
+/// 0..1 how far down), `left` whether he faces left.
+pub fn draw_daidara(hero: Vec2, age: f32, ending: f32, slams: &[(Vec2, f32)], time: f64, vfx: &crate::vfx::Vfx) {
+    let t = time as f32;
+    let rise = (age / 0.7).min(1.0);
+    let ease = 1.0 - (1.0 - rise) * (1.0 - rise);
+    let fade = ease * (ending / 0.5).min(1.0);
+    let size = 136.0;
+    let centre = hero + vec2(0.0, -70.0 + 50.0 * (1.0 - ease) + 1.5 * (t * 1.3).sin());
+    let shoulders = [centre + vec2(-0.6 * size * 0.5, -0.2 * size * 0.5), centre + vec2(0.6 * size * 0.5, -0.2 * size * 0.5)];
+    // Each fist: resting by the shoulders, or riding up and slamming down on its target.
+    let mut goals = [shoulders[0] + vec2(-14.0, 48.0 + 3.0 * (t * 2.0).sin()), shoulders[1] + vec2(14.0, 48.0 + 3.0 * (t * 2.0 + 1.0).sin())];
+    let mut striking = [None, None];
+    for &(target, k) in slams {
+        let side = if target.x < hero.x { 0 } else { 1 };
+        if striking[side].is_some() {
+            continue;
+        }
+        // Up and over (most of the wind-up), then down fast.
+        let up = target + vec2(0.0, -110.0);
+        goals[side] = if k < 0.7 { up } else { up + (target - up) * ((k - 0.7) / 0.3).powi(2) };
+        striking[side] = Some(k);
+    }
+    let fists = DAIDARA.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.as_ref().is_none_or(|(_, last)| time - last > 0.5) {
+            *d = Some((goals, time));
+        }
+        let (f, last) = d.as_mut().unwrap();
+        let dt = ((time - *last) as f32).clamp(0.0, 0.05);
+        *last = time;
+        for s in 0..2 {
+            // Snap down on the strike, drift back otherwise.
+            let stiff = if striking[s].is_some_and(|k| k >= 0.7) { 40.0 } else { 9.0 };
+            f[s] += (goals[s] - f[s]) * (1.0 - (-dt * stiff).exp());
+        }
+        *f
+    });
+    let base = vec3(0.17, 0.16, 0.19);
+    let mid = vec3(0.62, 0.58, 0.56);
+    let ember = vec3(1.0, 0.42, 0.1);
+    // Its glow and the mist it rises from.
+    vfx.additive(|| {
+        vfx.draw_wh("glow", centre + vec2(0.0, 10.0), vec2(size * 1.6, size * 1.3), 0.0, Color::new(1.0, 0.35, 0.08, 0.18 * fade));
+        vfx.draw_wh("glow", hero + vec2(0.0, 6.0), vec2(150.0, 50.0), 0.0, Color::new(1.0, 0.4, 0.1, 0.2 * fade));
+    });
+    for k in 0..6 {
+        let kf = k as f32;
+        let ph = (t * 0.25 + kf * 0.17).fract();
+        let q = centre + vec2((kf * 1.9).sin() * 50.0, 40.0 - ph * 30.0);
+        vfx.draw("smoke", q, 40.0 + 30.0 * ph, kf, Color::new(0.4, 0.36, 0.36, 0.22 * fade * (ph * std::f32::consts::PI).sin()));
+    }
+    let (Some(giant), Some(fist), Some(rock)) = (shader(GIANT, false), shader(FIST, false), shader(ROCK, false)) else { return };
+    // Arms: boulders strung from the shoulders, bending out to the fists, shrinking to the
+    // wrist; ember glowing in the gaps.
+    let Some(boulder) = shader(BOULDER, false) else { return };
+    let mut arms = Vec::new();
+    for s in 0..2 {
+        let (a, b) = (shoulders[s], fists[s]);
+        let out = if s == 0 { -1.0 } else { 1.0 };
+        let elbow = (a + b) * 0.5 + vec2(out * 18.0, -10.0);
+        for i in 0..6 {
+            let u = i as f32 / 6.0;
+            let ab = a + (elbow - a) * u;
+            let bc = elbow + (b - elbow) * u;
+            arms.push((ab + (bc - ab) * u, 17.0 - 7.0 * u));
+        }
+    }
+    vfx.additive(|| {
+        for (q, r) in &arms {
+            vfx.draw("glow", *q, r * 2.6, 0.0, Color::new(1.0, 0.4, 0.1, 0.22 * fade));
+        }
+    });
+    gl_use_material(&boulder);
+    colours(&boulder, t, base, mid, ember);
+    for (q, r) in &arms {
+        draw_mesh(&quad(*q, *r, Color::new(1.0, 1.0, 1.0, fade)));
+    }
+    gl_use_default_material();
+    let _ = &rock;
+    gl_use_material(&giant);
+    colours(&giant, t, base, mid, ember);
+    draw_mesh(&quad(centre, size * 0.5, Color::new(1.0, 1.0, 1.0, 0.95 * fade)));
+    gl_use_default_material();
+    gl_use_material(&fist);
+    colours(&fist, t, base, mid, ember);
+    for (s, f) in fists.iter().enumerate() {
+        let r = if striking[s].is_some() { 26.0 } else { 22.0 };
+        draw_mesh(&quad(*f, r, Color::new(1.0, 1.0, 1.0, fade)));
+    }
+    gl_use_default_material();
+    // The coming blow: a shadow growing under each falling fist.
+    for &(target, k) in slams {
+        let g = (k * 1.2).min(1.0);
+        vfx.draw_wh("glow", target + vec2(0.0, 4.0), vec2(70.0, 26.0) * (0.4 + 0.6 * g), 0.0, Color::new(0.05, 0.02, 0.0, 0.45 * g));
+        vfx.additive(|| vfx.draw_wh("ring", target + vec2(0.0, 4.0), vec2(1.0, 0.45) * (130.0 - 60.0 * k), 0.0, Color::new(1.0, 0.5, 0.15, 0.35 * g)));
+    }
 }

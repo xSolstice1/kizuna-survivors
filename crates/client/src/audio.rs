@@ -249,6 +249,9 @@ impl Audio {
                     }
                 }
                 Event::DashLand { .. } => continue,
+                Event::Punch { .. } => Sfx::Thud,
+                Event::DaidaraAwakened { .. } => Sfx::GongDeep,
+                Event::DaidaraStomp { .. } => Sfx::Boom,
                 Event::HannyaAwakened { .. } => Sfx::Roar,
                 Event::Beam { .. } => Sfx::BeamSfx,
                 Event::ShadowStep { .. } => Sfx::Step,

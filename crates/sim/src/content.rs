@@ -250,6 +250,23 @@ pub const EXORCISM_RADIUS: f32 = 420.0;
 // ───────────────────────── Toya's special: Hundred-Leg Rampage ─────────────────────────
 
 pub const MUKADE_DURATION: f32 = 8.0;
+/// Daidara Awakening: the giant's onset quake, its fist slams (one every `EVERY`, alternating
+/// fists, at the thickest crowd within `REACH`), the finale stomp, and how it shields Daichi.
+pub const DAIDARA_DURATION: f32 = 9.0;
+pub const DAIDARA_ONSET_RADIUS: f32 = 200.0;
+pub const DAIDARA_ONSET_DAMAGE: f32 = 100.0;
+pub const DAIDARA_SLAM_EVERY: f32 = 0.5;
+pub const DAIDARA_SLAM_DELAY: f32 = 0.42;
+pub const DAIDARA_SLAM_RADIUS: f32 = 62.0;
+pub const DAIDARA_SLAM_DAMAGE: f32 = 72.0;
+pub const DAIDARA_SLAM_REACH: f32 = 190.0;
+pub const DAIDARA_FINALE_DAMAGE: f32 = 240.0;
+pub const DAIDARA_DAMAGE_TAKEN: f32 = 0.6;
+pub const DAIDARA_MOVE_SPEED: f32 = 1.1;
+/// Unbroken Will (Daichi): below `UNBROKEN_HP` of max health.
+pub const UNBROKEN_HP: f32 = 0.5;
+pub const UNBROKEN_MIGHT: f32 = 0.25;
+pub const UNBROKEN_SPEED: f32 = 0.15;
 /// Thousand-Leg Burst: the opening radial spike explosion.
 pub const MUKADE_BURST_RADIUS: f32 = 220.0;
 pub const MUKADE_BURST_DAMAGE: f32 = 110.0;
@@ -356,6 +373,8 @@ pub enum WeaponKind {
     IaiFlash,
     /// Crimson tendrils lash through the nearest enemies (Toya's signature).
     CrimsonTendrils,
+    /// Iron-shackled punches that throw a cone of shockwave and stone (Daichi's signature).
+    ShackleFist,
     /// Segmented spines erupt from the ground under enemies.
     MukadeSpines,
     /// A hungry pulse that drains enemies around you and heals you.
@@ -376,7 +395,7 @@ pub enum WeaponKind {
     PurificationWave,
 }
 
-pub const ALL_WEAPONS: [WeaponKind; 26] = [
+pub const ALL_WEAPONS: [WeaponKind; 27] = [
     WeaponKind::Ofuda,
     WeaponKind::MoonOrbs,
     WeaponKind::SakuraField,
@@ -394,6 +413,7 @@ pub const ALL_WEAPONS: [WeaponKind; 26] = [
     WeaponKind::LanternVigil,
     WeaponKind::IaiFlash,
     WeaponKind::CrimsonTendrils,
+    WeaponKind::ShackleFist,
     WeaponKind::MukadeSpines,
     WeaponKind::Devour,
     WeaponKind::VenomFang,
@@ -549,6 +569,13 @@ pub fn weapon_stats(kind: WeaponKind, level: u8) -> WeaponStats {
             area: 1.0 + 0.07 * k, // reach
             ..base
         },
+        WeaponKind::ShackleFist => WeaponStats {
+            damage: 24.0 + 6.0 * k,
+            cooldown: 0.95 - 0.035 * k,
+            amount: 1 + at(l, 4) + at(l, 7), // punches (alternating fists)
+            area: 1.0 + 0.08 * k,
+            ..base
+        },
         WeaponKind::MukadeSpines => WeaponStats {
             damage: 11.54 + 3.21 * k,
             cooldown: 1.7 - 0.06 * k,
@@ -652,6 +679,8 @@ pub enum Tag {
     Star,
     /// Ren's shrine arts.
     Shrine,
+    /// Daichi's oath-bound arts.
+    Oath,
     Shared,
 }
 
@@ -685,6 +714,7 @@ pub fn weapon_def(kind: WeaponKind) -> WeaponDef {
         WeaponKind::LanternVigil => (&[Spirit], (P::Expanse, 1)),
         WeaponKind::IaiFlash => (&[Spirit], (P::Swiftness, 1)),
         WeaponKind::CrimsonTendrils => (&[Curse], (P::Might, 1)),
+        WeaponKind::ShackleFist => (&[Oath], (P::Guard, 1)),
         WeaponKind::MukadeSpines => (&[Curse], (P::Expanse, 1)),
         WeaponKind::Devour => (&[Curse], (P::Vitality, 1)),
         WeaponKind::VenomFang => (&[Curse], (P::Haste, 1)),
@@ -717,9 +747,10 @@ pub enum HeroId {
     Shun,
     Toya,
     Kuon,
+    Daichi,
 }
 
-pub const ALL_HEROES: [HeroId; 10] = [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Toya, HeroId::Kuon, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
+pub const ALL_HEROES: [HeroId; 11] = [HeroId::Ren, HeroId::Riku, HeroId::Shun, HeroId::Toya, HeroId::Kuon, HeroId::Daichi, HeroId::Kaede, HeroId::Mika, HeroId::Haru, HeroId::Nanami, HeroId::Yuzu];
 
 /// What Space does when the meter is full.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -736,6 +767,9 @@ pub enum SpecialKind {
     Firmament,
     /// Divine Purification: invulnerable shrine-maiden barrage ending in a great purifying blast.
     Divine,
+    /// Daidara Awakening: a giant of stone and ember rises behind Daichi; its fists are the
+    /// attack (slams where the enemies are), ending in a stomp that shakes the screen.
+    Daidara,
 }
 
 /// The movement key: every hero's own way to cross the field (one key, aimed).
@@ -761,6 +795,9 @@ pub enum MoveKind {
     TendrilPull,
     /// Kuon: swaps places with his star marker (or blinks and plants one); slows his old spot.
     StarShift,
+    /// Daichi: his chain latches onto a wall, a prop or a big enemy and pulls him in to a
+    /// ground smash (two charges).
+    SeveredChain,
 }
 
 pub struct MoveDef {
@@ -790,6 +827,7 @@ pub fn move_def(k: MoveKind) -> MoveDef {
         FoxBlink => d("Fox Blink", "Blink away, leaving a fox decoy that draws enemies and bursts", 84.0, 0.0, 5.0, 40.0, false),
         VeilCrossing => d("Veil Crossing", "Step through the veil behind the strongest enemy near; it takes a sure critical", 140.0, 0.0, 6.0, 50.0, false),
         TendrilPull => d("Tendril Pull", "Tendrils drag you ahead; enemies in the way are cut and slowed", 90.0, 0.2, 5.5, 34.0, false),
+        SeveredChain => MoveDef { charges: 2, ..d("Severed Chain", "Throw your chain: it latches onto walls and big enemies and pulls you in to a ground smash", 175.0, 0.0, 4.5, 40.0, false) },
         StarShift => d("Star Shift", "Swap places with your star marker (or blink and plant one); your old spot slows enemies", 90.0, 0.0, 6.0, 20.0, false),
     }
 }
@@ -804,6 +842,7 @@ impl SpecialKind {
             SpecialKind::Mukade => MUKADE_DURATION,
             SpecialKind::Firmament => DOMAIN_DURATION,
             SpecialKind::Divine => DIVINE_DURATION,
+            SpecialKind::Daidara => DAIDARA_DURATION,
         }
     }
 }
@@ -822,6 +861,7 @@ impl HeroId {
             HeroId::Shun => "shun",
             HeroId::Toya => "toya",
             HeroId::Kuon => "kuon",
+            HeroId::Daichi => "daichi",
         }
     }
     pub fn index(self) -> usize {
@@ -872,6 +912,7 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Riku => ("Riku Kazamine", "Fox-spirit shinobi", "+5% move speed, +5% damage", Bonus { move_speed: 0.05, might: 0.05, ..b }, WeaponKind::FoxfireOrb, &[Fox, Thunder, Blade, Fire], true),
         HeroId::Kuon => ("Kuon Hoshimi", "Star-reading onmyoji", "Stillness: nearby enemies crawl; a ward blocks a hit every 6s", b, WeaponKind::GravityWell, &[Star, Celestial, Talisman, Thunder], true),
         HeroId::Toya => ("Toya Hyakuashi", "Cursed youth", "Regenerate 0.3 HP/s, +5% move speed", Bonus { recovery: 0.3, move_speed: 0.05, ..b }, WeaponKind::CrimsonTendrils, &[Curse, Blade, Fire, Thunder], true),
+        HeroId::Daichi => ("Daichi Iwakura", "Wall-breaker", "Unbroken Will: below half health, +25% damage and +15% move speed", b, WeaponKind::ShackleFist, &[Oath, Blade, Fire, Nature], true),
         HeroId::Shun => ("Shun Yamikiri", "Spirit ferryman", "+10% area", Bonus { area: 0.10, ..b }, WeaponKind::GraveCleaver, &[Spirit, Blade, Thunder, Fire], true),
     };
     let (special, special_name) = match id {
@@ -880,6 +921,7 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Shun => (SpecialKind::Hannya, "Hannya Unbound"),
         HeroId::Toya => (SpecialKind::Mukade, "Hundred-Leg Rampage"),
         HeroId::Kuon => (SpecialKind::Firmament, "Domain: Endless Firmament"),
+        HeroId::Daichi => (SpecialKind::Daidara, "Daidara Awakening"),
         _ => (SpecialKind::Barrier, "Barrier"),
     };
     let (reach, reach_might) = match id {
@@ -888,14 +930,14 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Mika | HeroId::Nanami => (REACH_RANGED, 1.0),
         HeroId::Riku => (REACH_HYBRID, MIGHT_RIKU),
         HeroId::Kaede | HeroId::Yuzu => (REACH_HYBRID, 1.0),
-        HeroId::Toya => (REACH_MELEE, MIGHT_TOYA),
+        HeroId::Toya | HeroId::Daichi => (REACH_MELEE, MIGHT_TOYA),
         HeroId::Shun | HeroId::Haru => (REACH_MELEE, MIGHT_MELEE),
     };
     let element = match id {
         HeroId::Ren => Element::Light,
         HeroId::Riku | HeroId::Nanami => Element::Fire,
         HeroId::Shun => Element::Darkness,
-        HeroId::Toya => Element::Earth,
+        HeroId::Toya | HeroId::Daichi => Element::Earth,
         HeroId::Kuon => Element::Ice,
         HeroId::Kaede | HeroId::Yuzu => Element::Electric,
         HeroId::Mika => Element::Water,
@@ -912,6 +954,7 @@ pub fn hero_def(id: HeroId) -> HeroDef {
         HeroId::Shun => MoveKind::VeilCrossing,
         HeroId::Toya => MoveKind::TendrilPull,
         HeroId::Kuon => MoveKind::StarShift,
+        HeroId::Daichi => MoveKind::SeveredChain,
     };
     HeroDef { id, name, archetype, innate_text, innate, signature, pool_tags, reach, reach_might, weapon_slots: 4, passive_slots: 6, finished, special, special_name, element, movement }
 }
@@ -946,6 +989,7 @@ pub fn awakened_name(kind: WeaponKind) -> &'static str {
         WeaponKind::LanternVigil => "Thousand Lantern Vigil",
         WeaponKind::IaiFlash => "Moonsever",
         WeaponKind::CrimsonTendrils => "Hundred Tendrils",
+        WeaponKind::ShackleFist => "Earthbreaker",
         WeaponKind::MukadeSpines => "Centipede Spine",
         WeaponKind::Devour => "Gluttony",
         WeaponKind::VenomFang => "Venom Rain",
@@ -978,6 +1022,7 @@ pub fn awakened_text(kind: WeaponKind) -> &'static str {
         WeaponKind::LanternVigil => "Lantern Volley: more, wider lanterns that slow enemies and fire spirit bolts at them.",
         WeaponKind::IaiFlash => "Thousand Cuts: longer cuts that leave scars, and a radial storm of twelve cuts every few seconds.",
         WeaponKind::CrimsonTendrils => "Hundred Tendrils: more tendrils, and a storm of twelve lashes tears through everything around you.",
+        WeaponKind::ShackleFist => "Earthbreaker: every punch splits the ground ahead in a long quake, and the fists hit wider.",
         WeaponKind::MukadeSpines => "Centipede Spine: a marching line of spines crawls out across the ground every few seconds.",
         WeaponKind::Devour => "Gluttony: a wider pulse that heals twice as much, and a great feeding wave every few seconds.",
         WeaponKind::VenomFang => "Venom Rain: more fangs, and a ring of venom fangs bursts out every few seconds.",
@@ -1059,6 +1104,7 @@ pub fn awakened_stats(kind: WeaponKind) -> WeaponStats {
             s.damage *= 1.4;
         }
         WeaponKind::CrimsonTendrils => s.amount += 2,
+        WeaponKind::ShackleFist => s.area *= 1.3,
         WeaponKind::MukadeSpines => s.amount += 2,
         WeaponKind::Devour => s.area *= 1.3,
         WeaponKind::VenomFang => s.amount += 2,
@@ -1097,6 +1143,7 @@ pub fn signature_every(kind: WeaponKind) -> f32 {
         WeaponKind::LanternVigil => 0.5,
         WeaponKind::IaiFlash => 4.0,
         WeaponKind::CrimsonTendrils => 0.8,
+        WeaponKind::ShackleFist => 0.0, // part of every punch
         WeaponKind::MukadeSpines => 2.0,
         WeaponKind::Devour => 2.5,
         WeaponKind::VenomFang => 2.2,
@@ -1129,6 +1176,7 @@ pub fn signature_name(kind: WeaponKind) -> &'static str {
         WeaponKind::LanternVigil => "Lantern Volley",
         WeaponKind::IaiFlash => "Thousand Cuts",
         WeaponKind::CrimsonTendrils => "Hundred Lashes",
+        WeaponKind::ShackleFist => "Fault Line",
         WeaponKind::MukadeSpines => "Marching Spine",
         WeaponKind::Devour => "Feeding Wave",
         WeaponKind::VenomFang => "Fang Ring",
@@ -1291,7 +1339,7 @@ impl WeaponKind {
             FlamePool | FoxfireOrb | Familiars | RepulsionStar => Element::Fire,
             PurificationWave | Devour | VenomFang => Element::Water,
             ThunderChain | IaiFlash | Taiko => Element::Electric,
-            StarFall | CrimsonTendrils | MukadeSpines => Element::Earth,
+            StarFall | CrimsonTendrils | MukadeSpines | ShackleFist => Element::Earth,
             Ofuda | SakuraField | Crescent | GaleShuriken | FoxMirage => Element::Wind,
             MoonOrbs | SoulTether | YinYangOrbs => Element::Ice,
             SpiritSeal | LanternVigil => Element::Light,
@@ -1387,7 +1435,7 @@ impl Upgrade {
             Upgrade::Weapon(GravityWell | LanternVigil) => Tier::Mythic,
             Upgrade::Weapon(GraveCleaver | FoxfireOrb | VoidLance) => Tier::Legendary,
             Upgrade::Weapon(FoxMirage | MukadeSpines | Ofuda | FlamePool | Crescent) => Tier::Rare,
-            Upgrade::Weapon(CrimsonTendrils | IaiFlash | YinYangOrbs | StarFall | Familiars | MoonOrbs | GaleShuriken) => Tier::Uncommon,
+            Upgrade::Weapon(CrimsonTendrils | ShackleFist | IaiFlash | YinYangOrbs | StarFall | Familiars | MoonOrbs | GaleShuriken) => Tier::Uncommon,
             Upgrade::Weapon(_) => Tier::Common,
             Upgrade::Passive(PassiveKind::Might) => Tier::Mythic,
             Upgrade::Passive(PassiveKind::Guard) => Tier::Legendary,
@@ -1415,6 +1463,7 @@ impl Upgrade {
             Upgrade::Weapon(WeaponKind::LanternVigil) => "Lantern Vigil",
             Upgrade::Weapon(WeaponKind::IaiFlash) => "Iai Flash",
             Upgrade::Weapon(WeaponKind::CrimsonTendrils) => "Crimson Tendrils",
+            Upgrade::Weapon(WeaponKind::ShackleFist) => "Shackle Fist",
             Upgrade::Weapon(WeaponKind::MukadeSpines) => "Mukade Spines",
             Upgrade::Weapon(WeaponKind::Devour) => "Devour",
             Upgrade::Weapon(WeaponKind::VenomFang) => "Venom Fang",
@@ -1468,6 +1517,7 @@ impl Upgrade {
                 WeaponKind::LanternVigil => "Sets soul-lanterns on the ground that pulse spirit fire at anything nearby.",
                 WeaponKind::IaiFlash => "A lightning quick-draw that cuts a long straight line through the horde.",
                 WeaponKind::CrimsonTendrils => "Crimson tendrils lash out and pierce straight through the nearest enemies.",
+                WeaponKind::ShackleFist => "Heavy shackled punches at the nearest enemy, throwing a cone of shockwave and stone.",
                 WeaponKind::MukadeSpines => "Segmented spines erupt from the ground beneath nearby enemies.",
                 WeaponKind::Devour => "A hungry pulse drains everything around you and heals you for each enemy caught.",
                 WeaponKind::VenomFang => "Venomous fangs home in on enemies and burst on impact.",
@@ -1501,6 +1551,7 @@ impl Upgrade {
                         WeaponKind::LanternVigil => "lantern",
                         WeaponKind::IaiFlash => "cut",
                         WeaponKind::CrimsonTendrils => "tendril",
+                        WeaponKind::ShackleFist => "punch",
                         WeaponKind::MukadeSpines => "spine",
                         WeaponKind::Devour => "",
                         WeaponKind::VenomFang => "fang",
@@ -1986,7 +2037,7 @@ mod tests {
         let count = |tiers: Vec<Tier>| ALL_TIERS.map(|t| tiers.iter().filter(|x| **x == t).count());
         let weapons = count(ALL_WEAPONS.iter().map(|k| Upgrade::Weapon(*k).tier()).collect());
         let passives = count(ALL_PASSIVES.iter().map(|k| Upgrade::Passive(*k).tier()).collect());
-        assert_eq!(weapons, [7, 7, 5, 3, 2, 2]);
+        assert_eq!(weapons, [7, 8, 5, 3, 2, 2]);
         assert_eq!(passives, [3, 3, 2, 1, 1, 0]);
         assert!(MAXED_FALLBACKS.iter().all(|u| u.tier() == Common));
     }

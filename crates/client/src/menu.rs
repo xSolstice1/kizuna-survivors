@@ -430,6 +430,7 @@ pub fn special_text(def: &sim::content::HeroDef) -> String {
         sim::content::SpecialKind::Mukade => "8s predator form: tendril barrage, eruptions, regeneration",
         sim::content::SpecialKind::Firmament => "8s domain: enemies suspended and crushed, ends in a giant void lance",
         sim::content::SpecialKind::Divine => "8s invulnerable: ofuda storm, yin-yang crashes, seal rings, final purification",
+        sim::content::SpecialKind::Daidara => "9s giant: stone fists slam the crowds, ends in a stomp that shakes the screen",
     };
     format!("Special: {} ({what})", def.special_name)
 }
@@ -1026,7 +1027,7 @@ fn login_art(assets: &Assets, r: Rect, t: f32) {
         kit::text(l, ax + 32.0, ay + 272.0 + k as f32 * 20.0, 16.0, Color::new(1.0, 0.92, 0.96, 0.85));
     }
     draw_rectangle(ax, ay + ah - 70.0, aw, 70.0, Color::new(0.04, 0.03, 0.08, 0.55));
-    let heroes = [sim::content::HeroId::Ren, sim::content::HeroId::Riku, sim::content::HeroId::Shun, sim::content::HeroId::Toya, sim::content::HeroId::Kuon];
+    let heroes = [sim::content::HeroId::Ren, sim::content::HeroId::Riku, sim::content::HeroId::Shun, sim::content::HeroId::Toya, sim::content::HeroId::Kuon, sim::content::HeroId::Daichi];
     let step = (aw - 40.0) / heroes.len() as f32;
     for (k, hid) in heroes.iter().enumerate() {
         let bob = (t * 2.0 + k as f32).sin() * 2.0;

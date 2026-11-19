@@ -20,7 +20,11 @@ pub struct MoveFx {
     flights: Vec<(MoveKind, Vec2, Vec2, f32)>,
     /// (kind, where, age)
     lands: Vec<(MoveKind, Vec2, f32)>,
+    /// Daichi's punches: (fist, direction, shockwave reach, awakened, age).
+    punches: Vec<(Vec2, Vec2, f32, bool, f32)>,
 }
+
+const PUNCH: f32 = 0.3;
 
 fn v(p: sim::Vec2) -> Vec2 {
     vec2(p.x, p.y)
@@ -40,6 +44,7 @@ pub fn tint(kind: MoveKind) -> Color {
         VeilCrossing => Color::new(1.0, 0.25, 0.3, 1.0),
         TendrilPull => Color::new(0.9, 0.12, 0.2, 1.0),
         StarShift => Color::new(0.75, 0.85, 1.0, 1.0),
+        SeveredChain => Color::new(1.0, 0.55, 0.2, 1.0),
     }
 }
 
@@ -48,6 +53,7 @@ impl MoveFx {
         match *ev {
             Event::Dash { kind, from, to } => self.flights.push((kind, v(from), v(to), 0.0)),
             Event::DashLand { kind, pos } => self.lands.push((kind, v(pos), 0.0)),
+            Event::Punch { pos, dir, reach, awakened } => self.punches.push((v(pos), v(dir), reach, awakened, 0.0)),
             _ => {}
         }
     }
@@ -57,11 +63,14 @@ impl MoveFx {
         self.flights.retain(|f| f.3 < FLIGHT);
         self.lands.iter_mut().for_each(|l| l.2 += dt);
         self.lands.retain(|l| l.2 < LAND);
+        self.punches.iter_mut().for_each(|p| p.4 += dt);
+        self.punches.retain(|p| p.4 < PUNCH);
     }
 
     pub fn clear(&mut self) {
         self.flights.clear();
         self.lands.clear();
+        self.punches.clear();
     }
 }
 
@@ -129,6 +138,13 @@ pub fn draw_ground(world: &World, a: &Assets, t: f32) {
 pub fn draw_air(world: &World, fx: &MoveFx, a: &Assets, t: f32) {
     use MoveKind::*;
     let vx = &a.vfx;
+    // Daichi's chain: iron links from his fist to where it bit, taut while it reels him in.
+    if let Some(r) = world.dash.active.filter(|r| r.kind == SeveredChain) {
+        chain(vx, v(world.player.pos) + vec2(0.0, -14.0), v(r.to) + vec2(0.0, -8.0), 1.0 - (r.t / r.dur).min(1.0), t);
+    }
+    for &(fist, dir, reach, awakened, age) in &fx.punches {
+        punch(vx, fist + vec2(0.0, -10.0), dir, reach, awakened, age / PUNCH);
+    }
     // While travelling: a smear of motion trailing the hero.
     if let Some(r) = world.dash.active {
         let c = tint(r.kind);
@@ -196,5 +212,52 @@ pub fn draw_air(world: &World, fx: &MoveFx, a: &Assets, t: f32) {
             vx.draw("smoke", q, 10.0 + 14.0 * k, a0, Color::new(0.72, 0.66, 0.58, 0.35 * fade));
         }
         vx.additive(|| vx.draw_wh("ring", g, vec2(1.0, 0.5) * (14.0 + 40.0 * k), 0.0, Color::new(c.r, c.g, c.b, 0.6 * fade)));
+    }
+}
+
+/// An iron chain from `a` to `b`: links alternating face-on and edge-on, the bitten end glowing.
+fn chain(vx: &crate::vfx::Vfx, a: Vec2, b: Vec2, slack: f32, t: f32) {
+    let d = b - a;
+    let len = d.length();
+    if len < 4.0 {
+        return;
+    }
+    let dir = d / len;
+    let side = vec2(-dir.y, dir.x);
+    let n = (len / 6.0) as usize + 1;
+    for k in 0..=n {
+        let u = k as f32 / n as f32;
+        // A little sag while slack, a shiver along it.
+        let sag = (u * std::f32::consts::PI).sin() * 6.0 * slack + (t * 40.0 + u * 20.0).sin() * 0.6;
+        let q = a + d * u + side * sag;
+        let face = k % 2 == 0;
+        let c = Color::new(0.32, 0.3, 0.34, 1.0);
+        vx.draw_wh("ring", q, if face { vec2(6.0, 4.2) } else { vec2(6.0, 1.6) }, dir.y.atan2(dir.x), c);
+    }
+    vx.additive(|| {
+        vx.draw_wh("streak", (a + b) * 0.5, vec2(len, 3.0), dir.y.atan2(dir.x), Color::new(1.0, 0.5, 0.15, 0.35));
+        vx.draw("glow", b, 16.0, 0.0, Color::new(1.0, 0.55, 0.2, 0.7));
+        vx.draw("spark_ball", b, 10.0, t * 9.0, Color::new(1.0, 0.7, 0.4, 0.8));
+    });
+}
+
+/// A Shackle Fist punch: a flash at the knuckles, a cone of shockwave pushing out ahead, and
+/// stone thrown on with it.
+fn punch(vx: &crate::vfx::Vfx, fist: Vec2, dir: Vec2, reach: f32, awakened: bool, k: f32) {
+    let fade = 1.0 - k;
+    let ang = dir.y.atan2(dir.x);
+    let wave = fist + dir * (reach * (0.2 + 0.8 * k.sqrt()));
+    vx.additive(|| {
+        vx.draw("glow", fist, 30.0 * fade + 8.0, 0.0, Color::new(1.0, 0.75, 0.45, 0.8 * fade));
+        vx.draw("burst", fist, 22.0 * (0.6 + 0.6 * k), ang, Color::new(1.0, 0.85, 0.6, fade));
+        vx.draw_wh("crescent", wave, vec2(22.0 + 30.0 * k, 34.0 + 30.0 * k), ang, Color::new(1.0, 0.7, 0.4, 0.7 * fade));
+        if awakened {
+            vx.draw_wh("crescent", wave + dir * 10.0, vec2(30.0 + 30.0 * k, 46.0 + 30.0 * k), ang, Color::new(1.0, 0.45, 0.15, 0.5 * fade));
+        }
+    });
+    for s in 0..5 {
+        let a = ang + (s as f32 - 2.0) * 0.28;
+        let q = fist + Vec2::from_angle(a) * (6.0 + reach * 0.8 * k) + vec2(0.0, -8.0 * (k * std::f32::consts::PI).sin());
+        vx.draw_wh("crystal", q, vec2(5.0, 6.0) * (1.0 - 0.4 * k), a + k * 6.0 + s as f32, Color::new(0.55, 0.5, 0.48, fade));
     }
 }

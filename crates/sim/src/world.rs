@@ -205,6 +205,11 @@ pub enum Event {
     BarrierBlock,
     /// Divine Purification began / its final circle is charging.
     DivineAwakened { pos: Vec2 },
+    /// Daidara Awakening began / ended in its stomp.
+    DaidaraAwakened { pos: Vec2 },
+    DaidaraStomp { pos: Vec2, radius: f32 },
+    /// A Shackle Fist punch at `pos` along `dir`, its shockwave reaching `reach` beyond.
+    Punch { pos: Vec2, dir: Vec2, reach: f32, awakened: bool },
     DivineCharge { pos: Vec2 },
     /// Domain: Endless Firmament opened / is charging its finale / launched Void Lance: Maximum.
     DomainOpened { pos: Vec2 },
@@ -562,6 +567,8 @@ pub mod style {
     /// Giant yin-yang crash and Final Purification.
     pub const YINYANG: u8 = 19;
     pub const PURIFY: u8 = 20;
+    /// A fist of the Daidara giant slamming down.
+    pub const DAIDARA: u8 = 23;
     pub const SPINE: u8 = 12;
     pub const VENOM: u8 = 13;
     /// Thousand-Leg Burst.
@@ -1061,6 +1068,7 @@ impl World {
         self.update_mukade();
         self.update_domain();
         self.update_divine();
+        self.update_daidara();
         self.area_exempt = false;
         self.area_hits = 0;
         self.update_clones();
@@ -1119,7 +1127,7 @@ impl World {
         let g = &self.cfg.gear;
         let fury = if self.player.hp < self.player.max_hp * 0.4 { 1.0 + 0.3 * g.unique(Unique::Berserker) } else { 1.0 };
         let lotus = 1.0 + 0.35 * g.unique(Unique::GlassLotus);
-        let reach = hero_def(self.cfg.hero).reach_might;
+        let reach = hero_def(self.cfg.hero).reach_might * if self.unbroken() { 1.0 + UNBROKEN_MIGHT } else { 1.0 };
         (1.0 + 0.10 * self.passive_level(PassiveKind::Might) as f32 + self.bonus.might) * self.mods.damage * self.blessing_mult() * sake * fury * lotus * reach * self.exotic_might()
     }
     /// Damage multiplier from Kizuna Blessings: +3% each, added up (30 = +90%), so a long
@@ -1144,8 +1152,10 @@ impl World {
             Some(SpecialKind::NineTails) => FOX_MOVE_SPEED,
             Some(SpecialKind::Hannya) => HANNYA_MOVE_SPEED,
             Some(SpecialKind::Mukade) => MUKADE_MOVE_SPEED,
+            Some(SpecialKind::Daidara) => DAIDARA_MOVE_SPEED,
             _ => 1.0,
-        } * if self.speed_buff > 0.0 { SPEED_BUFF } else { 1.0 };
+        } * if self.speed_buff > 0.0 { SPEED_BUFF } else { 1.0 }
+            * if self.unbroken() { 1.0 + UNBROKEN_SPEED } else { 1.0 };
         110.0 * (1.0 + 0.08 * self.passive_level(PassiveKind::Swiftness) as f32 + self.bonus.move_speed) * self.mods.move_speed * fox
     }
     pub fn magnet(&self) -> f32 {
@@ -1263,6 +1273,7 @@ impl World {
             Some(SpecialKind::NineTails) => raw * FOX_DAMAGE_TAKEN,
             Some(SpecialKind::Hannya) => raw * HANNYA_DAMAGE_TAKEN,
             Some(SpecialKind::Mukade) => raw * MUKADE_DAMAGE_TAKEN,
+            Some(SpecialKind::Daidara) => raw * DAIDARA_DAMAGE_TAKEN,
             _ => raw,
         };
         let dmg = (raw - self.armor()).max(1.0);
@@ -2720,6 +2731,75 @@ impl World {
             let d = self.aim_dir();
             self.projectiles.push_kind(ProjKind::VoidOrb, DOMAIN_FINALE_RADIUS, p, d * 260.0, 4.0, DOMAIN_FINALE_DAMAGE * power, 255, 0.0, elem);
             self.events.push(Event::VoidMaximum { pos: p });
+        }
+    }
+
+    /// Daichi's Unbroken Will: below half health he hits harder and moves faster.
+    pub fn unbroken(&self) -> bool {
+        self.cfg.hero == HeroId::Daichi && self.player.hp < self.player.max_hp * UNBROKEN_HP
+    }
+
+    fn start_daidara(&mut self) {
+        let p = self.player.pos;
+        self.player.form = DAIDARA_DURATION;
+        self.player.iframes = BARRIER_IFRAMES;
+        self.fox_tick = 0.6; // first slam
+        let radius = self.reach_cap(DAIDARA_ONSET_RADIUS);
+        let dmg = DAIDARA_ONSET_DAMAGE * self.fox_power();
+        let elem = Some(self.hero_element);
+        self.query_circle(p, radius);
+        for idx in 0..self.scratch.len() {
+            let j = self.scratch[idx] as usize;
+            let dir = self.enemies.pos[j] - p;
+            self.hurt_enemy(j, dmg, dir, elem);
+            self.shove(j, dir, 380.0);
+        }
+        let r2 = radius * radius;
+        self.shots.retain(|s| (s.pos - p).length_sq() > r2);
+        self.events.push(Event::DaidaraAwakened { pos: p });
+        self.events.push(Event::Burst { pos: p, radius, style: style::QUAKE });
+    }
+
+    /// Where the giant's next fist lands: the thickest crowd of a few spots sampled in reach.
+    fn crowd_spot(&mut self, reach: f32) -> Option<Vec2> {
+        let mut best: Option<(Vec2, usize)> = None;
+        for q in self.random_targets(reach, 6) {
+            self.query_circle(q, DAIDARA_SLAM_RADIUS);
+            let n = self.scratch.len();
+            if n > 0 && best.is_none_or(|(_, m)| n > m) {
+                best = Some((q, n));
+            }
+        }
+        best.map(|b| b.0)
+    }
+
+    /// A Daidara fist slamming down at `pos` after `delay` (drawn as the fist descending).
+    pub(crate) fn daidara_slam(&mut self, pos: Vec2, delay: f32, scale: f32) {
+        let power = self.fox_power();
+        let elem = Some(self.hero_element);
+        self.blasts.push(Blast { pos, delay, max_delay: delay, radius: DAIDARA_SLAM_RADIUS * scale, damage: DAIDARA_SLAM_DAMAGE * power * scale, style: style::DAIDARA, burns: false, elem, follow: None });
+    }
+
+    fn update_daidara(&mut self) {
+        if self.form_kind() != Some(SpecialKind::Daidara) {
+            return;
+        }
+        self.player.form -= DT;
+        self.fox_tick -= DT;
+        if self.fox_tick <= 0.0 {
+            self.fox_tick = DAIDARA_SLAM_EVERY;
+            if let Some(t) = self.crowd_spot(DAIDARA_SLAM_REACH) {
+                self.daidara_slam(t, DAIDARA_SLAM_DELAY, 1.0);
+            }
+        }
+        if self.player.form <= 0.0 {
+            self.player.form = 0.0;
+            // The stomp: the whole screen shakes.
+            let p = self.player.pos;
+            let r = self.reach_half().length();
+            self.view_nova(p, r, DAIDARA_FINALE_DAMAGE * self.fox_power(), style::QUAKE, Some(self.hero_element));
+            self.events.push(Event::DaidaraStomp { pos: p, radius: r });
+            self.events.push(Event::FoxFaded);
         }
     }
 
@@ -4224,6 +4304,7 @@ impl World {
                 | WeaponKind::LanternVigil
                 | WeaponKind::IaiFlash
                 | WeaponKind::CrimsonTendrils
+                | WeaponKind::ShackleFist
                 | WeaponKind::MukadeSpines
                 | WeaponKind::Devour
                 | WeaponKind::VenomFang
@@ -4459,6 +4540,36 @@ impl World {
                     self.events.push(Event::Iai { from: p, to: tip });
                     if w.awakened {
                         self.scars.push(Scar { from: p, to: tip, life: 1.5, tick: 0.3, damage: dmg * 0.25, elem });
+                    }
+                }
+            }
+            WeaponKind::ShackleFist => {
+                self.events.push(Event::Fired(WeaponKind::ShackleFist));
+                let d = match self.nearest_enemy(150.0 * area) {
+                    Some(e) => (e - p).normalize_or(self.player.facing),
+                    None => self.aim_dir(),
+                };
+                for n in 0..s.amount {
+                    let dir = Vec2::from_angle(d.y.atan2(d.x) + [0.0, 0.55, -0.55][n.min(2) as usize]);
+                    let fist = p + dir * 24.0;
+                    self.query_circle(fist, 28.0 * area);
+                    for idx in 0..self.scratch.len() {
+                        let j = self.scratch[idx] as usize;
+                        let to = self.enemies.pos[j] - p;
+                        self.hurt_enemy(j, dmg, to, elem);
+                        self.shove(j, to, 170.0);
+                    }
+                    // The shockwave and stone thrown on past the fist.
+                    let reach = 70.0 * area;
+                    self.hurt_along(fist, fist + dir * reach, 12.0 * area, dmg * 0.5, elem);
+                    self.events.push(Event::Punch { pos: fist, dir, reach, awakened: w.awakened });
+                    if w.awakened {
+                        // Fault Line: the ground splits ahead in a running quake.
+                        for k in 0..6 {
+                            let pos = fist + dir * (34.0 + 30.0 * k as f32);
+                            let delay = 0.06 + 0.05 * k as f32;
+                            self.blasts.push(Blast { pos, delay, max_delay: delay, radius: 30.0 * area, damage: dmg * 0.9, style: style::QUAKE, burns: false, elem, follow: None });
+                        }
                     }
                 }
             }
@@ -5037,6 +5148,7 @@ impl World {
             SpecialKind::Mukade => return self.start_mukade(),
             SpecialKind::Firmament => return self.start_domain(),
             SpecialKind::Divine => return self.start_divine(),
+            SpecialKind::Daidara => return self.start_daidara(),
             SpecialKind::Barrier => {}
         }
         self.player.iframes = BARRIER_IFRAMES;

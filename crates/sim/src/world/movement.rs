@@ -32,6 +32,8 @@ pub struct Dash {
     landed: Option<DashRun>,
     /// Kuon's star marker.
     pub star: Option<Vec2>,
+    /// The enemy Daichi's chain caught (`Enemies.id`), slammed on arrival.
+    pub hook: Option<u32>,
 }
 
 /// What a move leaves on the ground.
@@ -66,7 +68,7 @@ pub const ENCORE_ARMOR: f32 = 3.0;
 impl Dash {
     pub fn new(kind: MoveKind, extra: u8) -> Self {
         let n = move_def(kind).charges + extra;
-        Dash { charges: n, max_charges: n, recharge: 0.0, active: None, landed: None, star: None }
+        Dash { charges: n, max_charges: n, recharge: 0.0, active: None, landed: None, star: None, hook: None }
     }
 }
 
@@ -208,6 +210,34 @@ impl World {
                     self.hurt_enemy(j, dmg, dir, elem);
                 }
             }
+            MoveKind::SeveredChain => {
+                // The chain flies along the aim: it catches the first big enemy on the line, or
+                // bites into the first wall or prop; with nothing to catch it's a short lunge.
+                self.dash.hook = None;
+                let mut caught: Option<(usize, f32)> = None;
+                self.query_circle(p + aim * (m.range * 0.5), m.range * 0.5 + 30.0);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    if self.enemies.kind[j].rank() == crate::enemies::Rank::Fodder {
+                        continue;
+                    }
+                    let d = self.enemies.pos[j] - p;
+                    let t = d.dot_with(aim);
+                    let off = (d - aim * t).length();
+                    if t > 0.0 && t < m.range && off < self.enemies.radius[j] + 12.0 && caught.is_none_or(|(_, b)| t < b) {
+                        caught = Some((j, t));
+                    }
+                }
+                let wall = self.free_to(p, p + aim * m.range);
+                to = match caught {
+                    Some((j, t)) if t < (wall - p).length() + 1.0 => {
+                        self.dash.hook = Some(self.enemies.id[j]);
+                        self.free_to(p, self.enemies.pos[j] - aim * (self.enemies.radius[j] + 10.0))
+                    }
+                    _ if (wall - p).length() < m.range - 6.0 => wall,
+                    _ => self.free_to(p, p + aim * 70.0),
+                };
+            }
             _ => {}
         }
         let to = if m.time > 0.0 { to } else { self.free_to(p, to) };
@@ -225,10 +255,12 @@ impl World {
             }
             _ => {}
         }
-        let run = DashRun { kind, from: p, to, t: 0.0, dur: m.time };
-        if m.time > 0.0 {
+        // The chain reels him in fast, however far it caught.
+        let dur = if kind == MoveKind::SeveredChain { ((to - p).length() / 620.0).max(0.08) } else { m.time };
+        let run = DashRun { kind, from: p, to, t: 0.0, dur };
+        if dur > 0.0 {
             self.dash.active = Some(run);
-            self.player.iframes = self.player.iframes.max(m.time + AFTER);
+            self.player.iframes = self.player.iframes.max(dur + AFTER);
         } else {
             self.player.pos = to;
             self.player.iframes = self.player.iframes.max(AFTER + 0.1);
@@ -293,6 +325,30 @@ impl World {
                 }
                 self.hurt_along(from, to, w, d, elem);
                 self.events.push(Event::Lash { from, to });
+            }
+            MoveKind::SeveredChain => {
+                // A ground smash where he lands; whatever the chain caught takes the brunt and he
+                // rebounds off it.
+                let r = 46.0 * self.area_mult();
+                self.query_circle(to, r);
+                for idx in 0..self.scratch.len() {
+                    let j = self.scratch[idx] as usize;
+                    let dir = self.enemies.pos[j] - to;
+                    self.hurt_enemy(j, dmg, dir, elem);
+                    self.shove(j, dir, 260.0);
+                }
+                self.events.push(Event::Burst { pos: to, radius: r, style: style::QUAKE });
+                if let Some(id) = self.dash.hook.take() {
+                    if let Some(j) = self.enemies.id.iter().position(|&x| x == id) {
+                        let dir = self.enemies.pos[j] - from;
+                        self.hurt_enemy(j, dmg * 2.5, dir, elem);
+                        let back = self.free_to(to, to - dir.normalize_or_zero() * 22.0);
+                        self.player.pos = back;
+                    }
+                }
+                if form == Some(SpecialKind::Daidara) {
+                    self.daidara_slam(to, 0.12, 0.8);
+                }
             }
             MoveKind::FlaskJump | MoveKind::VeilCrossing | MoveKind::StarShift => {}
         }
@@ -365,6 +421,8 @@ mod tests {
 
     fn idle(w: &mut World, secs: f32) {
         for _ in 0..(secs / DT) as usize {
+            w.close_chest();
+            w.choose_shrine(None);
             w.step(Input::default());
         }
     }
@@ -378,7 +436,8 @@ mod tests {
             idle(&mut w, 0.6);
             let m = move_def(w.move_kind());
             let went = (w.player.pos - start).length();
-            assert!(went > m.range * 0.5, "{h:?} moved {went}");
+            // (Daichi's chain, with nothing to catch, is a short lunge.)
+            assert!(went > m.range * 0.35, "{h:?} moved {went}");
             assert_eq!(w.dash.charges, w.dash.max_charges - 1, "{h:?} spent a charge");
             idle(&mut w, m.cooldown + 0.1);
             assert_eq!(w.dash.charges, w.dash.max_charges, "{h:?} got it back");
@@ -492,5 +551,64 @@ mod tests {
             w.state_hash()
         };
         assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn the_chain_catches_a_big_enemy_and_slams_it() {
+        let mut w = quiet(HeroId::Daichi);
+        let p = w.player.pos;
+        w.spawn_enemy(EnemyKind::Oni, p + Vec2::new(140.0, 0.0));
+        let hp = w.enemies.hp[0];
+        press(&mut w, Vec2::new(1.0, 0.0));
+        assert!(w.dash.hook.is_some(), "caught the oni");
+        idle(&mut w, 0.4);
+        assert!(w.player.pos.x > p.x + 90.0 && w.player.pos.x < w.enemies.pos[0].x, "pulled in, short of it: {:?}", w.player.pos);
+        assert!(w.enemies.hp[0] < hp - 60.0, "slammed: {} -> {}", hp, w.enemies.hp[0]);
+        assert_eq!(w.dash.charges, 1, "two charges");
+    }
+
+    #[test]
+    fn the_chain_bites_walls_and_never_ends_inside_one() {
+        for stage in ALL_STAGES {
+            let mut w = World::new(WorldConfig { hero: HeroId::Daichi, stage, stress: Some(Stress { enemies: 0, projectiles: 0 }), ..Default::default() });
+            w.weapons.clear();
+            for k in 0..12 {
+                let aim = Vec2::from_angle(k as f32 * std::f32::consts::TAU / 12.0);
+                w.dash.charges = 2;
+                press(&mut w, aim);
+                idle(&mut w, 0.4);
+                assert!(!w.terrain.solid_at(w.player.pos), "{stage:?}: inside a wall at {:?}", w.player.pos);
+            }
+        }
+    }
+
+    #[test]
+    fn daidara_fists_land_on_the_crowd() {
+        let mut w = quiet(HeroId::Daichi);
+        let p = w.player.pos;
+        for k in 0..6 {
+            w.spawn_enemy(EnemyKind::Oni, p + Vec2::new(120.0 + k as f32 * 6.0, 10.0));
+        }
+        let before: f32 = w.enemies.hp.iter().sum();
+        w.player.special = 1.0;
+        w.step(Input { special: true, ..Default::default() });
+        assert_eq!(w.form_kind(), Some(SpecialKind::Daidara));
+        idle(&mut w, 1.5);
+        assert!(w.blasts.iter().any(|b| b.style == style::DAIDARA) || w.enemies.hp.iter().sum::<f32>() < before * 0.6, "the fists came down");
+        idle(&mut w, DAIDARA_DURATION);
+        assert_eq!(w.form_kind(), None);
+    }
+
+    #[test]
+    fn unbroken_will_below_half_health() {
+        let mut w = quiet(HeroId::Daichi);
+        let (m, s) = (w.might(), w.move_speed());
+        w.player.hp = w.player.max_hp * 0.4;
+        assert!(w.unbroken());
+        assert!((w.might() / m - (1.0 + UNBROKEN_MIGHT)).abs() < 1e-3);
+        assert!(w.move_speed() > s);
+        let mut r = quiet(HeroId::Toya);
+        r.player.hp = r.player.max_hp * 0.4;
+        assert!(!r.unbroken(), "Daichi's alone");
     }
 }

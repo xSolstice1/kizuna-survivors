@@ -49,6 +49,7 @@ FIXES = {
     "exotic/thousand_counter": ("green", "a dark crimson iron ring set with seven small red gems around its band, one of them glowing bright"),
     "gear/bottom": ("green", "a pair of dark navy hakama trousers with crisp pleats and a white waist tie, laid flat"),
     "gear/omamori": ("green", "a small red silk omamori charm pouch with gold embroidery and a knotted purple cord at the top"),
+    "icons/shackle_fist": ("green", "a clenched fist wrapped in pale cloth bandages wearing a heavy broken black iron shackle at the wrist with two dangling chain links, glowing ember-orange cracks in the iron, a burst of grey stone shards flying from the knuckles"),
     "gear/draw": ("green", "a hexagonal wooden omikuji fortune box with gold trim and a thin wooden fortune stick sticking out of the hole on top"),
 }
 
