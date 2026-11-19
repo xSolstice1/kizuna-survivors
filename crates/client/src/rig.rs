@@ -521,12 +521,12 @@ fn draw_scaled(def: &RigDef, st: &RigState, feet: Vec2, left: bool, tint: Color,
     let sq = q.squash + st.jolt.x;
     let body = world * rot(def.feet, q.lean + st.flinch.x, vec2(0.0, q.bob), vec2(1.0 + sq * 0.6, 1.0 - sq));
     let head = body * rot(p(HEAD), st.head.x, vec2(0.0, st.head_dy.x), Vec2::ONE);
-    // A punch swings the arm up to level with its aim (from hanging down, -90 is straight
-    // forward; a punch down the screen still reads as thrown forward, a little lower) and
+    // A punch swings the arm up to level with its aim (from hanging down, +90 is straight
+    // forward, for both arms; a punch down the screen still reads as thrown forward, a little lower) and
     // straightens the forearm.
     let arm = |i: usize| {
         let (e, up) = st.punch_reach(i);
-        let reach = -(90.0 + (up * 0.5).clamp(-30.0, 35.0));
+        let reach = 90.0 + (up * 0.5).clamp(-30.0, 35.0);
         (st.upper[i].x + (reach - st.upper[i].x) * e, st.fore[i].x * (1.0 - e))
     };
     let ((un, fnr), (uf, ff)) = (arm(0), arm(1));
