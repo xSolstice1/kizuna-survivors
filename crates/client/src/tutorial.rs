@@ -161,7 +161,8 @@ mod tests {
     fn tour_runs_in_order_then_tips_wait_for_their_moment() {
         let quiet = Sights::default();
         assert_eq!(due(0, &quiet), Some(Step::Hero));
-        assert_eq!(due(Step::Hero.bit() | Step::Xp.bit(), &quiet), Some(Step::Health));
+        assert_eq!(due(Step::Hero.bit(), &quiet), Some(Step::Move), "the movement key right after moving");
+        assert_eq!(due(Step::Hero.bit() | Step::Move.bit() | Step::Xp.bit(), &quiet), Some(Step::Health));
         let toured = ALL[..TOUR].iter().fold(0, |m, s| m | s.bit());
         assert_eq!(due(toured, &quiet), None, "event tips need their event");
         assert_eq!(due(toured, &Sights { shrine: true, boss: true, ..Default::default() }), Some(Step::Shrine));
